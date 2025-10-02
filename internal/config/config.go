@@ -30,6 +30,7 @@ type DatabaseConfig struct {
 	Password string `yaml:"password"`
 	Name     string `yaml:"name"`
 	SSLMode  string `yaml:"ssl_mode"`
+	Logging  bool   `yaml:"logging"`
 }
 
 type JobConfig struct {
@@ -85,23 +86,29 @@ func overrideWithEnv(config *Config) {
 		config.Server.Host = host
 	}
 
-	if host := os.Getenv("DB_HOST"); host != "" {
+	if host := os.Getenv("POSTGRES_HOST"); host != "" {
 		config.Database.Host = host
 	}
-	if port := os.Getenv("DB_PORT"); port != "" {
+	if port := os.Getenv("POSTGRES_PORT"); port != "" {
 		config.Database.Port = port
 	}
-	if user := os.Getenv("DB_USER"); user != "" {
+	if user := os.Getenv("POSTGRES_USER"); user != "" {
 		config.Database.User = user
 	}
-	if password := os.Getenv("DB_PASSWORD"); password != "" {
+	if password := os.Getenv("POSTGRES_PASSWORD"); password != "" {
 		config.Database.Password = password
 	}
-	if name := os.Getenv("DB_NAME"); name != "" {
+	if name := os.Getenv("POSTGRES_DATABASE"); name != "" {
 		config.Database.Name = name
 	}
-	if sslMode := os.Getenv("DB_SSL_MODE"); sslMode != "" {
+	if sslMode := os.Getenv("POSTGRES_SSL"); sslMode != "" {
 		config.Database.SSLMode = sslMode
+	}
+
+	if logging := os.Getenv("POSTGRES_LOGGING"); logging != "" {
+		if val, err := strconv.ParseBool(logging); err == nil {
+			config.Database.Logging = val
+		}
 	}
 
 	if interval := os.Getenv("JOB_INTERVAL_SECONDS"); interval != "" {

@@ -24,8 +24,13 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		cfg.Database.Port,
 	)
 
+	logMode := logger.Silent
+	if cfg.Database.Logging {
+		logMode = logger.Info
+	}
+
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logMode),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)

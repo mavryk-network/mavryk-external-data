@@ -1,6 +1,6 @@
-# MVKT Quotes service
+# Mavryk External Data
 
-**Quotes** is a high-performance Go service for collecting and serving Mavryk and other currency quotes, built with clean architecture (hexagonal architecture).
+**Mavryk External Data** is a high-performance Go service for collecting and serving Mavryk and other currency quotes, built with clean architecture (hexagonal architecture).
 
 
 ## Key features
@@ -16,7 +16,7 @@
 ## Architecture
 
 ```
-mvkt-quotes/
+mavryk-external-data/
 ├── cmd/quotes/                    # Application entry point
 ├── internal/
 │   ├── config/                   # Configuration management
@@ -210,6 +210,26 @@ CREATE DATABASE mvkt_qoutes;
 3. **Command line overrides**
 
 > Environment variables override YAML configuration.
+
+#### Environment variables
+
+| Name                    | Description                                   | Default                        |
+| ----------------------- | --------------------------------------------- | ------------------------------ |
+| `SERVER_HOST`           | Server bind address                            | 0.0.0.0                        |
+| `SERVER_PORT`           | Server port                                    | 3010                           |
+| `POSTGRES_HOST`         | Postgres host                                  | localhost                      |
+| `POSTGRES_PORT`         | Postgres port                                  | 5432                           |
+| `POSTGRES_USER`         | Postgres user                                  | postgres                       |
+| `POSTGRES_PASSWORD`     | Postgres password                              | postgres                       |
+| `POSTGRES_DATABASE`     | Postgres database name                         | quotes                         |
+| `POSTGRES_SSL`          | Postgres SSL mode                              | disable                        |
+| `POSTGRES_LOGGING`      | Enable GORM SQL logging (true/false)           | false                          |
+| `JOB_INTERVAL_SECONDS`  | Quotes collector interval (seconds)            | 60                             |
+| `JOB_ENABLED`           | Enable quotes collector job (true/false)       | false                          |
+| `API_TIMEOUT_SECONDS`   | HTTP client timeout (seconds)                  | 30                             |
+| `API_RATE_LIMIT_RPS`    | Internal per-second rate limit                 | 100                            |
+| `COINGECKO_API_KEY`     | CoinGecko API key (if required)                | —                              |
+| `COINGECKO_BASE_URL`    | CoinGecko API base URL                         | `https://api.coingecko.com/api/v3` |
 
 ### Run
 
