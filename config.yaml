@@ -1,0 +1,23 @@
+server:
+  port: "3010"
+  host: "0.0.0.0"
+
+database:
+  host: "localhost"
+  port: "5432"
+  user: "postgres"
+  password: "postgres"
+  name: "quotes"
+  ssl_mode: "disable"
+
+job:
+  interval_seconds: 60
+  enabled: true
+
+api:
+  timeout_seconds: 30
+  rate_limit_rps: 100
+
+coingecko:
+  api_key: ""
+  base_url: "https://api.coingecko.com/api/v3"
