@@ -44,7 +44,6 @@ func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from,
 
 	req.Header.Set("User-Agent", "quotes-service/1.0")
 
-	// Add API key if provided
 	if c.apiKey != "" {
 		req.Header.Set("x-cg-pro-api-key", c.apiKey)
 	}
@@ -59,7 +58,7 @@ func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from,
 		}
 	}()
 
-	log.Printf("CoinGecko API Response: Status %d", resp.StatusCode)
+    log.Printf("CoinGecko API Response: Status %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)

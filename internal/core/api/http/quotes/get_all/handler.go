@@ -18,17 +18,14 @@ func New(action *get_all.Action) *Handler {
 }
 
 func (h *Handler) Handle(c *gin.Context) {
-	// Parse query parameters
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
 	limitStr := c.Query("limit")
 
-	// Set default time range (last 24 hours if not specified)
 	now := time.Now()
 	from := now.Add(-24 * time.Hour)
 	to := now
 
-	// Parse from parameter
 	if fromStr != "" {
 		if parsedFrom, err := time.Parse(time.RFC3339, fromStr); err == nil {
 			from = parsedFrom
@@ -40,7 +37,6 @@ func (h *Handler) Handle(c *gin.Context) {
 		}
 	}
 
-	// Parse to parameter
 	if toStr != "" {
 		if parsedTo, err := time.Parse(time.RFC3339, toStr); err == nil {
 			to = parsedTo
@@ -52,7 +48,6 @@ func (h *Handler) Handle(c *gin.Context) {
 		}
 	}
 
-	// Parse limit parameter
 	limit := 0
 	if limitStr != "" {
 		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
@@ -65,7 +60,6 @@ func (h *Handler) Handle(c *gin.Context) {
 		}
 	}
 
-	// Validate time range
 	if from.After(to) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid time range: 'from' must be before 'to'",
@@ -73,7 +67,6 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	// Get quotes
 	quotes, err := h.action.Execute(c.Request.Context(), from, to, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
