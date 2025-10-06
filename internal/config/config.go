@@ -11,10 +11,10 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Job      JobConfig      `yaml:"job"`
-	API      APIConfig      `yaml:"api"`
+	Server    ServerConfig    `yaml:"server"`
+	Database  DatabaseConfig  `yaml:"database"`
+	Job       JobConfig       `yaml:"job"`
+	API       APIConfig       `yaml:"api"`
 	CoinGecko CoinGeckoConfig `yaml:"coingecko"`
 }
 
@@ -34,7 +34,7 @@ type DatabaseConfig struct {
 }
 
 type JobConfig struct {
-	IntervalSeconds int `yaml:"interval_seconds"`
+	IntervalSeconds int  `yaml:"interval_seconds"`
 	Enabled         bool `yaml:"enabled"`
 }
 
@@ -44,7 +44,7 @@ type APIConfig struct {
 }
 
 type CoinGeckoConfig struct {
-	APIKey string `yaml:"api_key"`
+	APIKey  string `yaml:"api_key"`
 	BaseURL string `yaml:"base_url"`
 }
 

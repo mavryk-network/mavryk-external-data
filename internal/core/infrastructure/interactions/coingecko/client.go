@@ -43,7 +43,7 @@ func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from,
 	}
 
 	req.Header.Set("User-Agent", "quotes-service/1.0")
-	
+
 	// Add API key if provided
 	if c.apiKey != "" {
 		req.Header.Set("x-cg-pro-api-key", c.apiKey)
@@ -53,10 +53,14 @@ func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from,
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			log.Printf("error closing response body: %v", cerr)
+		}
+	}()
 
 	log.Printf("CoinGecko API Response: Status %d", resp.StatusCode)
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
@@ -71,7 +75,7 @@ func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from,
 
 func (c *Client) GetMultipleCurrencies(ctx context.Context, currencies []string, from, to int64) (map[string]*MarketChartRangeResponse, error) {
 	results := make(map[string]*MarketChartRangeResponse)
-	
+
 	for _, currency := range currencies {
 		data, err := c.GetMarketChartRange(ctx, currency, from, to)
 		if err != nil {
@@ -79,6 +83,6 @@ func (c *Client) GetMultipleCurrencies(ctx context.Context, currencies []string,
 		}
 		results[currency] = data
 	}
-	
+
 	return results, nil
 }

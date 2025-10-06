@@ -133,7 +133,7 @@ func getQuotePrice(quote quotes.Quote, currency quotes.Currency) float64 {
 }
 
 func hasAnyPrice(quote quotes.Quote) bool {
-	return quote.BTC != 0 || quote.USD != 0 || quote.EUR != 0 || 
-		   quote.CNY != 0 || quote.JPY != 0 || quote.KRW != 0 || 
-		   quote.ETH != 0 || quote.GBP != 0
+	return quote.BTC != 0 || quote.USD != 0 || quote.EUR != 0 ||
+		quote.CNY != 0 || quote.JPY != 0 || quote.KRW != 0 ||
+		quote.ETH != 0 || quote.GBP != 0
 }

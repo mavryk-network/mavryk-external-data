@@ -30,7 +30,7 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 	// Health check endpoint
 	engine.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"status": "ok",
+			"status":  "ok",
 			"service": "quotes",
 		})
 	})
@@ -40,7 +40,7 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 	{
 		quotes := v1.Group("/quotes")
 		{
-			quotes.GET("", r.getAllHandler.Handle)        // GET /api/v1/quotes?from=&to=&limit=
+			quotes.GET("", r.getAllHandler.Handle)         // GET /api/v1/quotes?from=&to=&limit=
 			quotes.GET("/last", r.getLatestHandler.Handle) // GET /api/v1/quotes/last
 			quotes.GET("/count", r.getCountHandler.Handle) // GET /api/v1/quotes/count
 		}

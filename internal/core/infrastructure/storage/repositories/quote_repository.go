@@ -83,7 +83,7 @@ func (r *QuoteRepository) GetLastQuote(ctx context.Context) (quotes.Quote, error
 func (r *QuoteRepository) GetQuotes(ctx context.Context, from, to time.Time, limit int) ([]quotes.Quote, error) {
 	var entities []entities.QuoteEntity
 	query := r.db.WithContext(ctx).Where("timestamp >= ? AND timestamp <= ?", from, to).Order("timestamp ASC")
-	
+
 	if limit > 0 {
 		query = query.Limit(limit)
 	}

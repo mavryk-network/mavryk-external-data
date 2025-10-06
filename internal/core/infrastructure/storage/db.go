@@ -3,8 +3,8 @@ package storage
 import (
 	"fmt"
 	"log"
-	"quotes/internal/core/infrastructure/storage/entities"
 	"quotes/internal/config"
+	"quotes/internal/core/infrastructure/storage/entities"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

@@ -19,7 +19,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	quote, err := h.action.Execute(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to get latest quote",
+			"error":   "Failed to get latest quote",
 			"details": err.Error(),
 		})
 		return

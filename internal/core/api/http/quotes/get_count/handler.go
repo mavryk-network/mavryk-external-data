@@ -19,7 +19,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	count, err := h.action.Execute(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to get quotes count",
+			"error":   "Failed to get quotes count",
 			"details": err.Error(),
 		})
 		return
