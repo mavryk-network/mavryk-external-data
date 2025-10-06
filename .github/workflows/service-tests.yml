@@ -40,9 +40,6 @@ env:
   # Database configuration
   POSTGRES_HOST: ${{ vars.POSTGRES_HOST }}
   POSTGRES_PORT: ${{ vars.POSTGRES_PORT }}
-  POSTGRES_USER: ${{ vars.POSTGRES_USER }}
-  POSTGRES_PASSWORD: ${{ vars.POSTGRES_PASSWORD }}
-  POSTGRES_DATABASE: ${{ vars.POSTGRES_DATABASE }}
   POSTGRES_SSL: ${{ vars.POSTGRES_SSL }}
   POSTGRES_LOGGING: ${{ vars.POSTGRES_LOGGING }}
 
@@ -55,7 +52,6 @@ env:
   API_RATE_LIMIT_RPS: ${{ vars.API_RATE_LIMIT_RPS }}
 
   # CoinGecko API configuration
-  COINGECKO_API_KEY: ${{ vars.COINGECKO_API_KEY }}
   COINGECKO_BASE_URL: ${{ vars.COINGECKO_BASE_URL }}
 
 jobs:
@@ -73,7 +69,7 @@ jobs:
       POSTGRES_DATABASE: ${{ secrets.POSTGRES_DATABASE }}
       
       # Service secrets
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }
+      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     services:
       postgres:
         image: postgres:15-alpine
