@@ -2,13 +2,14 @@ version: '3.8'
 
 services:
   postgres:
-    image: timescale/timescaledb:2.15.2-pg15
+    image: timescale/timescaledb-ha:pg15-latest
     environment:
-      POSTGRES_DB: quotes
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DATABASE:-quotes}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      TIMESCALEDB_TELEMETRY: off 
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./internal/core/infrastructure/storage/migrations:/docker-entrypoint-initdb.d
@@ -21,14 +22,31 @@ services:
   quotes-service:
     build: .
     ports:
-      - "3010:3010"
+      - "${SERVER_PORT:-3010}:3010"
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DATABASE: quotes
-      POSTGRES_LOGGING: "false"
+      # Server configuration
+      SERVER_PORT: ${SERVER_PORT:-3010}
+      SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
+
+      # Database configuration
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-quotes}
+      POSTGRES_LOGGING: ${POSTGRES_LOGGING:-false}
+
+      # Job configuration
+      JOB_INTERVAL_SECONDS: ${JOB_INTERVAL_SECONDS:-60}
+      JOB_ENABLED: ${JOB_ENABLED:-true}
+
+      # API configuration
+      API_TIMEOUT_SECONDS: ${API_TIMEOUT_SECONDS:-30}
+      API_RATE_LIMIT_RPS: ${API_RATE_LIMIT_RPS:-100}
+
+      # CoinGecko API configuration
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-api_key}
+      COINGECKO_BASE_URL: ${COINGECKO_BASE_URL:-https://api.coingecko.com/api/v3}
     depends_on:
       postgres:
         condition: service_healthy

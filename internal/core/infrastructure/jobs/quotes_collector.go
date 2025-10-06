@@ -127,7 +127,7 @@ func (c *QuotesCollector) filterNewQuotes(ctx context.Context, quotesList []quot
 	existingQuotes, err := c.repository.GetQuotes(ctx, from, to, 0)
 	if err != nil {
 		log.Printf("Warning: Could not check existing quotes: %v", err)
-        return quotesList
+		return quotesList
 	}
 
 	existingTimestamps := make(map[time.Time]bool)

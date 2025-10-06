@@ -38,9 +38,9 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 	{
 		quotes := v1.Group("/quotes")
 		{
-            quotes.GET("", r.getAllHandler.Handle)
-            quotes.GET("/last", r.getLatestHandler.Handle)
-            quotes.GET("/count", r.getCountHandler.Handle)
+			quotes.GET("", r.getAllHandler.Handle)
+			quotes.GET("/last", r.getLatestHandler.Handle)
+			quotes.GET("/count", r.getCountHandler.Handle)
 		}
 	}
 }

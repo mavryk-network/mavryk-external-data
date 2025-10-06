@@ -199,8 +199,8 @@ go mod tidy
 ### Database setup
 
 ```sql
-CREATE SCHEMA mvkt;
-CREATE DATABASE mvkt_qoutes;
+CREATE SCHEMA mev;
+CREATE DATABASE mavryk_external_data;
 ```
 
 ### Configuration

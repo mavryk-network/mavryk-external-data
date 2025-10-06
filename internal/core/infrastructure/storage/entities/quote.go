@@ -22,5 +22,5 @@ type QuoteEntity struct {
 }
 
 func (QuoteEntity) TableName() string {
-	return "mvkt.quotes"
+	return "mev.quotes"
 }

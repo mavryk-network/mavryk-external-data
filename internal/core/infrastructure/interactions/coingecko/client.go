@@ -58,7 +58,7 @@ func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from,
 		}
 	}()
 
-    log.Printf("CoinGecko API Response: Status %d", resp.StatusCode)
+	log.Printf("CoinGecko API Response: Status %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)

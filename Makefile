@@ -1,50 +1,91 @@
-.PHONY: build run test clean deps docker-build docker-run
+.PHONY: build run test clean deps docker-build docker-run docker-stop \
+        migrate-up migrate-down migrate-reset migrate-redo fmt lint docs
 
-# Build the application
+# --------------------------
+# Config
+# --------------------------
+BINARY = bin/quotes
+
+POSTGRES_HOST ?= localhost
+POSTGRES_PORT ?= 5432
+POSTGRES_USER ?= postgres
+POSTGRES_PASSWORD ?= postgres
+POSTGRES_DATABASE ?= quotes
+export PGPASSWORD=$(POSTGRES_PASSWORD)
+
+MIGRATION_UP   = internal/core/infrastructure/storage/migrations/001_init.sql
+MIGRATION_DOWN = internal/core/infrastructure/storage/migrations/001_init_down.sql
+
+# --------------------------
+# Build & Run
+# --------------------------
 build:
-	go build -o bin/quotes cmd/quotes/main.go
+	@echo "Building application..."
+	go build -o $(BINARY) cmd/quotes/main.go
 
-# Run the application
 run:
+	@echo "Running application..."
 	go run cmd/quotes/main.go
 
-# Run tests
 test:
+	@echo "Running tests..."
 	go test ./...
 
-# Clean build artifacts
 clean:
+	@echo "Cleaning build artifacts..."
 	rm -rf bin/
 
-# Install dependencies
 deps:
+	@echo "Installing dependencies..."
 	go mod download
 	go mod tidy
 
-# Build Docker image
+# --------------------------
+# Docker
+# --------------------------
 docker-build:
+	@echo "Building Docker image..."
 	docker build -t quotes-service .
 
-# Run with Docker Compose
 docker-run:
-	docker-compose up -d
+	@echo "Starting Docker Compose..."
+	docker-compose -p quotes up -d
 
-# Stop Docker Compose
 docker-stop:
-	docker-compose down
+	@echo "Stopping Docker Compose..."
+	docker-compose -p quotes down
 
-# Database migration
+# --------------------------
+# Database migrations
+# --------------------------
 migrate-up:
-	psql -h localhost -U admin -d mvkt_quotes -f internal/core/infrastructure/storage/migrations/001_init.sql
+	@echo "Applying migration: $(MIGRATION_UP)"
+	psql -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DATABASE) -f $(MIGRATION_UP)
 
-# Check code formatting
+migrate-down:
+	@echo "Rolling back migration: $(MIGRATION_DOWN)"
+	psql -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DATABASE) -f $(MIGRATION_DOWN)
+
+migrate-reset: migrate-down migrate-up
+	@echo "Database reset completed."
+
+migrate-redo: migrate-up migrate-down migrate-up
+	@echo "Migration redo completed."
+
+# --------------------------
+# Code quality
+# --------------------------
 fmt:
+	@echo "Formatting code..."
 	go fmt ./...
 
-# Run linter
 lint:
+	@echo "Running linter..."
 	golangci-lint run
 
-# Generate documentation
+# --------------------------
+# Documentation
+# --------------------------
 docs:
-	godoc -http=:6060
+	@echo "Starting godoc server at http://localhost:6060"
+	godoc -http=:6060 &
