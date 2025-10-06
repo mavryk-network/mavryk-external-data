@@ -1,0 +1,27 @@
+name: Setup Go and Download Modules
+description: Setup Go toolchain and download modules
+runs:
+  using: composite
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+        cache: true
+
+    - name: Go env
+      shell: bash
+      run: go env
+
+    - name: Download modules
+      shell: bash
+      run: |
+        go mod download
+        go mod verify
+
+inputs:
+  go-version:
+    description: Go version
+    required: true
+

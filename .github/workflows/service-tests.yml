@@ -1,0 +1,110 @@
+name: Service Tests (Go)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment name (integration, e2e, etc.)'
+        required: true
+        type: string
+      test-command:
+        description: 'Command to run tests'
+        required: true
+        type: string
+      environment-secrets:
+        description: 'Environment secrets to use'
+        required: false
+        type: string
+        default: 'integration'
+    secrets:
+      POSTGRES_USER:
+        required: true
+      POSTGRES_PASSWORD:
+        required: true
+      POSTGRES_DATABASE:
+        required: true
+      COINGECKO_API_KEY:
+        required: true
+    outputs:
+      test-result:
+        description: 'Test execution result'
+        value: ${{ jobs.test.outputs.test-result }}
+
+env:
+  GO_VERSION: '1.21.x'
+
+  # Server configuration
+  SERVER_PORT:  ${{ vars.SERVER_PORT }}
+  SERVER_HOST: ${{ vars.SERVER_HOST }}
+
+  # Database configuration
+  POSTGRES_HOST: ${{ vars.POSTGRES_HOST }}
+  POSTGRES_PORT: ${{ vars.POSTGRES_PORT }}
+  POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+  POSTGRES_PASSWORD: ${{ vars.POSTGRES_PASSWORD }}
+  POSTGRES_DATABASE: ${{ vars.POSTGRES_DATABASE }}
+  POSTGRES_SSL: ${{ vars.POSTGRES_SSL }}
+  POSTGRES_LOGGING: ${{ vars.POSTGRES_LOGGING }}
+
+  # Job configuration
+  JOB_INTERVAL_SECONDS: ${{ vars.JOB_INTERVAL_SECONDS }}
+  JOB_ENABLED: ${{ vars.JOB_ENABLED }}
+
+  # API configuration
+  API_TIMEOUT_SECONDS: ${{ vars.API_TIMEOUT_SECONDS }}
+  API_RATE_LIMIT_RPS: ${{ vars.API_RATE_LIMIT_RPS }}
+
+  # CoinGecko API configuration
+  COINGECKO_API_KEY: ${{ vars.COINGECKO_API_KEY }}
+  COINGECKO_BASE_URL: ${{ vars.COINGECKO_BASE_URL }}
+
+jobs:
+  test:
+    name: ${{ inputs.environment }} Tests
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment-secrets }}
+    outputs:
+      test-result: ${{ steps.test.outcome }}
+    env:
+      GO_ENV: ${{ inputs.environment }}
+      # Database secrets
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      POSTGRES_DATABASE: ${{ secrets.POSTGRES_DATABASE }}
+      
+      # Service secrets
+      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: ./.github/actions/setup-and-install
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Postgres client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres
+        run: |
+          until pg_isready -h 127.0.0.1 -p 5432 -U postgres; do echo waiting for postgres; sleep 2; done
+
+      - name: Run Go tests
+        id: test
+        run: |
+          go test ./... -v
