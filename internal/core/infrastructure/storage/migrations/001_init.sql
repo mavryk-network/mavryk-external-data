@@ -1,6 +1,9 @@
 -- Create mvkt schema
 CREATE SCHEMA IF NOT EXISTS mvkt;
 
+-- Enable TimescaleDB extension
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
 -- Create quotes table in mvkt schema
 CREATE TABLE IF NOT EXISTS mvkt.quotes (
     id SERIAL PRIMARY KEY,
@@ -17,6 +20,9 @@ CREATE TABLE IF NOT EXISTS mvkt.quotes (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     deleted_at TIMESTAMP WITH TIME ZONE
 );
+
+-- Convert quotes to a hypertable on timestamp
+SELECT create_hypertable('mvkt.quotes', 'timestamp', if_not_exists => TRUE);
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_mvkt_quotes_timestamp ON mvkt.quotes(timestamp);
