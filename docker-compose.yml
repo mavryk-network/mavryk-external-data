@@ -2,38 +2,68 @@ version: '3.8'
 
 services:
   postgres:
-    image: timescale/timescaledb-ha:pg15-latest
+    image: postgres:16-alpine
+    container_name: mavryk-external-data-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DATABASE:-quotes}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      TIMESCALEDB_TELEMETRY: off 
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./internal/core/infrastructure/storage/migrations:/docker-entrypoint-initdb.d
+      - ./internal/core/infrastructure/storage/migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - mavryk-external-data-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DATABASE:-quotes}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
-  quotes-service:
-    build: .
-    ports:
-      - "${SERVER_PORT:-3010}:3010"
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migration
+    container_name: mavryk-external-data-migration
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      # Server configuration
-      SERVER_PORT: ${SERVER_PORT:-3010}
-      SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
-
-      # Database configuration
-      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DATABASE: ${POSTGRES_DATABASE:-quotes}
+    networks:
+      - mavryk-external-data-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: mavryk-external-data-app
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-3010}:3010"
+    environment:
+      # Server Configuration
+      SERVER_PORT: ${SERVER_PORT:-3010}
+      SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
+
+      # Database Configuration
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-quotes}
+      POSTGRES_SSL: ${POSTGRES_SSL:-disable}
       POSTGRES_LOGGING: ${POSTGRES_LOGGING:-false}
 
       # Job configuration
@@ -47,10 +77,29 @@ services:
       # CoinGecko API configuration
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-api_key}
       COINGECKO_BASE_URL: ${COINGECKO_BASE_URL:-https://api.coingecko.com/api/v3}
+
+      # Backfill configuration
+      BACKFILL_ENABLED: ${BACKFILL_ENABLED:-false}
+      BACKFILL_START_FROM: ${BACKFILL_START_FROM:-}
+      BACKFILL_SLEEP_MS: ${BACKFILL_SLEEP_MS:-3000}
+      BACKFILL_CHUNK_MINUTES: ${BACKFILL_CHUNK_MINUTES:-360}
     depends_on:
       postgres:
         condition: service_healthy
-    restart: unless-stopped
+      migration:
+        condition: service_completed_successfully
+    networks:
+      - mavryk-external-data-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3010/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 volumes:
   postgres_data:
+
+networks:
+  mavryk-external-data-network:
+    driver: bridge

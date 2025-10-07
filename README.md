@@ -60,37 +60,37 @@ API  → Application ← Infrastructure
 | Endpoint                   | Description                     | Parameters            |
 | -------------------------- | ------------------------------- | --------------------- |
 | `GET /health`              | Service health check            | —                     |
-| `GET /api/v1/quotes`       | Retrieve quotes                 | `from`, `to`, `limit` |
-| `GET /api/v1/quotes/last`  | Retrieve the latest quote       | —                     |
-| `GET /api/v1/quotes/count` | Retrieve total number of quotes | —                     |
+| `GET /quotes`       | Retrieve quotes                 | `from`, `to`, `limit` |
+| `GET /quotes/last`  | Retrieve the latest quote       | —                     |
+| `GET /quotes/count` | Retrieve total number of quotes | —                     |
 
 ## API Examples
 
 ### Get quotes with filters
 ```bash
 # Get quotes from last 24 hours
-curl "http://localhost:8080/api/v1/quotes?from=2023-10-01T00:00:00Z&to=2023-10-02T00:00:00Z"
+curl "http://localhost:8080/quotes?from=2023-10-01T00:00:00Z&to=2023-10-02T00:00:00Z"
 
 # Get last 50 quotes
-curl "http://localhost:8080/api/v1/quotes?limit=50"
+curl "http://localhost:8080/quotes?limit=50"
 
 # Get quotes with pagination (if limit is reached, use last timestamp + 1s for next request)
-curl "http://localhost:8080/api/v1/quotes?from=2023-10-01T00:00:00Z&to=2023-10-02T00:00:00Z&limit=100"
+curl "http://localhost:8080/quotes?from=2023-10-01T00:00:00Z&to=2023-10-02T00:00:00Z&limit=100"
 ```
 
 ### Get latest quote
 ```bash
-curl "http://localhost:8080/api/v1/quotes/last"
+curl "http://localhost:8080/quotes/last"
 ```
 
 ### Get quotes count
 ```bash
-curl "http://localhost:8080/api/v1/quotes/count"
+curl "http://localhost:8080/quotes/count"
 ```
 
 ### Response Format
 
-**Get quotes** (`GET /api/v1/quotes`):
+**Get quotes** (`GET /quotes`):
 ```json
 [
   {
@@ -107,7 +107,7 @@ curl "http://localhost:8080/api/v1/quotes/count"
 ]
 ```
 
-**Get latest quote** (`GET /api/v1/quotes/last`):
+**Get latest quote** (`GET /quotes/last`):
 ```json
 {
   "timestamp": "2025-10-02T09:23:09Z",
@@ -122,7 +122,7 @@ curl "http://localhost:8080/api/v1/quotes/count"
 }
 ```
 
-**Get count** (`GET /api/v1/quotes/count`):
+**Get count** (`GET /quotes/count`):
 ```json
 {
   "count": 1500
@@ -230,6 +230,10 @@ CREATE DATABASE mavryk_external_data;
 | `API_RATE_LIMIT_RPS`    | Internal per-second rate limit                 | 100                            |
 | `COINGECKO_API_KEY`     | CoinGecko API key (if required)                | —                              |
 | `COINGECKO_BASE_URL`    | CoinGecko API base URL                         | `https://api.coingecko.com/api/v3` |
+| `BACKFILL_ENABLED`      | Enable historical backfill on startup          | false                          |
+| `BACKFILL_START_FROM`   | Backfill start timestamp (RFC3339 or `YYYY-MM-DD`) | —                           |
+| `BACKFILL_SLEEP_MS`     | Delay between backfill chunks (ms)             | 3000                           |
+| `BACKFILL_CHUNK_MINUTES`| Size of each backfill window (minutes)         | 5                              |
 
 ### Run
 
@@ -244,13 +248,13 @@ The service starts at `http://localhost:3010` and begins collecting quotes every
 
 ```bash
 # Get the latest quote
-curl http://localhost:3010/api/v1/quotes/last
+curl http://localhost:3010/quotes/last
 
 # Get quotes from the last 24 hours
-curl "http://localhost:3010/api/v1/quotes?from=2025-09-30T00:00:00Z&to=2025-10-01T00:00:00Z"
+curl "http://localhost:3010/quotes?from=2025-09-30T00:00:00Z&to=2025-10-01T00:00:00Z"
 
 # Get total quote count
-curl http://localhost:3010/api/v1/quotes/count
+curl http://localhost:3010/quotes/count
 ```
 
 
@@ -272,3 +276,52 @@ The service includes a hosted job that:
 3. Normalizes timestamps to seconds
 4. Applies forward-fill for missing data
 5. Saves new quotes to the database and updates cache
+
+### Backfill (historical data)
+
+Backfill lets you pre-populate the database with historical quotes from CoinGecko. When enabled, it runs once at startup before the periodic collector begins.
+
+- Backfill is controlled via configuration (env vars/YAML)
+- If `BACKFILL_START_FROM` is empty, backfill is skipped
+- The process resumes from the last stored timestamp if it is later than `START_FROM`
+- Data is fetched in time windows (chunks) with a sleep between chunks to respect provider limits
+
+Configuration:
+
+| Setting | Description |
+| ------- | ----------- |
+| `BACKFILL_ENABLED` | Set to `true` to run backfill on startup |
+| `BACKFILL_START_FROM` | RFC3339 or `YYYY-MM-DD` start time, e.g. `2025-09-18` or `2025-09-18T00:00:00Z` |
+| `BACKFILL_CHUNK_MINUTES` | Window size for each request (minutes). Larger windows reduce API calls but may return sparse points |
+| `BACKFILL_SLEEP_MS` | Delay between chunks (ms). Increase to be gentle with rate limits |
+
+Examples
+
+Run locally with environment variables:
+
+```bash
+export BACKFILL_ENABLED=true
+export BACKFILL_START_FROM="2025-09-18"
+export BACKFILL_CHUNK_MINUTES=360   # 6 hours per chunk
+export BACKFILL_SLEEP_MS=3000       # 3s between chunks
+go run cmd/quotes/main.go
+```
+
+Using docker-compose (already wired):
+
+```yaml
+services:
+  quotes:
+    environment:
+      BACKFILL_ENABLED: "true"
+      BACKFILL_START_FROM: "2025-09-18"
+      BACKFILL_CHUNK_MINUTES: 360
+      BACKFILL_SLEEP_MS: 3000
+```
+
+Notes
+
+- Backfill runs only at startup. After completion, the periodic job continues with live collection.
+- If the database is already up-to-date (within ~60s of now), backfill is skipped.
+- Accepted `START_FROM` formats: `YYYY-MM-DD` or full RFC3339.
+- Choose chunk and sleep values mindful of provider limits; defaults are conservative.

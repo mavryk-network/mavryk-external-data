@@ -34,7 +34,7 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 		})
 	})
 
-	v1 := engine.Group("/api/v1")
+	v1 := engine.Group("/")
 	{
 		quotes := v1.Group("/quotes")
 		{
