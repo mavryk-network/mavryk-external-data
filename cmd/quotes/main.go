@@ -36,15 +36,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-    // Start HTTP server first so it's available during backfill
-    go func() {
-        if err := httpApp.Run(); err != nil {
-            log.Fatalf("HTTP server failed: %v", err)
-        }
-    }()
+	// Start HTTP server first so it's available during backfill
+	go func() {
+		if err := httpApp.Run(); err != nil {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
 
-    // Start quotes collector (may perform backfill)
-    quotesCollector.Start(ctx)
+	// Start quotes collector (may perform backfill)
+	quotesCollector.Start(ctx)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

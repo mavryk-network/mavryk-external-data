@@ -30,23 +30,23 @@ func NewQuotesCollector(cfg *config.Config, db *gorm.DB) *QuotesCollector {
 }
 
 func (c *QuotesCollector) Start(ctx context.Context) {
-    // Always run backfill if enabled
-    if c.config.Backfill.Enabled {
-        log.Println("Backfill is enabled - starting catch-up phase before scheduling periodic collection")
-        if err := c.runBackfill(ctx); err != nil {
-            log.Printf("Backfill finished with error: %v", err)
-        } else {
-            log.Println("Backfill completed successfully")
-        }
-    }
+	// Always run backfill if enabled
+	if c.config.Backfill.Enabled {
+		log.Println("Backfill is enabled - starting catch-up phase before scheduling periodic collection")
+		if err := c.runBackfill(ctx); err != nil {
+			log.Printf("Backfill finished with error: %v", err)
+		} else {
+			log.Println("Backfill completed successfully")
+		}
+	}
 
-    if !c.config.Job.Enabled {
-        log.Println("Quotes collection job is disabled - skipping periodic collection")
-        return
-    }
+	if !c.config.Job.Enabled {
+		log.Println("Quotes collection job is disabled - skipping periodic collection")
+		return
+	}
 
-    log.Printf("Starting quotes collection job with interval: %v", c.config.GetJobInterval())
-    c.ticker = time.NewTicker(c.config.GetJobInterval())
+	log.Printf("Starting quotes collection job with interval: %v", c.config.GetJobInterval())
+	c.ticker = time.NewTicker(c.config.GetJobInterval())
 
 	go func() {
 		c.collectQuotes(ctx)
@@ -75,14 +75,14 @@ func (c *QuotesCollector) Stop() {
 
 func (c *QuotesCollector) collectQuotes(ctx context.Context) {
 	log.Println("Starting quotes collection...")
-    lastTimestamp, err := c.repository.GetLastTimestamp(ctx)
+	lastTimestamp, err := c.repository.GetLastTimestamp(ctx)
 	if err != nil {
 		log.Printf("Warning: Could not get last timestamp: %v", err)
-        lastTimestamp = time.Now().UTC().Add(-1 * time.Hour)
+		lastTimestamp = time.Now().UTC().Add(-1 * time.Hour)
 	}
 
 	from := lastTimestamp.Unix()
-    to := time.Now().UTC().Unix()
+	to := time.Now().UTC().Unix()
 
 	if to-from < 60 {
 		log.Println("Skipping collection: time range too small")
@@ -156,112 +156,112 @@ func (c *QuotesCollector) filterNewQuotes(ctx context.Context, quotesList []quot
 }
 
 func (c *QuotesCollector) runBackfill(ctx context.Context) error {
-    if c.config.Backfill.StartFrom == "" {
-        log.Println("Backfill enabled but no start date provided - skipping backfill")
-        return nil
-    }
+	if c.config.Backfill.StartFrom == "" {
+		log.Println("Backfill enabled but no start date provided - skipping backfill")
+		return nil
+	}
 
-    var start time.Time
-    // Try RFC3339 first, then fallback to date-only
-    if t, err := time.Parse(time.RFC3339, c.config.Backfill.StartFrom); err == nil {
-        start = t.UTC()
-    } else if t, err2 := time.Parse("2006-01-02", c.config.Backfill.StartFrom); err2 == nil {
-        start = t.UTC()
-    } else {
-        log.Printf("Invalid backfill start date format: %s", c.config.Backfill.StartFrom)
-        return nil
-    }
+	var start time.Time
+	// Try RFC3339 first, then fallback to date-only
+	if t, err := time.Parse(time.RFC3339, c.config.Backfill.StartFrom); err == nil {
+		start = t.UTC()
+	} else if t, err2 := time.Parse("2006-01-02", c.config.Backfill.StartFrom); err2 == nil {
+		start = t.UTC()
+	} else {
+		log.Printf("Invalid backfill start date format: %s", c.config.Backfill.StartFrom)
+		return nil
+	}
 
-    // Determine from based on DB state
-    var from time.Time
-    lastTs, err := c.repository.GetLastTimestamp(ctx)
-    if err != nil {
-        // if no data - start from configured
-        from = start
-    } else {
-        if lastTs.After(start) {
-            from = lastTs
-        } else {
-            from = start
-        }
-    }
+	// Determine from based on DB state
+	var from time.Time
+	lastTs, err := c.repository.GetLastTimestamp(ctx)
+	if err != nil {
+		// if no data - start from configured
+		from = start
+	} else {
+		if lastTs.After(start) {
+			from = lastTs
+		} else {
+			from = start
+		}
+	}
 
-    now := time.Now().UTC()
-    if !from.Before(now.Add(-60 * time.Second)) { // leave at least 60s gap for live collector
-        log.Println("Backfill up-to-date - skipping")
-        return nil
-    }
+	now := time.Now().UTC()
+	if !from.Before(now.Add(-60 * time.Second)) { // leave at least 60s gap for live collector
+		log.Println("Backfill up-to-date - skipping")
+		return nil
+	}
 
-    // Process in chunks (configurable minutes, default 5)
-    chunkMinutes := c.config.Backfill.ChunkMinutes
-    if chunkMinutes <= 0 {
-        chunkMinutes = 5
-    }
-    chunk := time.Duration(chunkMinutes) * time.Minute
-    currencies := quotes.GetSupportedCurrencies()
-    currencyStrings := make([]string, len(currencies))
-    for i, currency := range currencies {
-        currencyStrings[i] = string(currency)
-    }
+	// Process in chunks (configurable minutes, default 5)
+	chunkMinutes := c.config.Backfill.ChunkMinutes
+	if chunkMinutes <= 0 {
+		chunkMinutes = 5
+	}
+	chunk := time.Duration(chunkMinutes) * time.Minute
+	currencies := quotes.GetSupportedCurrencies()
+	currencyStrings := make([]string, len(currencies))
+	for i, currency := range currencies {
+		currencyStrings[i] = string(currency)
+	}
 
-    for from.Before(now) {
-        to := from.Add(chunk)
-        if to.After(now) {
-            to = now
-        }
+	for from.Before(now) {
+		to := from.Add(chunk)
+		if to.After(now) {
+			to = now
+		}
 
-        log.Printf("Backfill chunk: %s -> %s (chunk=%v)", from.Format(time.RFC3339), to.Format(time.RFC3339), chunk)
-        data, err := c.client.GetMultipleCurrencies(ctx, currencyStrings, from.Unix(), to.Unix())
-        if err != nil {
-            log.Printf("Backfill API error, will continue with next chunk: %v", err)
-            // move window forward slightly to avoid tight loop
-            from = from.Add(15 * time.Minute)
-            continue
-        }
+		log.Printf("Backfill chunk: %s -> %s (chunk=%v)", from.Format(time.RFC3339), to.Format(time.RFC3339), chunk)
+		data, err := c.client.GetMultipleCurrencies(ctx, currencyStrings, from.Unix(), to.Unix())
+		if err != nil {
+			log.Printf("Backfill API error, will continue with next chunk: %v", err)
+			// move window forward slightly to avoid tight loop
+			from = from.Add(15 * time.Minute)
+			continue
+		}
 
-        mapped, err := coingecko.MapToQuotes(data)
-        if err != nil {
-            log.Printf("Backfill mapping error: %v", err)
-            from = from.Add(15 * time.Minute)
-            continue
-        }
+		mapped, err := coingecko.MapToQuotes(data)
+		if err != nil {
+			log.Printf("Backfill mapping error: %v", err)
+			from = from.Add(15 * time.Minute)
+			continue
+		}
 
-        // Debug: log raw points by currency to understand sparsity
-        totalPoints := 0
-        for cur, resp := range data {
-            if resp != nil {
-                totalPoints += len(resp.Prices)
-                log.Printf("Backfill raw points: %s=%d", cur, len(resp.Prices))
-            }
-        }
-        log.Printf("Backfill mapped quotes: %d (raw points total=%d)", len(mapped), totalPoints)
+		// Debug: log raw points by currency to understand sparsity
+		totalPoints := 0
+		for cur, resp := range data {
+			if resp != nil {
+				totalPoints += len(resp.Prices)
+				log.Printf("Backfill raw points: %s=%d", cur, len(resp.Prices))
+			}
+		}
+		log.Printf("Backfill mapped quotes: %d (raw points total=%d)", len(mapped), totalPoints)
 
-        if len(mapped) > 0 {
-            // best-effort idempotency via filter + normal insert
-            filtered := c.filterNewQuotes(ctx, mapped)
-            if len(filtered) > 0 {
-                if err := c.repository.SaveBatch(ctx, filtered); err != nil {
-                    log.Printf("Backfill save error: %v", err)
-                } else {
-                    log.Printf("Backfill saved %d quotes", len(filtered))
-                }
-            }
-        }
+		if len(mapped) > 0 {
+			// best-effort idempotency via filter + normal insert
+			filtered := c.filterNewQuotes(ctx, mapped)
+			if len(filtered) > 0 {
+				if err := c.repository.SaveBatch(ctx, filtered); err != nil {
+					log.Printf("Backfill save error: %v", err)
+				} else {
+					log.Printf("Backfill saved %d quotes", len(filtered))
+				}
+			}
+		}
 
-        // Advance window; use last point if available
-        if len(mapped) > 0 {
-            from = mapped[len(mapped)-1].Timestamp.Add(time.Second)
-        } else {
-            from = to
-        }
+		// Advance window; use last point if available
+		if len(mapped) > 0 {
+			from = mapped[len(mapped)-1].Timestamp.Add(time.Second)
+		} else {
+			from = to
+		}
 
-        // Respect provider limits (configurable)
-        sleepMs := c.config.Backfill.SleepMs
-        if sleepMs <= 0 {
-            sleepMs = 1100
-        }
-        time.Sleep(time.Duration(sleepMs) * time.Millisecond)
-    }
+		// Respect provider limits (configurable)
+		sleepMs := c.config.Backfill.SleepMs
+		if sleepMs <= 0 {
+			sleepMs = 1100
+		}
+		time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+	}
 
-    return nil
+	return nil
 }

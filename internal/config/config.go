@@ -16,7 +16,7 @@ type Config struct {
 	Job       JobConfig       `yaml:"job"`
 	API       APIConfig       `yaml:"api"`
 	CoinGecko CoinGeckoConfig `yaml:"coingecko"`
-    Backfill  BackfillConfig  `yaml:"backfill"`
+	Backfill  BackfillConfig  `yaml:"backfill"`
 }
 
 type ServerConfig struct {
@@ -50,10 +50,10 @@ type CoinGeckoConfig struct {
 }
 
 type BackfillConfig struct {
-    Enabled   bool   `yaml:"enabled"`
-    StartFrom string `yaml:"start_from"` // ISO date or RFC3339 (e.g., 2025-09-18 or 2025-09-18T00:00:00Z)
-    SleepMs   int    `yaml:"sleep_ms"`   // delay between backfill chunks in milliseconds
-    ChunkMinutes int `yaml:"chunk_minutes"` // size of each backfill window in minutes
+	Enabled      bool   `yaml:"enabled"`
+	StartFrom    string `yaml:"start_from"`    // ISO date or RFC3339 (e.g., 2025-09-18 or 2025-09-18T00:00:00Z)
+	SleepMs      int    `yaml:"sleep_ms"`      // delay between backfill chunks in milliseconds
+	ChunkMinutes int    `yaml:"chunk_minutes"` // size of each backfill window in minutes
 }
 
 func Load(configPath string) (*Config, error) {
@@ -148,24 +148,24 @@ func overrideWithEnv(config *Config) {
 		config.CoinGecko.BaseURL = baseURL
 	}
 
-    if enabled := os.Getenv("BACKFILL_ENABLED"); enabled != "" {
-        if val, err := strconv.ParseBool(enabled); err == nil {
-            config.Backfill.Enabled = val
-        }
-    }
-    if startFrom := os.Getenv("BACKFILL_START_FROM"); startFrom != "" {
-        config.Backfill.StartFrom = startFrom
-    }
-    if sleep := os.Getenv("BACKFILL_SLEEP_MS"); sleep != "" {
-        if val, err := strconv.Atoi(sleep); err == nil {
-            config.Backfill.SleepMs = val
-        }
-    }
-    if chunk := os.Getenv("BACKFILL_CHUNK_MINUTES"); chunk != "" {
-        if val, err := strconv.Atoi(chunk); err == nil {
-            config.Backfill.ChunkMinutes = val
-        }
-    }
+	if enabled := os.Getenv("BACKFILL_ENABLED"); enabled != "" {
+		if val, err := strconv.ParseBool(enabled); err == nil {
+			config.Backfill.Enabled = val
+		}
+	}
+	if startFrom := os.Getenv("BACKFILL_START_FROM"); startFrom != "" {
+		config.Backfill.StartFrom = startFrom
+	}
+	if sleep := os.Getenv("BACKFILL_SLEEP_MS"); sleep != "" {
+		if val, err := strconv.Atoi(sleep); err == nil {
+			config.Backfill.SleepMs = val
+		}
+	}
+	if chunk := os.Getenv("BACKFILL_CHUNK_MINUTES"); chunk != "" {
+		if val, err := strconv.Atoi(chunk); err == nil {
+			config.Backfill.ChunkMinutes = val
+		}
+	}
 }
 
 // setDefaults sets default values for configuration
@@ -211,15 +211,15 @@ func setDefaults(config *Config) {
 		config.CoinGecko.BaseURL = "https://api.coingecko.com/api/v3"
 	}
 
-    // Backfill defaults
-    // Disabled by default; explicit opt-in
-    // StartFrom default left empty (will be treated as no-op)
-    if config.Backfill.SleepMs == 0 {
-        config.Backfill.SleepMs = 3000
-    }
-    if config.Backfill.ChunkMinutes == 0 {
-        config.Backfill.ChunkMinutes = 5
-    }
+	// Backfill defaults
+	// Disabled by default; explicit opt-in
+	// StartFrom default left empty (will be treated as no-op)
+	if config.Backfill.SleepMs == 0 {
+		config.Backfill.SleepMs = 3000
+	}
+	if config.Backfill.ChunkMinutes == 0 {
+		config.Backfill.ChunkMinutes = 5
+	}
 }
 
 func (c *Config) GetJobInterval() time.Duration {

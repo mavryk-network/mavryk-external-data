@@ -59,10 +59,10 @@ func MapToQuotes(currencyData map[string]*MarketChartRangeResponse) ([]quotes.Qu
 	var result []quotes.Quote
 	var lastQuote *quotes.Quote
 
-    for _, timestamp := range timestamps {
-        quote := quotes.Quote{
-            Timestamp: time.Unix(timestamp, 0).UTC(),
-        }
+	for _, timestamp := range timestamps {
+		quote := quotes.Quote{
+			Timestamp: time.Unix(timestamp, 0).UTC(),
+		}
 
 		// Fill prices for each currency using forward-fill
 		for _, currency := range quotes.GetSupportedCurrencies() {
