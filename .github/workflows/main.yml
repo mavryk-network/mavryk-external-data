@@ -107,4 +107,40 @@ jobs:
           cache-to: type=gha,mode=max
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Check ArgoCD connection
+        uses: clowdhaus/argo-cd-action@v2.3.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          version: 2.13.1
+          command: version
+          options: >
+            --grpc-web
+            --server ${{ secrets.ARGOCD_URL }}
+            --auth-token ${{ secrets.ARGOCD_TOKEN }}
+
+      - name: Update ArgoCD app with new production image tag
+        uses: clowdhaus/argo-cd-action@v2.3.0
+        with:
+          version: 2.13.1
+          command: app set network-mavryk-external-data
+          options: >
+            -p image.tag=${{ steps.meta.outputs.version }}
+            --grpc-web
+            --server ${{ secrets.ARGOCD_URL }}
+            --auth-token ${{ secrets.ARGOCD_TOKEN }}
+            --revision main
+
+      - name: Sync ArgoCD app
+        uses: clowdhaus/argo-cd-action@v2.3.0
+        with:
+          version: 2.13.1
+          command: app sync network-mavryk-external-data
+          options: >
+            --grpc-web
+            --server ${{ secrets.ARGOCD_URL }}
+            --prune
+            --auth-token ${{ secrets.ARGOCD_TOKEN }}
+            --revision main
+
 
