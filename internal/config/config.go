@@ -299,7 +299,7 @@ func (c *Config) IsTokenBackfillEnabled(tokenName string) bool {
 	tokenCfg := c.GetTokenConfig(tokenName)
 	
 	// If backfill.enabled is explicitly false, disable backfill
-	if tokenCfg.Backfill.Enabled == false {
+	if !tokenCfg.Backfill.Enabled {
 		return false
 	}
 	
