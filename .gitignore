@@ -118,7 +118,7 @@ temp/
 # Build output
 build/
 dist/
-bin/quotes
+bin/
 
 # Configuration files with sensitive data
 config.local.yaml
