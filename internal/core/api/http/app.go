@@ -4,9 +4,11 @@ import (
 	"log"
 	"quotes/internal/config"
 	httpGetAll "quotes/internal/core/api/http/quotes/get_all"
+	httpGetByToken "quotes/internal/core/api/http/quotes/get_by_token"
 	httpGetCount "quotes/internal/core/api/http/quotes/get_count"
 	httpGetLatest "quotes/internal/core/api/http/quotes/get_latest"
 	appGetAll "quotes/internal/core/application/quotes/get_all"
+	appGetByToken "quotes/internal/core/application/quotes/get_by_token"
 	appGetCount "quotes/internal/core/application/quotes/get_count"
 	appGetLatest "quotes/internal/core/application/quotes/get_latest"
 	"quotes/internal/core/infrastructure/storage/repositories"
@@ -55,14 +57,16 @@ func NewApp(cfg *config.Config, db *gorm.DB) *App {
 	getLatestAction := appGetLatest.New(quoteRepo)
 	getCountAction := appGetCount.New(quoteRepo)
 	getAllAction := appGetAll.New(quoteRepo)
+	getByTokenAction := appGetByToken.New(quoteRepo)
 
 	// Create HTTP handlers
 	getLatestHandler := httpGetLatest.New(getLatestAction)
 	getCountHandler := httpGetCount.New(getCountAction)
 	getAllHandler := httpGetAll.New(getAllAction)
+	getByTokenHandler := httpGetByToken.New(getByTokenAction)
 
 	// Create router
-	httpRouter := NewRouter(getLatestHandler, getCountHandler, getAllHandler)
+	httpRouter := NewRouter(getLatestHandler, getCountHandler, getAllHandler, getByTokenHandler)
 	httpRouter.SetupRoutes(router)
 
 	return &App{

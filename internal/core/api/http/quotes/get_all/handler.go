@@ -3,6 +3,7 @@ package get_all
 import (
 	"net/http"
 	"quotes/internal/core/application/quotes/get_all"
+	domainQuotes "quotes/internal/core/domain/quotes"
 	"strconv"
 	"time"
 
@@ -17,6 +18,19 @@ func New(action *get_all.Action) *Handler {
 	return &Handler{action: action}
 }
 
+// GetQuotes godoc
+// @Summary      Get quotes for MVRK token (legacy endpoint)
+// @Description  Retrieve quotes for MVRK token with optional filters. Returns quotes within the specified time range.
+// @Tags         quotes
+// @Accept       json
+// @Produce      json
+// @Param        from    query     string  false  "Start time (RFC3339 format, e.g., 2025-01-01T00:00:00Z). Default: 24 hours ago"
+// @Param        to      query     string  false  "End time (RFC3339 format, e.g., 2025-01-01T23:59:59Z). Default: now"
+// @Param        limit   query     int     false  "Maximum number of quotes to return. Default: no limit"
+// @Success      200     {array}   quotes.Quote  "List of quotes"
+// @Failure      400     {object}  map[string]string  "Invalid request parameters"
+// @Failure      500     {object}  map[string]string  "Internal server error"
+// @Router       /quotes [get]
 func (h *Handler) Handle(c *gin.Context) {
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
@@ -67,7 +81,8 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	quotes, err := h.action.Execute(c.Request.Context(), from, to, limit)
+	// Use mvrk token for /quotes endpoint
+	quotesList, err := h.action.Execute(c.Request.Context(), from, to, limit, string(domainQuotes.TokenMVRK))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "Failed to get quotes",
@@ -76,5 +91,5 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, quotes)
+	c.JSON(http.StatusOK, quotesList)
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"quotes/internal/config"
-	"quotes/internal/core/infrastructure/storage/entities"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -36,11 +35,7 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	if err := db.AutoMigrate(&entities.QuoteEntity{}); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %w", err)
-	}
-
-	log.Println("Database connected and migrated successfully")
+	log.Println("Database connected successfully")
 	return &DB{DB: db}, nil
 }
 

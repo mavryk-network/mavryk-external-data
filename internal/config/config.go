@@ -11,12 +11,13 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Database  DatabaseConfig  `yaml:"database"`
-	Job       JobConfig       `yaml:"job"`
-	API       APIConfig       `yaml:"api"`
-	CoinGecko CoinGeckoConfig `yaml:"coingecko"`
-	Backfill  BackfillConfig  `yaml:"backfill"`
+	Server    ServerConfig         `yaml:"server"`
+	Database  DatabaseConfig       `yaml:"database"`
+	Job       JobConfig            `yaml:"job"`
+	API       APIConfig            `yaml:"api"`
+	CoinGecko CoinGeckoConfig      `yaml:"coingecko"`
+	Backfill  BackfillConfig       `yaml:"backfill"`
+	Tokens    map[string]TokenConfig `yaml:"tokens"`
 }
 
 type ServerConfig struct {
@@ -56,14 +57,27 @@ type BackfillConfig struct {
 	ChunkMinutes int    `yaml:"chunk_minutes"` // size of each backfill window in minutes
 }
 
+type TokenConfig struct {
+	IntervalSeconds      int                 `yaml:"interval_seconds"`      // Collection interval in seconds (0 = use global job.interval_seconds)
+	Enabled              bool                `yaml:"enabled"`                // Enable/disable collection for this token (default: true)
+	TimeoutSeconds       int                 `yaml:"timeout_seconds"`       // HTTP timeout in seconds (0 = use global api.timeout_seconds)
+	MinTimeRangeSeconds  int                 `yaml:"min_time_range_seconds"` // Minimum time range to collect (0 = use default 60)
+	MaxChunkMinutes      int                 `yaml:"max_chunk_minutes"`     // Maximum chunk size for catch-up (0 = use backfill.chunk_minutes or default 60)
+	Backfill             TokenBackfillConfig `yaml:"backfill"`              // Token-specific backfill settings
+}
+
+type TokenBackfillConfig struct {
+	Enabled      bool   `yaml:"enabled"`       // Enable/disable backfill for this token (default: false, uses global backfill.enabled if not set)
+	StartFrom    string `yaml:"start_from"`   // Backfill start date for this token (ISO date or RFC3339, overrides global if set)
+	SleepMs      int    `yaml:"sleep_ms"`     // Delay between backfill chunks in milliseconds (0 = use global backfill.sleep_ms)
+	ChunkMinutes int    `yaml:"chunk_minutes"` // Size of each backfill window in minutes (0 = use global backfill.chunk_minutes)
+}
+
 func Load(configPath string) (*Config, error) {
-	// Load .env file if it exists
 	if err := godotenv.Load(); err != nil {
-		// .env file is optional
 		fmt.Println("No .env file found, using environment variables only")
 	}
 
-	// Load YAML config
 	config := &Config{}
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
@@ -76,16 +90,13 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 
-	// Override with environment variables
 	overrideWithEnv(config)
 
-	// Set defaults
 	setDefaults(config)
 
 	return config, nil
 }
 
-// overrideWithEnv overrides config values with environment variables
 func overrideWithEnv(config *Config) {
 	if port := os.Getenv("SERVER_PORT"); port != "" {
 		config.Server.Port = port
@@ -168,7 +179,6 @@ func overrideWithEnv(config *Config) {
 	}
 }
 
-// setDefaults sets default values for configuration
 func setDefaults(config *Config) {
 	if config.Server.Port == "" {
 		config.Server.Port = "3010"
@@ -224,4 +234,95 @@ func setDefaults(config *Config) {
 
 func (c *Config) GetJobInterval() time.Duration {
 	return time.Duration(c.Job.IntervalSeconds) * time.Second
+}
+
+func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
+	if c.Tokens == nil {
+		c.Tokens = make(map[string]TokenConfig)
+	}
+
+	tokenCfg, exists := c.Tokens[tokenName]
+	if !exists {
+		return TokenConfig{
+			IntervalSeconds:     0, // 0 means use global
+			Enabled:             true,
+			TimeoutSeconds:      0, // 0 means use global
+			MinTimeRangeSeconds: 0, // 0 means use default 60
+		}
+	}
+
+	if tokenCfg.IntervalSeconds == 0 {
+		tokenCfg.IntervalSeconds = c.Job.IntervalSeconds
+	}
+	if tokenCfg.TimeoutSeconds == 0 {
+		tokenCfg.TimeoutSeconds = c.API.TimeoutSeconds
+	}
+	if tokenCfg.MinTimeRangeSeconds == 0 {
+		tokenCfg.MinTimeRangeSeconds = 60 // default 60 seconds
+	}
+	if tokenCfg.MaxChunkMinutes == 0 {
+		// Use backfill chunk size or default to 60 minutes
+		if c.Backfill.ChunkMinutes > 0 {
+			tokenCfg.MaxChunkMinutes = c.Backfill.ChunkMinutes
+		} else {
+			tokenCfg.MaxChunkMinutes = 60 // default 60 minutes
+		}
+	}
+
+	// Fill in backfill defaults
+	if tokenCfg.Backfill.SleepMs == 0 {
+		tokenCfg.Backfill.SleepMs = c.Backfill.SleepMs
+		if tokenCfg.Backfill.SleepMs == 0 {
+			tokenCfg.Backfill.SleepMs = 3000 // default 3 seconds
+		}
+	}
+	if tokenCfg.Backfill.ChunkMinutes == 0 {
+		tokenCfg.Backfill.ChunkMinutes = c.Backfill.ChunkMinutes
+		if tokenCfg.Backfill.ChunkMinutes == 0 {
+			tokenCfg.Backfill.ChunkMinutes = 5 // default 5 minutes
+		}
+	}
+	if tokenCfg.Backfill.StartFrom == "" {
+		tokenCfg.Backfill.StartFrom = c.Backfill.StartFrom
+	}
+
+	return tokenCfg
+}
+
+// IsTokenBackfillEnabled checks if backfill is enabled for a specific token
+func (c *Config) IsTokenBackfillEnabled(tokenName string) bool {
+	tokenCfg := c.GetTokenConfig(tokenName)
+	// If token-specific backfill is explicitly configured, use it
+	if tokenCfg.Backfill.StartFrom != "" {
+		return true // If start_from is set, backfill is enabled for this token
+	}
+	if tokenCfg.Backfill.Enabled {
+		return true
+	}
+	// Otherwise use global backfill setting
+	return c.Backfill.Enabled
+}
+
+// GetTokenBackfillStartFrom returns the start date for token backfill
+func (c *Config) GetTokenBackfillStartFrom(tokenName string) string {
+	tokenCfg := c.GetTokenConfig(tokenName)
+	if tokenCfg.Backfill.StartFrom != "" {
+		return tokenCfg.Backfill.StartFrom
+	}
+	return c.Backfill.StartFrom
+}
+
+func (c *Config) GetTokenInterval(tokenName string) time.Duration {
+	tokenCfg := c.GetTokenConfig(tokenName)
+	return time.Duration(tokenCfg.IntervalSeconds) * time.Second
+}
+
+func (c *Config) GetTokenTimeout(tokenName string) time.Duration {
+	tokenCfg := c.GetTokenConfig(tokenName)
+	return time.Duration(tokenCfg.TimeoutSeconds) * time.Second
+}
+
+func (c *Config) IsTokenEnabled(tokenName string) bool {
+	tokenCfg := c.GetTokenConfig(tokenName)
+	return tokenCfg.Enabled
 }

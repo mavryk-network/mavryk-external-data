@@ -5,7 +5,7 @@ import (
 )
 
 type Repository interface {
-	GetCount(ctx context.Context) (int64, error)
+	GetCount(ctx context.Context, tokenName string) (int64, error)
 }
 
 type Action struct {
@@ -16,6 +16,6 @@ func New(repo Repository) *Action {
 	return &Action{repo: repo}
 }
 
-func (a *Action) Execute(ctx context.Context) (int64, error) {
-	return a.repo.GetCount(ctx)
+func (a *Action) Execute(ctx context.Context, tokenName string) (int64, error) {
+	return a.repo.GetCount(ctx, tokenName)
 }

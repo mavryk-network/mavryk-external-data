@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+// QuoteEntity is a universal entity for all token tables
+// Table name is set dynamically
 type QuoteEntity struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
 	Timestamp time.Time      `gorm:"not null;index" json:"timestamp"`
@@ -22,5 +24,5 @@ type QuoteEntity struct {
 }
 
 func (QuoteEntity) TableName() string {
-	return "mev.quotes"
+	return ""
 }
