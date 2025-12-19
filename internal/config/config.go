@@ -291,14 +291,28 @@ func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
 
 // IsTokenBackfillEnabled checks if backfill is enabled for a specific token
 func (c *Config) IsTokenBackfillEnabled(tokenName string) bool {
-	tokenCfg := c.GetTokenConfig(tokenName)
-	// If token-specific backfill is explicitly configured, use it
-	if tokenCfg.Backfill.StartFrom != "" {
-		return true // If start_from is set, backfill is enabled for this token
+	// First check if token collection is enabled
+	if !c.IsTokenEnabled(tokenName) {
+		return false // If token is disabled, backfill is also disabled
 	}
+	
+	tokenCfg := c.GetTokenConfig(tokenName)
+	
+	// If backfill.enabled is explicitly false, disable backfill
+	if tokenCfg.Backfill.Enabled == false {
+		return false
+	}
+	
+	// If start_from is set, enable backfill (unless explicitly disabled above)
+	if tokenCfg.Backfill.StartFrom != "" {
+		return true
+	}
+	
+	// If token-specific backfill.enabled is true, enable it
 	if tokenCfg.Backfill.Enabled {
 		return true
 	}
+	
 	// Otherwise use global backfill setting
 	return c.Backfill.Enabled
 }
