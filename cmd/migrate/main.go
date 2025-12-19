@@ -73,6 +73,18 @@ func main() {
 
 	switch *command {
 	case "up":
+		if dirty {
+			log.Printf("Detected dirty database state at version %d. Attempting to fix...", versionNum)
+			targetVersion := int(versionNum) - 1
+			if targetVersion < 0 {
+				targetVersion = 0
+			}
+			if err := m.Force(targetVersion); err != nil {
+				log.Fatalf("Failed to fix dirty state by forcing version %d: %v", targetVersion, err)
+			}
+			log.Printf("Successfully fixed dirty state by forcing version to %d", targetVersion)
+		}
+
 		if *steps > 0 {
 			err = m.Steps(*steps)
 		} else {
