@@ -75,9 +75,11 @@ func main() {
 	case "up":
 		if dirty {
 			log.Printf("Detected dirty database state at version %d. Attempting to fix...", versionNum)
+			// Force to previous version, or -1 (no migrations) if version is 1 or less
+			// Version -1 means "no migrations applied" in golang-migrate
 			targetVersion := int(versionNum) - 1
-			if targetVersion < 0 {
-				targetVersion = 0
+			if targetVersion < 1 {
+				targetVersion = -1
 			}
 			if err := m.Force(targetVersion); err != nil {
 				log.Fatalf("Failed to fix dirty state by forcing version %d: %v", targetVersion, err)
