@@ -77,25 +77,19 @@ func main() {
 		// Auto-fix dirty state if detected
 		if dirty {
 			log.Printf("Detected dirty database state (version: %d). Attempting to fix...", versionNum)
-			if versionNum < 0 {
-				if err := m.Force(0); err != nil {
-					log.Fatalf("Failed to fix dirty state: %v", err)
-				}
-				log.Println("Fixed dirty state by forcing version to 0")
-			} else {
-				if err := m.Force(int(versionNum)); err != nil {
-					log.Fatalf("Failed to fix dirty state: %v", err)
-				}
-				log.Printf("Fixed dirty state by forcing version to %d", versionNum)
+			// Force to current version to clear dirty flag
+			if err := m.Force(int(versionNum)); err != nil {
+				log.Fatalf("Failed to fix dirty state: %v", err)
 			}
+			log.Printf("Fixed dirty state by forcing version to %d", versionNum)
 		}
-		
+
 		if *steps > 0 {
 			err = m.Steps(*steps)
 		} else {
 			err = m.Up()
 		}
-		
+
 		if err != nil && err != migrate.ErrNoChange {
 			errStr := err.Error()
 			if strings.Contains(errStr, "dirty") || strings.Contains(errStr, "Dirty") {
@@ -105,29 +99,29 @@ func main() {
 				if versionErr != nil && versionErr != migrate.ErrNilVersion {
 					log.Fatalf("Failed to get version after error: %v", versionErr)
 				}
-				
+
 				forceVersion := 0
 				if currentVersion > 0 {
 					forceVersion = int(currentVersion)
 				}
-				
+
 				if forceErr := m.Force(forceVersion); forceErr != nil {
 					log.Fatalf("Failed to fix dirty state: %v", forceErr)
 				}
 				log.Printf("Fixed dirty state by forcing version to %d. Retrying migration...", forceVersion)
-				
+
 				if *steps > 0 {
 					err = m.Steps(*steps)
 				} else {
 					err = m.Up()
 				}
 			}
-			
+
 			if err != nil && err != migrate.ErrNoChange {
 				log.Fatalf("Failed to apply migrations: %v", err)
 			}
 		}
-		
+
 		if err == migrate.ErrNoChange {
 			log.Println("No migrations to apply")
 		} else {
