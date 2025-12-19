@@ -21,21 +21,22 @@ CREATE TABLE IF NOT EXISTS mev.usdt (
 -- Convert usdt to a hypertable on timestamp if TimescaleDB is present
 DO $$
 BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_extension
-        WHERE extname = 'timescaledb'
-    ) THEN
-        PERFORM create_hypertable(
-            'mev.usdt',
-            'timestamp',
-            if_not_exists => TRUE
-        );
-    ELSE
-        RAISE NOTICE 'TimescaleDB not installed; skipping hypertable creation';
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+        -- Skip if already a hypertable
+        IF NOT EXISTS (
+            SELECT 1 FROM timescaledb_information.hypertables 
+            WHERE hypertable_schema = 'mev' AND hypertable_name = 'usdt'
+        ) THEN
+            -- Try to create hypertable (will fail silently if table is not empty)
+            BEGIN
+                PERFORM create_hypertable('mev.usdt', 'timestamp', if_not_exists => TRUE);
+                RAISE NOTICE 'Converted mev.usdt to hypertable';
+            EXCEPTION WHEN OTHERS THEN
+                RAISE NOTICE 'Skipping hypertable creation: %', SQLERRM;
+            END;
+        END IF;
     END IF;
-END
-$$ LANGUAGE plpgsql;
+END $$ LANGUAGE plpgsql;
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_mev_usdt_timestamp

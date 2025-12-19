@@ -1,15 +1,18 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/lib/pq"
 )
 
 func main() {
@@ -73,6 +76,15 @@ func main() {
 
 	switch *command {
 	case "up":
+		// Handle dirty state before applying migrations
+		if dirty {
+			log.Printf("Detected dirty database state at version %d. Attempting to fix...", versionNum)
+			if err := fixDirtyState(*dsn, versionNum); err != nil {
+				log.Fatalf("Failed to fix dirty state: %v", err)
+			}
+			log.Println("Successfully fixed dirty state")
+		}
+
 		if *steps > 0 {
 			err = m.Steps(*steps)
 		} else {
@@ -166,4 +178,45 @@ func createMigration(name, migrationsPath string) {
 	}
 
 	log.Printf("Created migrations:\n  %s\n  %s", upFile, downFile)
+}
+
+// fixDirtyState fixes the dirty state by resetting the version to -1 (no migrations)
+// This allows migrations to start fresh from the beginning.
+// Since all migrations are idempotent, they can be safely reapplied even if tables already exist.
+func fixDirtyState(dsn string, currentVersion uint) error {
+	// Parse DSN to get connection parameters
+	parsedURL, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+
+	// Build connection string for database/sql
+	host := parsedURL.Hostname()
+	port := parsedURL.Port()
+	if port == "" {
+		port = "5432"
+	}
+	user := parsedURL.User.Username()
+	password, _ := parsedURL.User.Password()
+	database := parsedURL.Path[1:] // Remove leading /
+
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		host, port, user, password, database)
+
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return fmt.Errorf("failed to open database connection: %w", err)
+	}
+	defer db.Close()
+
+	// Set version to -1 (no migrations) and clear dirty flag
+	// This allows migrations to start from the beginning
+	// Version -1 is the internal representation for "no migrations applied"
+	_, err = db.Exec("DELETE FROM schema_migrations")
+	if err != nil {
+		return fmt.Errorf("failed to reset schema_migrations: %w", err)
+	}
+
+	log.Printf("Reset schema_migrations (was at version %d with dirty=true). Migrations will be reapplied from the beginning.", currentVersion)
+	return nil
 }
