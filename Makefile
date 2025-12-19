@@ -1,5 +1,5 @@
 .PHONY: build run test clean deps docker-build docker-run docker-stop \
-        migrate-up migrate-down migrate-reset migrate-redo fmt lint docs
+        migrate-up migrate-down migrate-reset migrate-redo fmt lint docs swagger
 
 # --------------------------
 # Config
@@ -58,19 +58,51 @@ docker-stop:
 # --------------------------
 # Database migrations
 # --------------------------
-migrate-up:
-	@echo "Applying migration: $(MIGRATION_UP)"
-	psql -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DATABASE) -f $(MIGRATION_UP)
+MIGRATIONS_DIR = internal/core/infrastructure/storage/migrations
+MIGRATE_BINARY = bin/migrate
 
-migrate-down:
-	@echo "Rolling back migration: $(MIGRATION_DOWN)"
-	psql -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DATABASE) -f $(MIGRATION_DOWN)
+migrate-build:
+	@echo "Building migrate tool..."
+	@go build -o $(MIGRATE_BINARY) cmd/migrate/main.go
 
-migrate-reset: migrate-down migrate-up
-	@echo "Database reset completed."
+migrate-up: migrate-build
+	@echo "Applying all pending migrations..."
+	@$(MIGRATE_BINARY) -command=up
 
-migrate-redo: migrate-up migrate-down migrate-up
-	@echo "Migration redo completed."
+migrate-down: migrate-build
+	@echo "Rolling back migrations..."
+	@if [ -z "$(STEPS)" ]; then \
+		echo "Error: STEPS parameter is required for safety"; \
+		echo "Example: make migrate-down STEPS=1"; \
+		exit 1; \
+	fi
+	@$(MIGRATE_BINARY) -command=down -steps=$(STEPS)
+
+migrate-status: migrate-build
+	@echo "Checking migration status..."
+	@$(MIGRATE_BINARY) -command=version
+
+migrate-force: migrate-build
+	@echo "Forcing migration version..."
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: VERSION parameter is required"; \
+		echo "Example: make migrate-force VERSION=3"; \
+		exit 1; \
+	fi
+	@$(MIGRATE_BINARY) -command=force -version=$(VERSION)
+
+migrate-create: migrate-build
+	@if [ -z "$(NAME)" ]; then \
+		echo "Error: NAME parameter is required"; \
+		echo "Example: make migrate-create NAME=add_new_feature"; \
+		exit 1; \
+	fi
+	@$(MIGRATE_BINARY) -command=create $(NAME)
+	@echo "Migration created successfully"
+
+migrate-list:
+	@echo "Available migrations:"
+	@ls -1 $(MIGRATIONS_DIR)/*.up.sql 2>/dev/null | sort | sed 's/.*\///' | nl -w2 -s'. ' || echo "No migrations found"
 
 # --------------------------
 # Code quality
@@ -89,3 +121,14 @@ lint:
 docs:
 	@echo "Starting godoc server at http://localhost:6060"
 	godoc -http=:6060 &
+
+swagger:
+	@echo "Generating Swagger documentation..."
+	@if command -v swag >/dev/null 2>&1; then \
+		swag init -g cmd/quotes/main.go -o ./docs; \
+	elif [ -f ~/go/bin/swag ]; then \
+		~/go/bin/swag init -g cmd/quotes/main.go -o ./docs; \
+	else \
+		echo "Error: swag not found. Install it with: go install github.com/swaggo/swag/cmd/swag@latest"; \
+		exit 1; \
+	fi

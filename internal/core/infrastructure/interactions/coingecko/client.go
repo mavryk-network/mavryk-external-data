@@ -21,19 +21,22 @@ type Client struct {
 	http    *http.Client
 }
 
-func NewClient(baseURL, apiKey string) *Client {
+func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
 	return &Client{
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		http: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }
 
-func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from, to int64) (*MarketChartRangeResponse, error) {
-	url := fmt.Sprintf("%s/coins/mavryk-network/market_chart/range?vs_currency=%s&from=%d&to=%d",
-		c.baseURL, currency, from, to)
+func (c *Client) GetMarketChartRange(ctx context.Context, coinID, currency string, from, to int64) (*MarketChartRangeResponse, error) {
+	url := fmt.Sprintf("%s/coins/%s/market_chart/range?vs_currency=%s&from=%d&to=%d",
+		c.baseURL, coinID, currency, from, to)
 
 	log.Printf("CoinGecko API Request: %s", url)
 
@@ -72,11 +75,11 @@ func (c *Client) GetMarketChartRange(ctx context.Context, currency string, from,
 	return &result, nil
 }
 
-func (c *Client) GetMultipleCurrencies(ctx context.Context, currencies []string, from, to int64) (map[string]*MarketChartRangeResponse, error) {
+func (c *Client) GetMultipleCurrencies(ctx context.Context, coinID string, currencies []string, from, to int64) (map[string]*MarketChartRangeResponse, error) {
 	results := make(map[string]*MarketChartRangeResponse)
 
 	for _, currency := range currencies {
-		data, err := c.GetMarketChartRange(ctx, currency, from, to)
+		data, err := c.GetMarketChartRange(ctx, coinID, currency, from, to)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get data for currency %s: %w", currency, err)
 		}

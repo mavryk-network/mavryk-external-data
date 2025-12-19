@@ -1,3 +1,19 @@
+// @title           Mavryk External Data API
+// @version         1.0
+// @description     High-performance Go service for collecting and serving cryptocurrency quotes (MVRK, USDT, and more)
+// @termsOfService  http://swagger.io/terms/
+
+// @contact.name   API Support
+// @contact.url    http://www.swagger.io/support
+// @contact.email  support@swagger.io
+
+// @license.name  Apache 2.0
+// @license.url   http://www.apache.org/licenses/LICENSE-2.0.html
+
+// @host      localhost:3010
+// @BasePath  /
+// @schemes   http https
+
 package main
 
 import (
@@ -11,6 +27,8 @@ import (
 	"quotes/internal/core/infrastructure/storage"
 	"syscall"
 	"time"
+
+	_ "quotes/docs" // Swagger documentation
 )
 
 func main() {
@@ -36,7 +54,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start HTTP server first so it's available during backfill
 	go func() {
 		if err := httpApp.Run(); err != nil {
 			log.Fatalf("HTTP server failed: %v", err)

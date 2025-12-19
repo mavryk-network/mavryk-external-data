@@ -1,0 +1,188 @@
+basePath: /
+definitions:
+  quotes.Quote:
+    properties:
+      btc:
+        type: number
+      cny:
+        type: number
+      eth:
+        type: number
+      eur:
+        type: number
+      gbp:
+        type: number
+      jpy:
+        type: number
+      krw:
+        type: number
+      timestamp:
+        type: string
+      usd:
+        type: number
+    type: object
+host: localhost:3010
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: High-performance Go service for collecting and serving cryptocurrency
+    quotes (MVRK, USDT, and more)
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Mavryk External Data API
+  version: "1.0"
+paths:
+  /{token}:
+    get:
+      consumes:
+      - application/json
+      description: Retrieve quotes for a specific token (mvrk, usdt, etc.) with optional
+        filters
+      parameters:
+      - description: Token name (e.g., mvrk, usdt)
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: 'Start time (RFC3339 format, e.g., 2025-01-01T00:00:00Z). Default:
+          24 hours ago'
+        in: query
+        name: from
+        type: string
+      - description: 'End time (RFC3339 format, e.g., 2025-01-01T23:59:59Z). Default:
+          now'
+        in: query
+        name: to
+        type: string
+      - description: 'Maximum number of quotes to return. Default: no limit'
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: List of quotes
+          schema:
+            items:
+              $ref: '#/definitions/quotes.Quote'
+            type: array
+        "400":
+          description: Invalid request parameters
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Token not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get quotes for a specific token
+      tags:
+      - tokens
+  /quotes:
+    get:
+      consumes:
+      - application/json
+      description: Retrieve quotes for MVRK token with optional filters. Returns quotes
+        within the specified time range.
+      parameters:
+      - description: 'Start time (RFC3339 format, e.g., 2025-01-01T00:00:00Z). Default:
+          24 hours ago'
+        in: query
+        name: from
+        type: string
+      - description: 'End time (RFC3339 format, e.g., 2025-01-01T23:59:59Z). Default:
+          now'
+        in: query
+        name: to
+        type: string
+      - description: 'Maximum number of quotes to return. Default: no limit'
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: List of quotes
+          schema:
+            items:
+              $ref: '#/definitions/quotes.Quote'
+            type: array
+        "400":
+          description: Invalid request parameters
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get quotes for MVRK token (legacy endpoint)
+      tags:
+      - quotes
+  /quotes/count:
+    get:
+      consumes:
+      - application/json
+      description: Retrieve the total number of quotes stored for MVRK token
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Quote count
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get quotes count for MVRK token (legacy endpoint)
+      tags:
+      - quotes
+  /quotes/last:
+    get:
+      consumes:
+      - application/json
+      description: Retrieve the most recent quote for MVRK token
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Latest quote
+          schema:
+            $ref: '#/definitions/quotes.Quote'
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get latest quote for MVRK token (legacy endpoint)
+      tags:
+      - quotes
+schemes:
+- http
+- https
+swagger: "2.0"
