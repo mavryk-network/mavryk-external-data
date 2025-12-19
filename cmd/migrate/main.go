@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -73,14 +74,67 @@ func main() {
 
 	switch *command {
 	case "up":
+		// Auto-fix dirty state if detected
+		if dirty {
+			log.Printf("Detected dirty database state (version: %d). Attempting to fix...", versionNum)
+			// If version is 0 and dirty, it means first migration failed
+			// Force to version 1 (first migration) instead of 0 to avoid "no migration found for version 0" error
+			// This assumes first migration (0001) should be at version 1
+			if versionNum == 0 {
+				log.Println("Version 0 with dirty state detected. Forcing to version 1 to allow migrations to proceed...")
+				if err := m.Force(1); err != nil {
+					log.Fatalf("Failed to fix dirty state: %v", err)
+				}
+				log.Println("Fixed dirty state by forcing version to 1")
+			} else {
+				// Force to current version to clear dirty flag
+				if err := m.Force(int(versionNum)); err != nil {
+					log.Fatalf("Failed to fix dirty state: %v", err)
+				}
+				log.Printf("Fixed dirty state by forcing version to %d", versionNum)
+			}
+		}
+
 		if *steps > 0 {
 			err = m.Steps(*steps)
 		} else {
 			err = m.Up()
 		}
+
 		if err != nil && err != migrate.ErrNoChange {
-			log.Fatalf("Failed to apply migrations: %v", err)
+			errStr := err.Error()
+			if strings.Contains(errStr, "dirty") || strings.Contains(errStr, "Dirty") {
+				log.Printf("Migration failed due to dirty state. Attempting to fix and retry...")
+
+				currentVersion, _, versionErr := m.Version()
+				if versionErr != nil && versionErr != migrate.ErrNilVersion {
+					log.Fatalf("Failed to get version after error: %v", versionErr)
+				}
+
+				// Never force to version 0 as it doesn't exist (migrations start from 1)
+				// If version is 0 or nil, force to version 1 (first migration)
+				forceVersion := 1
+				if currentVersion > 0 {
+					forceVersion = int(currentVersion)
+				}
+
+				if forceErr := m.Force(forceVersion); forceErr != nil {
+					log.Fatalf("Failed to fix dirty state: %v", forceErr)
+				}
+				log.Printf("Fixed dirty state by forcing version to %d. Retrying migration...", forceVersion)
+
+				if *steps > 0 {
+					err = m.Steps(*steps)
+				} else {
+					err = m.Up()
+				}
+			}
+
+			if err != nil && err != migrate.ErrNoChange {
+				log.Fatalf("Failed to apply migrations: %v", err)
+			}
 		}
+
 		if err == migrate.ErrNoChange {
 			log.Println("No migrations to apply")
 		} else {
@@ -88,15 +142,59 @@ func main() {
 		}
 
 	case "down":
+		// Auto-fix dirty state if detected
+		if dirty {
+			log.Printf("Detected dirty database state (version: %d). Attempting to fix...", versionNum)
+			// Force to current version to clear dirty flag
+			if err := m.Force(int(versionNum)); err != nil {
+				log.Fatalf("Failed to fix dirty state: %v", err)
+			}
+			log.Printf("Fixed dirty state by forcing version to %d", versionNum)
+		}
+
 		if *steps > 0 {
 			err = m.Steps(-*steps)
 		} else {
 			log.Fatalf("Down command requires -steps parameter for safety")
 		}
+
+		// If error contains "dirty" or "Dirty", try to fix and retry
 		if err != nil && err != migrate.ErrNoChange {
-			log.Fatalf("Failed to rollback migrations: %v", err)
+			errStr := err.Error()
+			if strings.Contains(errStr, "dirty") || strings.Contains(errStr, "Dirty") {
+				log.Printf("Rollback failed due to dirty state. Attempting to fix and retry...")
+
+				currentVersion, _, versionErr := m.Version()
+				if versionErr != nil && versionErr != migrate.ErrNilVersion {
+					log.Fatalf("Failed to get version after error: %v", versionErr)
+				}
+
+				// Never force to version 0 as it doesn't exist (migrations start from 1)
+				// If version is 0 or nil, force to version 1 (first migration)
+				forceVersion := 1
+				if currentVersion > 0 {
+					forceVersion = int(currentVersion)
+				}
+
+				if forceErr := m.Force(forceVersion); forceErr != nil {
+					log.Fatalf("Failed to fix dirty state: %v", forceErr)
+				}
+				log.Printf("Fixed dirty state by forcing version to %d. Retrying rollback...", forceVersion)
+
+				// Retry rollback
+				err = m.Steps(-*steps)
+			}
+
+			if err != nil && err != migrate.ErrNoChange {
+				log.Fatalf("Failed to rollback migrations: %v", err)
+			}
 		}
-		log.Println("Migrations rolled back successfully")
+
+		if err == migrate.ErrNoChange {
+			log.Println("No migrations to rollback")
+		} else {
+			log.Println("Migrations rolled back successfully")
+		}
 
 	case "force":
 		if *version == 0 {
