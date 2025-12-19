@@ -11,12 +11,12 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig         `yaml:"server"`
-	Database  DatabaseConfig       `yaml:"database"`
-	Job       JobConfig            `yaml:"job"`
-	API       APIConfig            `yaml:"api"`
-	CoinGecko CoinGeckoConfig      `yaml:"coingecko"`
-	Backfill  BackfillConfig       `yaml:"backfill"`
+	Server    ServerConfig           `yaml:"server"`
+	Database  DatabaseConfig         `yaml:"database"`
+	Job       JobConfig              `yaml:"job"`
+	API       APIConfig              `yaml:"api"`
+	CoinGecko CoinGeckoConfig        `yaml:"coingecko"`
+	Backfill  BackfillConfig         `yaml:"backfill"`
 	Tokens    map[string]TokenConfig `yaml:"tokens"`
 }
 
@@ -58,18 +58,18 @@ type BackfillConfig struct {
 }
 
 type TokenConfig struct {
-	IntervalSeconds      int                 `yaml:"interval_seconds"`      // Collection interval in seconds (0 = use global job.interval_seconds)
-	Enabled              bool                `yaml:"enabled"`                // Enable/disable collection for this token (default: true)
-	TimeoutSeconds       int                 `yaml:"timeout_seconds"`       // HTTP timeout in seconds (0 = use global api.timeout_seconds)
-	MinTimeRangeSeconds  int                 `yaml:"min_time_range_seconds"` // Minimum time range to collect (0 = use default 60)
-	MaxChunkMinutes      int                 `yaml:"max_chunk_minutes"`     // Maximum chunk size for catch-up (0 = use backfill.chunk_minutes or default 60)
-	Backfill             TokenBackfillConfig `yaml:"backfill"`              // Token-specific backfill settings
+	IntervalSeconds     int                 `yaml:"interval_seconds"`       // Collection interval in seconds (0 = use global job.interval_seconds)
+	Enabled             bool                `yaml:"enabled"`                // Enable/disable collection for this token (default: true)
+	TimeoutSeconds      int                 `yaml:"timeout_seconds"`        // HTTP timeout in seconds (0 = use global api.timeout_seconds)
+	MinTimeRangeSeconds int                 `yaml:"min_time_range_seconds"` // Minimum time range to collect (0 = use default 60)
+	MaxChunkMinutes     int                 `yaml:"max_chunk_minutes"`      // Maximum chunk size for catch-up (0 = use backfill.chunk_minutes or default 60)
+	Backfill            TokenBackfillConfig `yaml:"backfill"`               // Token-specific backfill settings
 }
 
 type TokenBackfillConfig struct {
 	Enabled      bool   `yaml:"enabled"`       // Enable/disable backfill for this token (default: false, uses global backfill.enabled if not set)
-	StartFrom    string `yaml:"start_from"`   // Backfill start date for this token (ISO date or RFC3339, overrides global if set)
-	SleepMs      int    `yaml:"sleep_ms"`     // Delay between backfill chunks in milliseconds (0 = use global backfill.sleep_ms)
+	StartFrom    string `yaml:"start_from"`    // Backfill start date for this token (ISO date or RFC3339, overrides global if set)
+	SleepMs      int    `yaml:"sleep_ms"`      // Delay between backfill chunks in milliseconds (0 = use global backfill.sleep_ms)
 	ChunkMinutes int    `yaml:"chunk_minutes"` // Size of each backfill window in minutes (0 = use global backfill.chunk_minutes)
 }
 
@@ -295,24 +295,24 @@ func (c *Config) IsTokenBackfillEnabled(tokenName string) bool {
 	if !c.IsTokenEnabled(tokenName) {
 		return false // If token is disabled, backfill is also disabled
 	}
-	
+
 	tokenCfg := c.GetTokenConfig(tokenName)
-	
+
 	// If backfill.enabled is explicitly false, disable backfill
 	if !tokenCfg.Backfill.Enabled {
 		return false
 	}
-	
+
 	// If start_from is set, enable backfill (unless explicitly disabled above)
 	if tokenCfg.Backfill.StartFrom != "" {
 		return true
 	}
-	
+
 	// If token-specific backfill.enabled is true, enable it
 	if tokenCfg.Backfill.Enabled {
 		return true
 	}
-	
+
 	// Otherwise use global backfill setting
 	return c.Backfill.Enabled
 }

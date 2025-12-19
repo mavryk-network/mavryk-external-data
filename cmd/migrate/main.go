@@ -14,10 +14,10 @@ import (
 
 func main() {
 	var (
-		command     = flag.String("command", "up", "Migration command: up, down, force, version")
-		steps       = flag.Int("steps", 0, "Number of migration steps (0 = all)")
-		version     = flag.Int("version", 0, "Version for force command")
-		dsn         = flag.String("dsn", "", "Database connection string (postgres://user:pass@host:port/dbname?sslmode=disable)")
+		command        = flag.String("command", "up", "Migration command: up, down, force, version")
+		steps          = flag.Int("steps", 0, "Number of migration steps (0 = all)")
+		version        = flag.Int("version", 0, "Version for force command")
+		dsn            = flag.String("dsn", "", "Database connection string (postgres://user:pass@host:port/dbname?sslmode=disable)")
 		migrationsPath = flag.String("path", "file://internal/core/infrastructure/storage/migrations", "Path to migrations directory")
 	)
 	flag.Parse()
@@ -167,4 +167,3 @@ func createMigration(name, migrationsPath string) {
 
 	log.Printf("Created migrations:\n  %s\n  %s", upFile, downFile)
 }
-

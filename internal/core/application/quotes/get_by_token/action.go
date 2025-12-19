@@ -31,4 +31,3 @@ func (a *Action) Execute(ctx context.Context, tokenName string, from, to time.Ti
 
 	return quotes, nil
 }
-

@@ -97,12 +97,12 @@ func (r *QuoteRepository) GetLastQuote(ctx context.Context, tokenName string) (q
 
 	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	var entity entities.QuoteEntity
-	
+
 	result := r.db.WithContext(ctx).
 		Table(tableName).
 		Order("timestamp DESC").
 		First(&entity)
-	
+
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
 			return quotes.Quote{}, fmt.Errorf("no quotes found for token '%s'", tokenName)
@@ -121,7 +121,7 @@ func (r *QuoteRepository) GetQuotes(ctx context.Context, from, to time.Time, lim
 
 	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	var entities []entities.QuoteEntity
-	
+
 	query := r.db.WithContext(ctx).
 		Table(tableName).
 		Where("timestamp >= ? AND timestamp <= ?", from, to).

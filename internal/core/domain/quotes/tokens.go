@@ -49,4 +49,3 @@ func GetCoinGeckoID(token Token) string {
 		return ""
 	}
 }
-

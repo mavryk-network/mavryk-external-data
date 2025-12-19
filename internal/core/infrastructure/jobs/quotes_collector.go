@@ -14,10 +14,10 @@ import (
 )
 
 type tokenCollector struct {
-	token   quotes.Token
-	ticker  *time.Ticker
-	client  *coingecko.Client
-	done    chan bool
+	token  quotes.Token
+	ticker *time.Ticker
+	client *coingecko.Client
+	done   chan bool
 }
 
 type QuotesCollector struct {
@@ -63,7 +63,7 @@ func (c *QuotesCollector) Start(ctx context.Context) {
 	}
 	for _, token := range supportedTokens {
 		tokenName := string(token)
-		
+
 		if !c.config.IsTokenEnabled(tokenName) {
 			log.Printf("Token %s is disabled - skipping", tokenName)
 			continue
@@ -95,7 +95,7 @@ func (c *QuotesCollector) Start(ctx context.Context) {
 
 func (c *QuotesCollector) startTokenCollector(ctx context.Context, collector *tokenCollector, tokenCfg config.TokenConfig) {
 	tokenName := string(collector.token)
-	
+
 	c.collectQuotesForToken(ctx, collector.token, collector.client, tokenCfg)
 
 	for {
@@ -224,7 +224,7 @@ func (c *QuotesCollector) runBackfill(ctx context.Context) error {
 	var wg sync.WaitGroup
 	for _, token := range supportedTokens {
 		tokenName := string(token)
-		
+
 		// Check if backfill is enabled for this token
 		if !c.config.IsTokenBackfillEnabled(tokenName) {
 			log.Printf("Backfill disabled for token %s - skipping", tokenName)
@@ -288,7 +288,7 @@ func (c *QuotesCollector) runBackfillForToken(ctx context.Context, token quotes.
 
 	// Get token-specific backfill config
 	tokenCfg := c.config.GetTokenConfig(tokenName)
-	
+
 	// Process in chunks (use token-specific or global settings)
 	chunkMinutes := tokenCfg.Backfill.ChunkMinutes
 	if chunkMinutes <= 0 {
