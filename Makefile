@@ -1,5 +1,5 @@
 .PHONY: build run test clean deps docker-build docker-run docker-stop \
-        migrate-up migrate-down migrate-reset migrate-redo fmt lint docs swagger
+        fmt lint docs swagger
 
 # --------------------------
 # Config
@@ -12,9 +12,6 @@ POSTGRES_USER ?= postgres
 POSTGRES_PASSWORD ?= postgres
 POSTGRES_DATABASE ?= quotes
 export PGPASSWORD=$(POSTGRES_PASSWORD)
-
-MIGRATION_UP   = internal/core/infrastructure/storage/migrations/001_init.sql
-MIGRATION_DOWN = internal/core/infrastructure/storage/migrations/001_init_down.sql
 
 # --------------------------
 # Build & Run
@@ -54,55 +51,6 @@ docker-run:
 docker-stop:
 	@echo "Stopping Docker Compose..."
 	docker-compose -p quotes down
-
-# --------------------------
-# Database migrations
-# --------------------------
-MIGRATIONS_DIR = internal/core/infrastructure/storage/migrations
-MIGRATE_BINARY = bin/migrate
-
-migrate-build:
-	@echo "Building migrate tool..."
-	@go build -o $(MIGRATE_BINARY) cmd/migrate/main.go
-
-migrate-up: migrate-build
-	@echo "Applying all pending migrations..."
-	@$(MIGRATE_BINARY) -command=up
-
-migrate-down: migrate-build
-	@echo "Rolling back migrations..."
-	@if [ -z "$(STEPS)" ]; then \
-		echo "Error: STEPS parameter is required for safety"; \
-		echo "Example: make migrate-down STEPS=1"; \
-		exit 1; \
-	fi
-	@$(MIGRATE_BINARY) -command=down -steps=$(STEPS)
-
-migrate-status: migrate-build
-	@echo "Checking migration status..."
-	@$(MIGRATE_BINARY) -command=version
-
-migrate-force: migrate-build
-	@echo "Forcing migration version..."
-	@if [ -z "$(VERSION)" ]; then \
-		echo "Error: VERSION parameter is required"; \
-		echo "Example: make migrate-force VERSION=3"; \
-		exit 1; \
-	fi
-	@$(MIGRATE_BINARY) -command=force -version=$(VERSION)
-
-migrate-create: migrate-build
-	@if [ -z "$(NAME)" ]; then \
-		echo "Error: NAME parameter is required"; \
-		echo "Example: make migrate-create NAME=add_new_feature"; \
-		exit 1; \
-	fi
-	@$(MIGRATE_BINARY) -command=create $(NAME)
-	@echo "Migration created successfully"
-
-migrate-list:
-	@echo "Available migrations:"
-	@ls -1 $(MIGRATIONS_DIR)/*.up.sql 2>/dev/null | sort | sed 's/.*\///' | nl -w2 -s'. ' || echo "No migrations found"
 
 # --------------------------
 # Code quality

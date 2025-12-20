@@ -16,7 +16,6 @@ import (
 // other tokens -> use token name as table name
 func tokenNameToTableName(tokenName string) string {
 	tokenName = strings.ToLower(tokenName)
-	// After migration, mvrk table is named mvrk (was quotes)
 	return tokenName
 }
 

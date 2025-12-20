@@ -16,29 +16,22 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main cmd/quotes/m
 # =========================
 # Migration stage
 # =========================
-FROM golang:1.24-alpine AS migration
+FROM alpine:3.19 AS migration
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache git
-
-# Copy go mod files
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy source code
-COPY . .
-
-# Build migrate tool
-RUN go build -o migrate cmd/migrate/main.go
+# Install postgresql-client for running migrations
+RUN apk add --no-cache postgresql-client
 
 # Copy migrations to migrations directory
 COPY internal/core/infrastructure/storage/migrations ./migrations
 
-# Default command: apply all pending migrations
-# The path is relative to WORKDIR (/app), so file://migrations points to /app/migrations
-CMD ["./migrate", "-command=up", "-path=file:///app/migrations"]
+# Copy migration script
+COPY scripts/run-migrations.sh ./run-migrations.sh
+RUN chmod +x ./run-migrations.sh
+
+# Default command: run migration script
+CMD ["./run-migrations.sh"]
 
 # =========================
 # Production stage
