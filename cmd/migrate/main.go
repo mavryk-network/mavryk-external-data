@@ -111,7 +111,9 @@ func main() {
 					log.Fatalf("Failed to get version after error: %v", versionErr)
 				}
 
-				forceVersion := 0
+				// Never force to version 0 as it doesn't exist (migrations start from 1)
+				// If version is 0 or nil, force to version 1 (first migration)
+				forceVersion := 1
 				if currentVersion > 0 {
 					forceVersion = int(currentVersion)
 				}
@@ -167,7 +169,9 @@ func main() {
 					log.Fatalf("Failed to get version after error: %v", versionErr)
 				}
 
-				forceVersion := 0
+				// Never force to version 0 as it doesn't exist (migrations start from 1)
+				// If version is 0 or nil, force to version 1 (first migration)
+				forceVersion := 1
 				if currentVersion > 0 {
 					forceVersion = int(currentVersion)
 				}
