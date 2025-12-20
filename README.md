@@ -28,7 +28,7 @@ mavryk-external-data/
 │       ├── domain/quotes/        # Domain models
 │       └── infrastructure/       # External dependencies
 │           ├── interactions/     # External APIs (CoinGecko)
-│           ├── storage/          # Database layer (entities, repositories, migrations)
+│           ├── storage/          # Database layer (entities, repositories)
 │           └── jobs/             # Background jobs (hosted jobs)
 └── config.yaml                   # Configuration file
 ```
@@ -53,9 +53,11 @@ API  → Application ← Infrastructure
 * **Framework**: Gin (HTTP)
 * **ORM**: GORM
 * **Database**: PostgreSQL with TimescaleDB support
+* **Migrations**: Native PostgreSQL (`psql`) - no external migration tools required
 * **Configuration**: YAML + environment variables
 * **Background processing**: Hosted jobs via goroutines and timers
 * **API Documentation**: Swagger/OpenAPI
+* **Containerization**: Docker with multi-stage builds
 
 
 ## API endpoints
@@ -240,7 +242,8 @@ Tables can be converted to TimescaleDB hypertables for better time-series perfor
 ### Prerequisites
 
 * Go 1.21+
-* PostgreSQL 12+
+* PostgreSQL 12+ (or Docker with docker-compose)
+* PostgreSQL client (`psql`) for running migrations manually (optional if using Docker)
 
 ### Installation
 
@@ -252,10 +255,49 @@ go mod tidy
 
 ### Database setup
 
+1. **Create database** (if not using Docker):
+
 ```sql
-CREATE SCHEMA mev;
 CREATE DATABASE mavryk_external_data;
 ```
+
+2. **Run migrations**:
+
+Migrations are located in `internal/core/infrastructure/storage/migrations/` and are executed using native PostgreSQL client (`psql`).
+
+**Using Docker Compose** (recommended):
+```bash
+docker-compose up migration
+```
+
+**Manually using the migration script**:
+```bash
+# Set database connection parameters
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+export POSTGRES_USER=postgres
+export POSTGRES_PASSWORD=postgres
+export POSTGRES_DATABASE=quotes
+
+# Run migrations
+./scripts/run-migrations.sh
+```
+
+**Manually using psql**:
+```bash
+# Apply all up migrations in order
+psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/001_init.sql
+psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/002_add_usdt_table.up.sql
+psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/003_rename_quotes_to_mvrk.up.sql
+```
+
+**Migration files structure**:
+- `001_init.sql` - Creates schema, tables, and indexes
+- `002_add_usdt_table.up.sql` - Creates USDT table
+- `003_rename_quotes_to_mvrk.up.sql` - Renames quotes table to mvrk
+- `*_down.sql` - Rollback migrations (for down migrations)
+
+All migrations are **idempotent** and can be safely executed multiple times.
 
 ### Configuration
 
@@ -293,45 +335,23 @@ CREATE DATABASE mavryk_external_data;
 
 **Token-specific settings** are configured in `config.yaml` under the `tokens` section. See [Token Configuration](#token-configuration) below.
 
-### Database migrations
-
-The project uses [golang-migrate](https://github.com/golang-migrate/migrate) for database migrations. **Note**: GORM AutoMigrate is not used; all schema changes are handled via SQL migrations.
-
-```bash
-# Apply all pending migrations
-make migrate-up
-
-# Check migration status
-make migrate-status
-
-# Rollback last migration (requires STEPS parameter)
-make migrate-down STEPS=1
-
-# Force migration version (if migration is stuck)
-make migrate-force VERSION=3
-
-# Create a new migration
-make migrate-create NAME=add_new_feature
-
-# List all migrations
-make migrate-list
-```
-
-Migrations are located in `internal/core/infrastructure/storage/migrations/` and follow the naming convention:
-- `0001_name.up.sql` - migration to apply
-- `0001_name.down.sql` - migration to rollback
-
-**Current migrations:**
-- `0001_init` - Creates `mev` schema and `mev.quotes` table
-- `0002_add_usdt_table` - Creates `mev.usdt` table
-- `0003_rename_quotes_to_mvrk` - Renames `mev.quotes` to `mev.mvrk`
-
-When running with Docker Compose, migrations are automatically applied by the `migration` service before the application starts.
-
 ### Run
 
+**Local development**:
 ```bash
 go run cmd/quotes/main.go
+```
+
+**Using Docker Compose**:
+```bash
+# Start all services (postgres, migrations, app)
+docker-compose up -d
+
+# View logs
+docker-compose logs -f app
+
+# Stop services
+docker-compose down
 ```
 
 The service starts at `http://localhost:3010` and begins collecting quotes for each enabled token according to their individual intervals (configurable per token).
@@ -474,3 +494,55 @@ tokens:
 - Accepted `START_FROM` formats: `YYYY-MM-DD` or full RFC3339.
 - Choose chunk and sleep values mindful of provider limits; defaults are conservative.
 - Each token runs backfill in parallel if enabled.
+
+## Docker
+
+### Building and running with Docker
+
+The project includes a multi-stage Dockerfile and docker-compose configuration:
+
+**Build images**:
+```bash
+docker-compose build
+```
+
+**Run all services**:
+```bash
+# Start postgres, run migrations, and start the app
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop all services
+docker-compose down
+```
+
+**Run migrations only**:
+```bash
+docker-compose up migration
+```
+
+**Docker stages**:
+- `builder` - Builds the Go application
+- `migration` - Runs database migrations using native `psql`
+- `production` - Final lightweight image with the compiled application
+
+**Environment variables** for Docker are configured in `docker-compose.yml` or can be set via `.env` file.
+
+### Migration script
+
+The migration script (`scripts/run-migrations.sh`) provides:
+- Automatic database health check before running migrations
+- Support for `up` and `down` migration commands
+- Idempotent migrations (safe to run multiple times)
+- Configurable via environment variables
+
+**Migration script environment variables**:
+- `POSTGRES_HOST` - Database host (default: localhost)
+- `POSTGRES_PORT` - Database port (default: 5432)
+- `POSTGRES_USER` - Database user (default: postgres)
+- `POSTGRES_PASSWORD` - Database password (default: postgres)
+- `POSTGRES_DATABASE` - Database name (default: quotes)
+- `MIGRATIONS_DIR` - Path to migrations directory (default: /app/migrations)
+- `COMMAND` - Migration command: `up` or `down` (default: up)
