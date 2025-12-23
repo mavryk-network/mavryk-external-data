@@ -27,12 +27,12 @@ coingecko:
 tokens:
   mvrk:
     interval_seconds: 60        # Collection interval (0 = use global job.interval_seconds)
-    enabled: false              # Enable/disable collection for this token
+    enabled: true              # Enable/disable collection for this token
     timeout_seconds: 30         # HTTP timeout (0 = use global api.timeout_seconds)
     min_time_range_seconds: 60  # Minimum time range to collect (0 = default 60)
     max_chunk_minutes: 240      # Max chunk size for catch-up (0 = use backfill.chunk_minutes or default 240)
     backfill:
-      enabled: false                      # Enable/disable backfill for this token (default: false, uses global if not set)
+      enabled: true                      # Enable/disable backfill for this token (default: false, uses global if not set)
       start_from: "2025-09-18T14:00:00Z"  # Backfill start date for this token (ISO date or RFC3339, overrides global if set)
       sleep_ms: 5000                      # Delay between backfill chunks in ms (0 = use global backfill.sleep_ms)
       chunk_minutes: 360                  # Size of each backfill window in minutes (0 = use global backfill.chunk_minutes)
@@ -43,7 +43,7 @@ tokens:
     min_time_range_seconds: 60
     max_chunk_minutes: 240
     backfill:
-      enabled: false 
+      enabled: true 
       start_from: "2025-12-18T00:00:00Z"
       sleep_ms: 5000
       chunk_minutes: 360

@@ -19,14 +19,14 @@ func New(action *get_by_token.Action) *Handler {
 
 // GetQuotesByToken godoc
 // @Summary      Get quotes for a specific token
-// @Description  Retrieve quotes for a specific token (mvrk, usdt, etc.) with optional filters
+// @Description  Retrieve quotes for a specific token (mvrk, usdt, etc.) with optional filters. If no time range is specified, returns the latest 100 quotes by default.
 // @Tags         tokens
 // @Accept       json
 // @Produce      json
 // @Param        token   path      string  true   "Token name (e.g., mvrk, usdt)"
-// @Param        from    query     string  false  "Start time (RFC3339 format, e.g., 2025-01-01T00:00:00Z). Default: 24 hours ago"
-// @Param        to      query     string  false  "End time (RFC3339 format, e.g., 2025-01-01T23:59:59Z). Default: now"
-// @Param        limit   query     int     false  "Maximum number of quotes to return. Default: no limit"
+// @Param        from    query     string  false  "Start time (RFC3339 format, e.g., 2025-01-01T00:00:00Z). If not specified, returns latest quotes"
+// @Param        to      query     string  false  "End time (RFC3339 format, e.g., 2025-01-01T23:59:59Z). If not specified, returns latest quotes"
+// @Param        limit   query     int     false  "Maximum number of quotes to return. Default: 100 when no time range specified, no limit when time range is specified"
 // @Success      200     {array}   quotes.Quote  "List of quotes"
 // @Failure      400     {object}  map[string]string  "Invalid request parameters"
 // @Failure      404     {object}  map[string]string  "Token not found"
@@ -45,13 +45,16 @@ func (h *Handler) Handle(c *gin.Context) {
 	toStr := c.Query("to")
 	limitStr := c.Query("limit")
 
-	now := time.Now()
-	from := now.Add(-24 * time.Hour)
-	to := now
+	// Default limit when no time range is specified
+	const defaultLimit = 100
+
+	var from, to time.Time
+	var useTimeRange bool
 
 	if fromStr != "" {
 		if parsedFrom, err := time.Parse(time.RFC3339, fromStr); err == nil {
 			from = parsedFrom
+			useTimeRange = true
 		} else {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Invalid 'from' parameter format. Use RFC3339 format (e.g., 2023-01-01T00:00:00Z)",
@@ -63,9 +66,29 @@ func (h *Handler) Handle(c *gin.Context) {
 	if toStr != "" {
 		if parsedTo, err := time.Parse(time.RFC3339, toStr); err == nil {
 			to = parsedTo
+			useTimeRange = true
 		} else {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Invalid 'to' parameter format. Use RFC3339 format (e.g., 2023-01-01T00:00:00Z)",
+			})
+			return
+		}
+	}
+
+	// If time range is specified, validate it
+	if useTimeRange {
+		// If only one of from/to is specified, set defaults
+		now := time.Now()
+		if fromStr == "" {
+			from = now.Add(-24 * time.Hour)
+		}
+		if toStr == "" {
+			to = now
+		}
+
+		if from.After(to) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Invalid time range: 'from' must be before 'to'",
 			})
 			return
 		}
@@ -83,11 +106,9 @@ func (h *Handler) Handle(c *gin.Context) {
 		}
 	}
 
-	if from.After(to) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid time range: 'from' must be before 'to'",
-		})
-		return
+	// If no time range and no limit specified, use default limit
+	if !useTimeRange && limit == 0 {
+		limit = defaultLimit
 	}
 
 	quotes, err := h.action.Execute(c.Request.Context(), tokenName, from, to, limit)

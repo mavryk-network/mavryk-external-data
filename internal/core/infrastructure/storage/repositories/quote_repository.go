@@ -113,6 +113,8 @@ func (r *QuoteRepository) GetLastQuote(ctx context.Context, tokenName string) (q
 }
 
 // GetQuotes retrieves quotes for a specific token
+// If from and to are zero times, returns latest quotes up to limit
+// Otherwise, returns quotes within the time range
 func (r *QuoteRepository) GetQuotes(ctx context.Context, from, to time.Time, limit int, tokenName string) ([]quotes.Quote, error) {
 	if !quotes.IsTokenSupported(tokenName) {
 		return nil, fmt.Errorf("token '%s' is not supported", tokenName)
@@ -121,13 +123,22 @@ func (r *QuoteRepository) GetQuotes(ctx context.Context, from, to time.Time, lim
 	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	var entities []entities.QuoteEntity
 
-	query := r.db.WithContext(ctx).
-		Table(tableName).
-		Where("timestamp >= ? AND timestamp <= ?", from, to).
-		Order("timestamp ASC")
+	query := r.db.WithContext(ctx).Table(tableName)
 
-	if limit > 0 {
-		query = query.Limit(limit)
+	// If from and to are zero (not set), get latest quotes without time filter
+	if from.IsZero() && to.IsZero() {
+		query = query.Order("timestamp DESC")
+		if limit > 0 {
+			query = query.Limit(limit)
+		}
+	} else {
+		// Use time range filter
+		query = query.
+			Where("timestamp >= ? AND timestamp <= ?", from, to).
+			Order("timestamp ASC")
+		if limit > 0 {
+			query = query.Limit(limit)
+		}
 	}
 
 	result := query.Find(&entities)
@@ -138,6 +149,13 @@ func (r *QuoteRepository) GetQuotes(ctx context.Context, from, to time.Time, lim
 	quotesList := make([]quotes.Quote, len(entities))
 	for i, entity := range entities {
 		quotesList[i] = r.entityToDomain(entity)
+	}
+
+	// Reverse order if we got latest quotes (DESC -> ASC for response)
+	if from.IsZero() && to.IsZero() {
+		for i, j := 0, len(quotesList)-1; i < j; i, j = i+1, j-1 {
+			quotesList[i], quotesList[j] = quotesList[j], quotesList[i]
+		}
 	}
 
 	return quotesList, nil
