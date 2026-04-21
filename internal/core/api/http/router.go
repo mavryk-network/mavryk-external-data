@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"net/http"
 
 	"quotes/internal/core/api/http/health/db_status"
 	"quotes/internal/core/api/http/quotes/get_all"
@@ -42,6 +43,9 @@ func NewRouter(
 func (r *Router) SetupRoutes(engine *gin.Engine) {
 	// Swagger: serve dynamic spec so "Try it out" uses this request's host/scheme (same as mavryk-wallet-backend).
 	// Gin cannot register both "/swagger/*any" and "/swagger/doc.json", so the JSON lives at /swagger.json.
+	//
+	// This service also registers GET /:token at root for quotes — a single segment like "swagger" would
+	// otherwise be handled as a token name. Explicit /swagger routes must come before that catch-all.
 	engine.GET("/swagger.json", func(c *gin.Context) {
 		docStr, err := swag.ReadDoc()
 		if err != nil {
@@ -69,6 +73,12 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 			return
 		}
 		c.Data(200, "application/json; charset=utf-8", out)
+	})
+	engine.GET("/swagger", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/swagger/index.html")
+	})
+	engine.GET("/swagger/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/swagger/index.html")
 	})
 	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
 

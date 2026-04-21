@@ -76,7 +76,9 @@ API  → Application ← Infrastructure
 
 ### API Documentation (Swagger)
 
-**Swagger UI** loads the spec from **`/swagger.json`**, which is generated per request: `host` and `schemes` match the incoming request (and `X-Forwarded-Proto` behind ingress), same pattern as **mavryk-wallet-backend** — **Try it out** hits the same host you used to open `/swagger`. If you still see **Failed to fetch**, confirm the app is running and try an external browser (some IDE previews block `localhost`).
+**Swagger UI** loads the spec from **`/swagger.json`**, which is generated per request: `host` and `schemes` match the incoming request (and `X-Forwarded-Proto` behind ingress), same pattern as **mavryk-wallet-backend** — **Try it out** hits the same host you used to open `/swagger`.
+
+Unlike the wallet backend, this API exposes **`GET /:token`** at the site root (e.g. `/usdt`). Without extra routes, **`/swagger`** would be handled as token `swagger`, not the UI — so **`/swagger` and `/swagger/` redirect to `/swagger/index.html`**. Open the UI at **`/swagger/index.html`** or **`/swagger`** (redirect). If you still see **Failed to fetch**, confirm the app is running and try a normal browser (some IDE previews block `localhost`).
 
 Interactive API documentation is available at:
 - **Swagger UI**: `http://localhost:3010/swagger/index.html`
