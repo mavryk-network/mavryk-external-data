@@ -24,6 +24,36 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/health/db": {
+            "get": {
+                "description": "Read-only check: DB reachability, whether timescaledb extension is enabled, and hypertables in schema mev. Does not expose row data.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Database / TimescaleDB diagnostics",
+                "responses": {
+                    "200": {
+                        "description": "Diagnostics",
+                        "schema": {
+                            "$ref": "#/definitions/db_status.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Database unreachable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/quotes": {
             "get": {
                 "description": "Retrieve quotes for MVRK token with optional filters. Returns quotes within the specified time range.",
@@ -158,7 +188,7 @@ const docTemplate = `{
         },
         "/{token}": {
             "get": {
-                "description": "Retrieve quotes for a specific token (mvrk, usdt, etc.) with optional filters",
+                "description": "Retrieve quotes for a specific token (mvrk, usdt, etc.) with optional filters. If no time range is specified, returns the latest 100 quotes by default.",
                 "consumes": [
                     "application/json"
                 ],
@@ -179,19 +209,19 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Start time (RFC3339 format, e.g., 2025-01-01T00:00:00Z). Default: 24 hours ago",
+                        "description": "Start time (RFC3339 format, e.g., 2025-01-01T00:00:00Z). If not specified, returns latest quotes",
                         "name": "from",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "End time (RFC3339 format, e.g., 2025-01-01T23:59:59Z). Default: now",
+                        "description": "End time (RFC3339 format, e.g., 2025-01-01T23:59:59Z). If not specified, returns latest quotes",
                         "name": "to",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "Maximum number of quotes to return. Default: no limit",
+                        "description": "Maximum number of quotes to return. Default: 100 when no time range specified, no limit when time range is specified",
                         "name": "limit",
                         "in": "query"
                     }
@@ -238,6 +268,29 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "db_status.Response": {
+            "type": "object",
+            "properties": {
+                "database_reachable": {
+                    "type": "boolean"
+                },
+                "hypertables_mev": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "hypertables_query_note": {
+                    "type": "string"
+                },
+                "timescaledb_installed": {
+                    "type": "boolean"
+                },
+                "timescaledb_version": {
+                    "type": "string"
+                }
+            }
+        },
         "quotes.Quote": {
             "type": "object",
             "properties": {
@@ -276,7 +329,7 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
-	Host:             "localhost:3010",
+	Host:             "",
 	BasePath:         "/",
 	Schemes:          []string{"http", "https"},
 	Title:            "Mavryk External Data API",

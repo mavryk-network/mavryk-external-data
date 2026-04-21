@@ -1,6 +1,10 @@
 package http
 
 import (
+	"encoding/json"
+	"net/http"
+
+	"quotes/internal/core/api/http/health/db_status"
 	"quotes/internal/core/api/http/quotes/get_all"
 	"quotes/internal/core/api/http/quotes/get_by_token"
 	"quotes/internal/core/api/http/quotes/get_count"
@@ -9,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"github.com/swaggo/swag"
 )
 
 type Router struct {
@@ -16,6 +21,7 @@ type Router struct {
 	getCountHandler   *get_count.Handler
 	getAllHandler     *get_all.Handler
 	getByTokenHandler *get_by_token.Handler
+	dbStatusHandler   *db_status.Handler
 }
 
 func NewRouter(
@@ -23,18 +29,58 @@ func NewRouter(
 	getCountHandler *get_count.Handler,
 	getAllHandler *get_all.Handler,
 	getByTokenHandler *get_by_token.Handler,
+	dbStatusHandler *db_status.Handler,
 ) *Router {
 	return &Router{
 		getLatestHandler:  getLatestHandler,
 		getCountHandler:   getCountHandler,
 		getAllHandler:     getAllHandler,
 		getByTokenHandler: getByTokenHandler,
+		dbStatusHandler:   dbStatusHandler,
 	}
 }
 
 func (r *Router) SetupRoutes(engine *gin.Engine) {
-	// Swagger documentation
-	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// Swagger: serve dynamic spec so "Try it out" uses this request's host/scheme (same as mavryk-wallet-backend).
+	// Gin cannot register both "/swagger/*any" and "/swagger/doc.json", so the JSON lives at /swagger.json.
+	//
+	// This service also registers GET /:token at root for quotes — a single segment like "swagger" would
+	// otherwise be handled as a token name. Explicit /swagger routes must come before that catch-all.
+	engine.GET("/swagger.json", func(c *gin.Context) {
+		docStr, err := swag.ReadDoc()
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to read swagger doc", "details": err.Error()})
+			return
+		}
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+			c.JSON(500, gin.H{"error": "Failed to parse swagger doc", "details": err.Error()})
+			return
+		}
+		doc["host"] = c.Request.Host
+		scheme := c.GetHeader("X-Forwarded-Proto")
+		if scheme == "" {
+			if c.Request.TLS != nil {
+				scheme = "https"
+			} else {
+				scheme = "http"
+			}
+		}
+		doc["schemes"] = []string{scheme}
+		out, err := json.Marshal(doc)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to serialize swagger doc", "details": err.Error()})
+			return
+		}
+		c.Data(200, "application/json; charset=utf-8", out)
+	})
+	engine.GET("/swagger", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/swagger/index.html")
+	})
+	engine.GET("/swagger/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/swagger/index.html")
+	})
+	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
 
 	// HealthCheck godoc
 	// @Summary      Health check
@@ -50,6 +96,7 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 			"service": "quotes",
 		})
 	})
+	engine.GET("/health/db", r.dbStatusHandler.Handle)
 
 	v1 := engine.Group("/")
 	{
