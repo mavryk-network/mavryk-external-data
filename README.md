@@ -65,6 +65,7 @@ API  → Application ← Infrastructure
 | Endpoint                   | Description                              | Parameters            |
 | -------------------------- | ---------------------------------------- | --------------------- |
 | `GET /health`              | Service health check                     | —                     |
+| `GET /health/db`           | DB reachability, Timescale extension, `mev` hypertables (read-only) | — |
 | `GET /quotes`              | Retrieve quotes for MVRK (legacy)       | `from`, `to`, `limit` |
 | `GET /quotes/last`         | Retrieve the latest MVRK quote (legacy)  | —                     |
 | `GET /quotes/count`        | Retrieve total number of MVRK quotes     | —                     |

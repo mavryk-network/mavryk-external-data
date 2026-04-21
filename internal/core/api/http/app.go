@@ -3,6 +3,7 @@ package http
 import (
 	"log"
 	"quotes/internal/config"
+	"quotes/internal/core/api/http/health/db_status"
 	httpGetAll "quotes/internal/core/api/http/quotes/get_all"
 	httpGetByToken "quotes/internal/core/api/http/quotes/get_by_token"
 	httpGetCount "quotes/internal/core/api/http/quotes/get_count"
@@ -65,8 +66,10 @@ func NewApp(cfg *config.Config, db *gorm.DB) *App {
 	getAllHandler := httpGetAll.New(getAllAction)
 	getByTokenHandler := httpGetByToken.New(getByTokenAction)
 
+	dbStatusHandler := db_status.New(db)
+
 	// Create router
-	httpRouter := NewRouter(getLatestHandler, getCountHandler, getAllHandler, getByTokenHandler)
+	httpRouter := NewRouter(getLatestHandler, getCountHandler, getAllHandler, getByTokenHandler, dbStatusHandler)
 	httpRouter.SetupRoutes(router)
 
 	return &App{
