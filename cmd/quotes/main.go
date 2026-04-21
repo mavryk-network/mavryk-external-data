@@ -10,9 +10,9 @@
 // @license.name  Apache 2.0
 // @license.url   http://www.apache.org/licenses/LICENSE-2.0.html
 
-// @host      localhost:3010
 // @BasePath  /
 // @schemes   http https
+// (No fixed @host — Swagger UI calls the same origin as /swagger, so Try it works over port-forward and on non-localhost URLs.)
 
 package main
 

@@ -36,7 +36,6 @@ definitions:
       usd:
         type: number
     type: object
-host: localhost:3010
 info:
   contact:
     email: support@swagger.io

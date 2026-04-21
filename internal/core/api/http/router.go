@@ -1,6 +1,8 @@
 package http
 
 import (
+	"encoding/json"
+
 	"quotes/internal/core/api/http/health/db_status"
 	"quotes/internal/core/api/http/quotes/get_all"
 	"quotes/internal/core/api/http/quotes/get_by_token"
@@ -10,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"github.com/swaggo/swag"
 )
 
 type Router struct {
@@ -37,8 +40,37 @@ func NewRouter(
 }
 
 func (r *Router) SetupRoutes(engine *gin.Engine) {
-	// Swagger documentation
-	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// Swagger: serve dynamic spec so "Try it out" uses this request's host/scheme (same as mavryk-wallet-backend).
+	// Gin cannot register both "/swagger/*any" and "/swagger/doc.json", so the JSON lives at /swagger.json.
+	engine.GET("/swagger.json", func(c *gin.Context) {
+		docStr, err := swag.ReadDoc()
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to read swagger doc", "details": err.Error()})
+			return
+		}
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
+			c.JSON(500, gin.H{"error": "Failed to parse swagger doc", "details": err.Error()})
+			return
+		}
+		doc["host"] = c.Request.Host
+		scheme := c.GetHeader("X-Forwarded-Proto")
+		if scheme == "" {
+			if c.Request.TLS != nil {
+				scheme = "https"
+			} else {
+				scheme = "http"
+			}
+		}
+		doc["schemes"] = []string{scheme}
+		out, err := json.Marshal(doc)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to serialize swagger doc", "details": err.Error()})
+			return
+		}
+		c.Data(200, "application/json; charset=utf-8", out)
+	})
+	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
 
 	// HealthCheck godoc
 	// @Summary      Health check

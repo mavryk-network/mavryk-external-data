@@ -76,10 +76,12 @@ API  → Application ← Infrastructure
 
 ### API Documentation (Swagger)
 
+**Swagger UI** loads the spec from **`/swagger.json`**, which is generated per request: `host` and `schemes` match the incoming request (and `X-Forwarded-Proto` behind ingress), same pattern as **mavryk-wallet-backend** — **Try it out** hits the same host you used to open `/swagger`. If you still see **Failed to fetch**, confirm the app is running and try an external browser (some IDE previews block `localhost`).
+
 Interactive API documentation is available at:
 - **Swagger UI**: `http://localhost:3010/swagger/index.html`
-- **JSON spec**: `http://localhost:3010/swagger/doc.json`
-- **YAML spec**: `http://localhost:3010/swagger/doc.yaml`
+- **OpenAPI JSON** (runtime, correct host for Try it out): `http://localhost:3010/swagger.json`
+- **YAML** (committed artifact, `make swagger`): `docs/swagger.yaml`
 
 To regenerate Swagger documentation after adding or modifying endpoints:
 ```bash

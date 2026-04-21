@@ -19,7 +19,6 @@
         },
         "version": "1.0"
     },
-    "host": "localhost:3010",
     "basePath": "/",
     "paths": {
         "/health/db": {
