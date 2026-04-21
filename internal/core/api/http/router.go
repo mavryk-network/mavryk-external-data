@@ -13,11 +13,11 @@ import (
 )
 
 type Router struct {
-	getLatestHandler   *get_latest.Handler
-	getCountHandler    *get_count.Handler
-	getAllHandler      *get_all.Handler
-	getByTokenHandler  *get_by_token.Handler
-	dbStatusHandler    *db_status.Handler
+	getLatestHandler  *get_latest.Handler
+	getCountHandler   *get_count.Handler
+	getAllHandler     *get_all.Handler
+	getByTokenHandler *get_by_token.Handler
+	dbStatusHandler   *db_status.Handler
 }
 
 func NewRouter(

@@ -30,7 +30,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	if !st.DatabaseReachable {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"database_reachable": false,
-			"error":                "database ping failed",
+			"error":              "database ping failed",
 		})
 		return
 	}
