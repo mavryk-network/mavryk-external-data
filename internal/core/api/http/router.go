@@ -1,6 +1,7 @@
 package http
 
 import (
+	"quotes/internal/core/api/http/health/db_status"
 	"quotes/internal/core/api/http/quotes/get_all"
 	"quotes/internal/core/api/http/quotes/get_by_token"
 	"quotes/internal/core/api/http/quotes/get_count"
@@ -12,10 +13,11 @@ import (
 )
 
 type Router struct {
-	getLatestHandler  *get_latest.Handler
-	getCountHandler   *get_count.Handler
-	getAllHandler     *get_all.Handler
-	getByTokenHandler *get_by_token.Handler
+	getLatestHandler   *get_latest.Handler
+	getCountHandler    *get_count.Handler
+	getAllHandler      *get_all.Handler
+	getByTokenHandler  *get_by_token.Handler
+	dbStatusHandler    *db_status.Handler
 }
 
 func NewRouter(
@@ -23,12 +25,14 @@ func NewRouter(
 	getCountHandler *get_count.Handler,
 	getAllHandler *get_all.Handler,
 	getByTokenHandler *get_by_token.Handler,
+	dbStatusHandler *db_status.Handler,
 ) *Router {
 	return &Router{
 		getLatestHandler:  getLatestHandler,
 		getCountHandler:   getCountHandler,
 		getAllHandler:     getAllHandler,
 		getByTokenHandler: getByTokenHandler,
+		dbStatusHandler:   dbStatusHandler,
 	}
 }
 
@@ -50,6 +54,7 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 			"service": "quotes",
 		})
 	})
+	engine.GET("/health/db", r.dbStatusHandler.Handle)
 
 	v1 := engine.Group("/")
 	{
