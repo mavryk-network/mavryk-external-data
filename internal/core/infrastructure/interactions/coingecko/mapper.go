@@ -2,6 +2,7 @@ package coingecko
 
 import (
 	"quotes/internal/core/domain/quotes"
+	"slices"
 	"time"
 )
 
@@ -12,7 +13,7 @@ type PriceData struct {
 
 // MapToQuotes converts CoinGecko API response to domain quotes
 // It normalizes data to seconds using forward-fill strategy
-func MapToQuotes(currencyData map[string]*MarketChartRangeResponse) ([]quotes.Quote, error) {
+func MapToQuotes(currencyData map[quotes.Currency]*MarketChartRangeResponse) ([]quotes.Quote, error) {
 	if len(currencyData) == 0 {
 		return nil, nil
 	}
@@ -32,18 +33,10 @@ func MapToQuotes(currencyData map[string]*MarketChartRangeResponse) ([]quotes.Qu
 	for ts := range timestampMap {
 		timestamps = append(timestamps, ts)
 	}
-
-	// Sort timestamps
-	for i := 0; i < len(timestamps); i++ {
-		for j := i + 1; j < len(timestamps); j++ {
-			if timestamps[i] > timestamps[j] {
-				timestamps[i], timestamps[j] = timestamps[j], timestamps[i]
-			}
-		}
-	}
+	slices.Sort(timestamps)
 
 	// Create price maps for each currency
-	priceMaps := make(map[string]map[int64]float64)
+	priceMaps := make(map[quotes.Currency]map[int64]float64)
 	for currency, data := range currencyData {
 		priceMap := make(map[int64]float64)
 		for _, price := range data.Prices {
@@ -66,8 +59,7 @@ func MapToQuotes(currencyData map[string]*MarketChartRangeResponse) ([]quotes.Qu
 
 		// Fill prices for each currency using forward-fill
 		for _, currency := range quotes.GetSupportedCurrencies() {
-			currencyStr := string(currency)
-			if priceMap, exists := priceMaps[currencyStr]; exists {
+			if priceMap, exists := priceMaps[currency]; exists {
 				if price, exists := priceMap[timestamp]; exists {
 					// Use actual price
 					setQuotePrice(&quote, currency, price)

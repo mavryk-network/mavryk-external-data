@@ -1,0 +1,38 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofmt
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - unused
+    - gocritic
+    - gocyclo
+    - gosec
+    - revive
+  settings:
+    gocyclo:
+      # Config wiring (overrideWithEnv, Validate) is intentionally explicit.
+      min-complexity: 55
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+        - name: var-naming
+          disabled: true
+  exclusions:
+    rules:
+      # Config path comes from deployment/CLI, not untrusted HTTP input.
+      - path: internal/config/load\.go
+        linters:
+          - gosec

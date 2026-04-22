@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"quotes/internal/core/api/http/common"
 	"quotes/internal/core/api/http/health/db_status"
 	"quotes/internal/core/api/http/quotes/get_all"
 	"quotes/internal/core/api/http/quotes/get_by_token"
 	"quotes/internal/core/api/http/quotes/get_count"
 	"quotes/internal/core/api/http/quotes/get_latest"
+	coreerrors "quotes/internal/core/common/errors"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -24,19 +26,22 @@ type Router struct {
 	dbStatusHandler   *db_status.Handler
 }
 
-func NewRouter(
-	getLatestHandler *get_latest.Handler,
-	getCountHandler *get_count.Handler,
-	getAllHandler *get_all.Handler,
-	getByTokenHandler *get_by_token.Handler,
-	dbStatusHandler *db_status.Handler,
-) *Router {
+// RouterConfig wires HTTP handlers for NewRouter (struct-arg avoids brittle positional parameters).
+type RouterConfig struct {
+	GetLatestHandler  *get_latest.Handler
+	GetCountHandler   *get_count.Handler
+	GetAllHandler     *get_all.Handler
+	GetByTokenHandler *get_by_token.Handler
+	DBStatusHandler   *db_status.Handler
+}
+
+func NewRouter(cfg RouterConfig) *Router {
 	return &Router{
-		getLatestHandler:  getLatestHandler,
-		getCountHandler:   getCountHandler,
-		getAllHandler:     getAllHandler,
-		getByTokenHandler: getByTokenHandler,
-		dbStatusHandler:   dbStatusHandler,
+		getLatestHandler:  cfg.GetLatestHandler,
+		getCountHandler:   cfg.GetCountHandler,
+		getAllHandler:     cfg.GetAllHandler,
+		getByTokenHandler: cfg.GetByTokenHandler,
+		dbStatusHandler:   cfg.DBStatusHandler,
 	}
 }
 
@@ -49,12 +54,12 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 	engine.GET("/swagger.json", func(c *gin.Context) {
 		docStr, err := swag.ReadDoc()
 		if err != nil {
-			c.JSON(500, gin.H{"error": "Failed to read swagger doc", "details": err.Error()})
+			common.RespondError(c, coreerrors.Internal("Unable to load API documentation", err))
 			return
 		}
 		var doc map[string]any
 		if err := json.Unmarshal([]byte(docStr), &doc); err != nil {
-			c.JSON(500, gin.H{"error": "Failed to parse swagger doc", "details": err.Error()})
+			common.RespondError(c, coreerrors.Internal("Unable to load API documentation", err))
 			return
 		}
 		doc["host"] = c.Request.Host
@@ -69,7 +74,7 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 		doc["schemes"] = []string{scheme}
 		out, err := json.Marshal(doc)
 		if err != nil {
-			c.JSON(500, gin.H{"error": "Failed to serialize swagger doc", "details": err.Error()})
+			common.RespondError(c, coreerrors.Internal("Unable to load API documentation", err))
 			return
 		}
 		c.Data(200, "application/json; charset=utf-8", out)

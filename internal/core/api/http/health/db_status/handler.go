@@ -2,6 +2,9 @@ package db_status
 
 import (
 	"net/http"
+
+	"quotes/internal/core/api/http/common"
+	coreerrors "quotes/internal/core/common/errors"
 	"quotes/internal/core/infrastructure/storage"
 
 	"github.com/gin-gonic/gin"
@@ -28,10 +31,7 @@ func New(db *gorm.DB) *Handler {
 func (h *Handler) Handle(c *gin.Context) {
 	st := storage.QueryTimescaleStatus(c.Request.Context(), h.db)
 	if !st.DatabaseReachable {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"database_reachable": false,
-			"error":              "database ping failed",
-		})
+		common.RespondErrorWithStatus(c, http.StatusServiceUnavailable, coreerrors.CodeUnavailable, "Database is not reachable")
 		return
 	}
 	c.JSON(http.StatusOK, st)

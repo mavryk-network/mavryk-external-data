@@ -2,9 +2,9 @@ package storage
 
 import (
 	"fmt"
-	"log"
 	"quotes/internal/config"
 
+	"github.com/rs/zerolog"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -14,7 +14,7 @@ type DB struct {
 	*gorm.DB
 }
 
-func NewDB(cfg *config.Config) (*DB, error) {
+func NewDB(cfg *config.Config, log *zerolog.Logger) (*DB, error) {
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=UTC",
 		cfg.Database.Host,
 		cfg.Database.User,
@@ -35,7 +35,9 @@ func NewDB(cfg *config.Config) (*DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	log.Println("Database connected successfully")
+	if log != nil {
+		log.Info().Msg("database_connected")
+	}
 	return &DB{DB: db}, nil
 }
 

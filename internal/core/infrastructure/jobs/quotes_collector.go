@@ -2,42 +2,56 @@ package jobs
 
 import (
 	"context"
-	"log"
 	"quotes/internal/config"
 	"quotes/internal/core/domain/quotes"
 	"quotes/internal/core/infrastructure/interactions/coingecko"
+	"quotes/internal/core/infrastructure/responsecache"
 	"quotes/internal/core/infrastructure/storage/repositories"
+	"quotes/internal/logging"
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
 	"gorm.io/gorm"
 )
 
 type tokenCollector struct {
-	token  quotes.Token
-	ticker *time.Ticker
-	client *coingecko.Client
-	done   chan bool
+	token    quotes.Token
+	ticker   *time.Ticker
+	client   *coingecko.Client
+	stopCh   chan struct{}
+	stopOnce sync.Once
+}
+
+func (tc *tokenCollector) requestStop() {
+	tc.stopOnce.Do(func() { close(tc.stopCh) })
 }
 
 type QuotesCollector struct {
-	config     *config.Config
-	repository *repositories.QuoteRepository
-	collectors map[string]*tokenCollector
-	done       chan bool
+	config        *config.Config
+	repository    *repositories.QuoteRepository
+	responseCache *responsecache.Cache
+	collectors    map[string]*tokenCollector
+	collectorsWg  sync.WaitGroup
+	logger        *zerolog.Logger
 }
 
-func NewQuotesCollector(cfg *config.Config, db *gorm.DB) *QuotesCollector {
+func NewQuotesCollector(cfg *config.Config, db *gorm.DB, log *zerolog.Logger, responseCache *responsecache.Cache) *QuotesCollector {
+	if log == nil {
+		nop := zerolog.Nop()
+		log = &nop
+	}
+	lg := logging.WithComponent(log, "quotes_collector")
 	return &QuotesCollector{
-		config:     cfg,
-		repository: repositories.NewQuoteRepository(db),
-		collectors: make(map[string]*tokenCollector),
-		done:       make(chan bool),
+		config:        cfg,
+		repository:    repositories.NewQuoteRepository(db),
+		responseCache: responseCache,
+		collectors:    make(map[string]*tokenCollector),
+		logger:        lg,
 	}
 }
 
 func (c *QuotesCollector) Start(ctx context.Context) {
-	// Run backfill for tokens that have it enabled (either globally or token-specific)
 	supportedTokens := quotes.GetSupportedTokens()
 	hasBackfill := false
 	for _, token := range supportedTokens {
@@ -49,23 +63,23 @@ func (c *QuotesCollector) Start(ctx context.Context) {
 	}
 
 	if hasBackfill {
-		log.Println("Backfill is enabled for some tokens - starting catch-up phase before scheduling periodic collection")
+		c.logger.Info().Msg("backfill_enabled_starting_catch_up")
 		if err := c.runBackfill(ctx); err != nil {
-			log.Printf("Backfill finished with error: %v", err)
+			c.logger.Error().Err(err).Msg("backfill_finished_with_error")
 		} else {
-			log.Println("Backfill completed successfully")
+			c.logger.Info().Msg("backfill_completed_successfully")
 		}
 	}
 
 	if !c.config.Job.Enabled {
-		log.Println("Quotes collection job is disabled - skipping periodic collection")
+		c.logger.Info().Msg("quotes_collection_job_disabled")
 		return
 	}
 	for _, token := range supportedTokens {
 		tokenName := string(token)
 
 		if !c.config.IsTokenEnabled(tokenName) {
-			log.Printf("Token %s is disabled - skipping", tokenName)
+			c.logger.Info().Str("token", tokenName).Msg("token_disabled_skipping")
 			continue
 		}
 
@@ -73,23 +87,31 @@ func (c *QuotesCollector) Start(ctx context.Context) {
 		interval := c.config.GetTokenInterval(tokenName)
 		timeout := c.config.GetTokenTimeout(tokenName)
 
-		log.Printf("Starting collector for token %s with interval: %v, timeout: %v", tokenName, interval, timeout)
+		c.logger.Info().
+			Str("token", tokenName).
+			Dur("interval", interval).
+			Dur("timeout", timeout).
+			Msg("starting_token_collector")
 
-		client := coingecko.NewClient(c.config.CoinGecko.BaseURL, c.config.CoinGecko.APIKey, timeout)
+		client := coingecko.NewClient(c.config.CoinGecko.BaseURL, c.config.CoinGecko.APIKey, timeout, c.logger, &c.config.API)
 
 		ticker := time.NewTicker(interval)
-		done := make(chan bool)
 
 		collector := &tokenCollector{
 			token:  token,
 			ticker: ticker,
 			client: client,
-			done:   done,
+			stopCh: make(chan struct{}),
 		}
 
 		c.collectors[tokenName] = collector
 
-		go c.startTokenCollector(ctx, collector, tokenCfg)
+		c.collectorsWg.Add(1)
+		go func(col *tokenCollector, tokenCfg config.TokenConfig) {
+			defer c.collectorsWg.Done()
+			defer col.ticker.Stop()
+			c.startTokenCollector(ctx, col, tokenCfg)
+		}(collector, tokenCfg)
 	}
 }
 
@@ -102,34 +124,38 @@ func (c *QuotesCollector) startTokenCollector(ctx context.Context, collector *to
 		select {
 		case <-collector.ticker.C:
 			c.collectQuotesForToken(ctx, collector.token, collector.client, tokenCfg)
-		case <-collector.done:
-			log.Printf("Token collector for %s stopped", tokenName)
+		case <-collector.stopCh:
+			c.logger.Info().Str("token", tokenName).Msg("token_collector_stopped")
 			return
 		case <-ctx.Done():
-			log.Printf("Token collector for %s stopped due to context cancellation", tokenName)
+			c.logger.Info().Str("token", tokenName).Msg("token_collector_stopped_context_cancelled")
 			return
 		}
 	}
 }
 
+// Stop requests all token collectors to finish and blocks until their goroutines return.
+// Call the cancel function for the context passed to Start before Stop(), so in-flight
+// HTTP and database operations observe cancellation promptly.
 func (c *QuotesCollector) Stop() {
 	for tokenName, collector := range c.collectors {
-		if collector.ticker != nil {
-			collector.ticker.Stop()
-		}
-		collector.done <- true
-		log.Printf("Stopped collector for token: %s", tokenName)
+		collector.requestStop()
+		c.logger.Info().Str("token", tokenName).Msg("stopped_collector_for_token")
 	}
-	c.done <- true
+	c.collectorsWg.Wait()
 }
 
 func (c *QuotesCollector) collectQuotesForToken(ctx context.Context, token quotes.Token, client *coingecko.Client, tokenCfg config.TokenConfig) {
 	tokenName := string(token)
-	log.Printf("Starting quotes collection for token: %s", tokenName)
+	c.logger.Info().Str("token", tokenName).Msg("starting_quotes_collection")
+
+	if err := ctx.Err(); err != nil {
+		return
+	}
 
 	lastTimestamp, err := c.repository.GetLastTimestamp(ctx, tokenName)
 	if err != nil {
-		log.Printf("Warning: Could not get last timestamp for %s: %v", tokenName, err)
+		c.logger.Warn().Err(err).Str("token", tokenName).Msg("could_not_get_last_timestamp")
 		lastTimestamp = time.Now().UTC().Add(-1 * time.Hour)
 	}
 
@@ -142,110 +168,81 @@ func (c *QuotesCollector) collectQuotesForToken(ctx context.Context, token quote
 	}
 
 	if to-from < int64(minTimeRange) {
-		log.Printf("Skipping collection for %s: time range too small (need at least %d seconds)", tokenName, minTimeRange)
+		c.logger.Info().
+			Str("token", tokenName).
+			Int("min_time_range_seconds", minTimeRange).
+			Msg("skipping_collection_time_range_too_small")
 		return
 	}
 
 	currencies := quotes.GetSupportedCurrencies()
-	currencyStrings := make([]string, len(currencies))
-	for i, currency := range currencies {
-		currencyStrings[i] = string(currency)
-	}
 
 	coinID := quotes.GetCoinGeckoID(token)
 	if coinID == "" {
-		log.Printf("Error: No CoinGecko ID found for token %s", tokenName)
+		c.logger.Error().Str("token", tokenName).Msg("no_coingecko_id_for_token")
 		return
 	}
 
-	currencyData, err := client.GetMultipleCurrencies(ctx, coinID, currencyStrings, from, to)
+	currencyData, err := client.GetMultipleCurrencies(ctx, coinID, currencies, from, to)
 	if err != nil {
-		log.Printf("Error fetching data from CoinGecko for %s: %v", tokenName, err)
+		c.logger.Error().Err(err).Str("token", tokenName).Msg("coingecko_fetch_error")
 		return
 	}
 
 	quotesList, err := coingecko.MapToQuotes(currencyData)
 	if err != nil {
-		log.Printf("Error mapping data to quotes for %s: %v", tokenName, err)
+		c.logger.Error().Err(err).Str("token", tokenName).Msg("map_to_quotes_error")
 		return
 	}
 
 	if len(quotesList) == 0 {
-		log.Printf("No new quotes to save for %s", tokenName)
+		c.logger.Info().Str("token", tokenName).Msg("no_new_quotes_to_save")
 		return
 	}
 
-	filteredQuotes := c.filterNewQuotes(ctx, quotesList, tokenName)
-	if len(filteredQuotes) == 0 {
-		log.Printf("All quotes already exist for %s, skipping save", tokenName)
-		return
-	}
-
-	if err := c.repository.SaveBatch(ctx, filteredQuotes, tokenName); err != nil {
-		log.Printf("Error saving quotes for %s: %v", tokenName, err)
-		return
-	}
-
-	log.Printf("Successfully collected and saved %d new quotes for %s", len(filteredQuotes), tokenName)
-}
-
-func (c *QuotesCollector) filterNewQuotes(ctx context.Context, quotesList []quotes.Quote, tokenName string) []quotes.Quote {
-	if len(quotesList) == 0 {
-		return quotesList
-	}
-
-	from := quotesList[0].Timestamp
-	to := quotesList[len(quotesList)-1].Timestamp
-
-	existingQuotes, err := c.repository.GetQuotes(ctx, from, to, 0, tokenName)
+	inserted, err := c.repository.SaveBatch(ctx, quotesList, tokenName)
 	if err != nil {
-		log.Printf("Warning: Could not check existing quotes for %s: %v", tokenName, err)
-		return quotesList
+		c.logger.Error().Err(err).Str("token", tokenName).Msg("save_quotes_error")
+		return
+	}
+	if inserted > 0 && c.responseCache != nil {
+		c.responseCache.InvalidateToken(tokenName)
 	}
 
-	existingTimestamps := make(map[time.Time]bool)
-	for _, quote := range existingQuotes {
-		existingTimestamps[quote.Timestamp] = true
-	}
-
-	var filteredQuotes []quotes.Quote
-	for _, quote := range quotesList {
-		if !existingTimestamps[quote.Timestamp] {
-			filteredQuotes = append(filteredQuotes, quote)
-		}
-	}
-
-	return filteredQuotes
+	c.logger.Info().
+		Str("token", tokenName).
+		Int("batch_size", len(quotesList)).
+		Int64("inserted_rows", inserted).
+		Msg("quotes_collected_and_saved")
 }
 
 func (c *QuotesCollector) runBackfill(ctx context.Context) error {
-	// Run backfill for tokens that have it enabled
 	supportedTokens := quotes.GetSupportedTokens()
 	var wg sync.WaitGroup
 	for _, token := range supportedTokens {
 		tokenName := string(token)
 
-		// Check if backfill is enabled for this token
 		if !c.config.IsTokenBackfillEnabled(tokenName) {
-			log.Printf("Backfill disabled for token %s - skipping", tokenName)
+			c.logger.Info().Str("token", tokenName).Msg("backfill_disabled_skipping")
 			continue
 		}
 
-		// Get token-specific backfill start date
 		startFrom := c.config.GetTokenBackfillStartFrom(tokenName)
 		if startFrom == "" {
-			log.Printf("Backfill enabled for token %s but no start date provided - skipping", tokenName)
+			c.logger.Info().Str("token", tokenName).Msg("backfill_enabled_no_start_date_skipping")
 			continue
 		}
 
 		var start time.Time
-		// Try RFC3339 first, then fallback to date-only
 		if t, err := time.Parse(time.RFC3339, startFrom); err == nil {
 			start = t.UTC()
 		} else if t, err2 := time.Parse("2006-01-02", startFrom); err2 == nil {
 			start = t.UTC()
 		} else {
-			log.Printf("Invalid backfill start date format for token %s: %s", tokenName, startFrom)
+			c.logger.Warn().
+				Str("token", tokenName).
+				Str("start_from", startFrom).
+				Msg("invalid_backfill_start_date_format")
 			continue
 		}
 
@@ -253,7 +250,7 @@ func (c *QuotesCollector) runBackfill(ctx context.Context) error {
 		go func(t quotes.Token, startTime time.Time) {
 			defer wg.Done()
 			if err := c.runBackfillForToken(ctx, t, startTime); err != nil {
-				log.Printf("Backfill error for token %s: %v", string(t), err)
+				c.logger.Error().Err(err).Str("token", string(t)).Msg("backfill_token_error")
 			}
 		}(token, start)
 	}
@@ -264,13 +261,11 @@ func (c *QuotesCollector) runBackfill(ctx context.Context) error {
 
 func (c *QuotesCollector) runBackfillForToken(ctx context.Context, token quotes.Token, start time.Time) error {
 	tokenName := string(token)
-	log.Printf("Starting backfill for token: %s", tokenName)
+	c.logger.Info().Str("token", tokenName).Msg("starting_backfill")
 
-	// Determine from based on DB state
 	var from time.Time
 	lastTs, err := c.repository.GetLastTimestamp(ctx, tokenName)
 	if err != nil {
-		// if no data - start from configured
 		from = start
 	} else {
 		if lastTs.After(start) {
@@ -281,15 +276,13 @@ func (c *QuotesCollector) runBackfillForToken(ctx context.Context, token quotes.
 	}
 
 	now := time.Now().UTC()
-	if !from.Before(now.Add(-60 * time.Second)) { // leave at least 60s gap for live collector
-		log.Printf("Backfill up-to-date for %s - skipping", tokenName)
+	if !from.Before(now.Add(-60 * time.Second)) {
+		c.logger.Info().Str("token", tokenName).Msg("backfill_up_to_date_skipping")
 		return nil
 	}
 
-	// Get token-specific backfill config
 	tokenCfg := c.config.GetTokenConfig(tokenName)
 
-	// Process in chunks (use token-specific or global settings)
 	chunkMinutes := tokenCfg.Backfill.ChunkMinutes
 	if chunkMinutes <= 0 {
 		chunkMinutes = c.config.Backfill.ChunkMinutes
@@ -299,73 +292,86 @@ func (c *QuotesCollector) runBackfillForToken(ctx context.Context, token quotes.
 	}
 	chunk := time.Duration(chunkMinutes) * time.Minute
 	currencies := quotes.GetSupportedCurrencies()
-	currencyStrings := make([]string, len(currencies))
-	for i, currency := range currencies {
-		currencyStrings[i] = string(currency)
-	}
 
 	coinID := quotes.GetCoinGeckoID(token)
 	if coinID == "" {
-		log.Printf("Error: No CoinGecko ID found for token %s", tokenName)
+		c.logger.Error().Str("token", tokenName).Msg("no_coingecko_id_for_token_backfill")
 		return nil
 	}
 
-	// Create client with token-specific timeout for backfill
 	timeout := c.config.GetTokenTimeout(tokenName)
-	client := coingecko.NewClient(c.config.CoinGecko.BaseURL, c.config.CoinGecko.APIKey, timeout)
+	client := coingecko.NewClient(c.config.CoinGecko.BaseURL, c.config.CoinGecko.APIKey, timeout, c.logger, &c.config.API)
 
 	for from.Before(now) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		to := from.Add(chunk)
 		if to.After(now) {
 			to = now
 		}
 
-		log.Printf("Backfill chunk for %s: %s -> %s (chunk=%v)", tokenName, from.Format(time.RFC3339), to.Format(time.RFC3339), chunk)
-		data, err := client.GetMultipleCurrencies(ctx, coinID, currencyStrings, from.Unix(), to.Unix())
+		c.logger.Info().
+			Str("token", tokenName).
+			Str("from", from.Format(time.RFC3339)).
+			Str("to", to.Format(time.RFC3339)).
+			Dur("chunk", chunk).
+			Msg("backfill_chunk")
+
+		data, err := client.GetMultipleCurrencies(ctx, coinID, currencies, from.Unix(), to.Unix())
 		if err != nil {
-			log.Printf("Backfill API error for %s, will continue with next chunk: %v", tokenName, err)
-			// move window forward slightly to avoid tight loop
+			c.logger.Warn().Err(err).Str("token", tokenName).Msg("backfill_api_error_continuing")
 			from = from.Add(15 * time.Minute)
 			continue
 		}
 
 		mapped, err := coingecko.MapToQuotes(data)
 		if err != nil {
-			log.Printf("Backfill mapping error for %s: %v", tokenName, err)
+			c.logger.Warn().Err(err).Str("token", tokenName).Msg("backfill_mapping_error")
 			from = from.Add(15 * time.Minute)
 			continue
 		}
 
-		// Debug: log raw points by currency to understand sparsity
 		totalPoints := 0
 		for cur, resp := range data {
 			if resp != nil {
 				totalPoints += len(resp.Prices)
-				log.Printf("Backfill raw points for %s: %s=%d", tokenName, cur, len(resp.Prices))
+				c.logger.Debug().
+					Str("token", tokenName).
+					Str("currency", string(cur)).
+					Int("points", len(resp.Prices)).
+					Msg("backfill_raw_points")
 			}
 		}
-		log.Printf("Backfill mapped quotes for %s: %d (raw points total=%d)", tokenName, len(mapped), totalPoints)
+		c.logger.Info().
+			Str("token", tokenName).
+			Int("mapped", len(mapped)).
+			Int("raw_points_total", totalPoints).
+			Msg("backfill_mapped_quotes")
 
 		if len(mapped) > 0 {
-			// best-effort idempotency via filter + normal insert
-			filtered := c.filterNewQuotes(ctx, mapped, tokenName)
-			if len(filtered) > 0 {
-				if err := c.repository.SaveBatch(ctx, filtered, tokenName); err != nil {
-					log.Printf("Backfill save error for %s: %v", tokenName, err)
-				} else {
-					log.Printf("Backfill saved %d quotes for %s", len(filtered), tokenName)
+			inserted, err := c.repository.SaveBatch(ctx, mapped, tokenName)
+			if err != nil {
+				c.logger.Error().Err(err).Str("token", tokenName).Msg("backfill_save_error")
+			} else {
+				if inserted > 0 && c.responseCache != nil {
+					c.responseCache.InvalidateToken(tokenName)
 				}
+				c.logger.Info().
+					Str("token", tokenName).
+					Int("batch_size", len(mapped)).
+					Int64("inserted_rows", inserted).
+					Msg("backfill_saved_quotes")
 			}
 		}
 
-		// Advance window; use last point if available
 		if len(mapped) > 0 {
 			from = mapped[len(mapped)-1].Timestamp.Add(time.Second)
 		} else {
 			from = to
 		}
 
-		// Respect provider limits (use token-specific or global settings)
 		sleepMs := tokenCfg.Backfill.SleepMs
 		if sleepMs <= 0 {
 			sleepMs = c.config.Backfill.SleepMs
@@ -373,7 +379,12 @@ func (c *QuotesCollector) runBackfillForToken(ctx context.Context, token quotes.
 				sleepMs = 1100
 			}
 		}
-		time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+		d := time.Duration(sleepMs) * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(d):
+		}
 	}
 
 	return nil

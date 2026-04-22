@@ -213,8 +213,7 @@ CREATE TABLE mev.mvrk (
     eth DECIMAL(20,8) DEFAULT 0,
     gbp DECIMAL(20,8) DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- USDT token table
@@ -230,8 +229,7 @@ CREATE TABLE mev.usdt (
     eth DECIMAL(20,8) DEFAULT 0,
     gbp DECIMAL(20,8) DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Indexes for each table
@@ -294,12 +292,16 @@ export POSTGRES_DATABASE=quotes
 psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/001_init.sql
 psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/002_add_usdt_table.up.sql
 psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/003_rename_quotes_to_mvrk.up.sql
+psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/004_quotes_timestamp_unique.up.sql
+psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/005_drop_quotes_deleted_at.up.sql
 ```
 
 **Migration files structure**:
 - `001_init.sql` - Creates schema, tables, and indexes
 - `002_add_usdt_table.up.sql` - Creates USDT table
 - `003_rename_quotes_to_mvrk.up.sql` - Renames quotes table to mvrk
+- `004_quotes_timestamp_unique.up.sql` - Deduplicates duplicate `timestamp` rows (keeps lowest `id`), then adds unique index for `ON CONFLICT DO NOTHING` inserts
+- `005_drop_quotes_deleted_at.up.sql` - Drops `deleted_at` column and its indexes on quote hypertables (no soft-delete)
 - `*_down.sql` - Rollback migrations (for down migrations)
 
 All migrations are **idempotent** and can be safely executed multiple times.
@@ -320,6 +322,8 @@ All migrations are **idempotent** and can be safely executed multiple times.
 | ----------------------- | --------------------------------------------- | ------------------------------ |
 | `SERVER_HOST`           | Server bind address                            | 0.0.0.0                        |
 | `SERVER_PORT`           | Server port                                    | 3010                           |
+| `SERVER_LATEST_QUOTE_CACHE_TTL_SECONDS` | Latest-quote in-process cache TTL (seconds); `0` disables | 5 (from config default if unset) |
+| `SERVER_CORS_ALLOWED_ORIGINS` | Comma-separated allowed browser `Origin` values (http/https only; no `*`) | from `config.yaml` / built-in dev list |
 | `POSTGRES_HOST`         | Postgres host                                  | localhost                      |
 | `POSTGRES_PORT`         | Postgres port                                  | 5432                           |
 | `POSTGRES_USER`         | Postgres user                                  | postgres                       |
@@ -330,7 +334,7 @@ All migrations are **idempotent** and can be safely executed multiple times.
 | `JOB_INTERVAL_SECONDS`  | Default quotes collector interval (seconds)     | 60                             |
 | `JOB_ENABLED`           | Enable quotes collector job (true/false)       | false                          |
 | `API_TIMEOUT_SECONDS`   | Default HTTP client timeout (seconds)          | 30                             |
-| `API_RATE_LIMIT_RPS`    | Internal per-second rate limit                 | 100                            |
+| `API_RATE_LIMIT_RPS`    | CoinGecko outbound token-bucket (req/s)        | 10                             |
 | `COINGECKO_API_KEY`     | CoinGecko API key (if required)                | —                              |
 | `COINGECKO_BASE_URL`    | CoinGecko API base URL                         | `https://api.coingecko.com/api/v3` |
 | `BACKFILL_ENABLED`      | Default: enable historical backfill            | false                          |

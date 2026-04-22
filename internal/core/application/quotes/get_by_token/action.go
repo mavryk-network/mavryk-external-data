@@ -3,6 +3,7 @@ package get_by_token
 import (
 	"context"
 	"quotes/internal/core/domain/quotes"
+	"quotes/internal/core/infrastructure/responsecache"
 	"strings"
 	"time"
 )
@@ -12,14 +13,20 @@ type Repository interface {
 }
 
 type Action struct {
-	repo Repository
+	repo  Repository
+	cache *responsecache.Cache
 }
 
-func New(repo Repository) *Action {
-	return &Action{repo: repo}
+func New(repo Repository, cache *responsecache.Cache) *Action {
+	return &Action{repo: repo, cache: cache}
 }
 
 func (a *Action) Execute(ctx context.Context, tokenName string, from, to time.Time, limit int) ([]quotes.Quote, error) {
+	if a.cache != nil && from.IsZero() && to.IsZero() && limit > 0 {
+		if list, ok := a.cache.GetLatestList(tokenName, limit); ok {
+			return list, nil
+		}
+	}
 	quotes, err := a.repo.GetQuotes(ctx, from, to, limit, tokenName)
 	if err != nil {
 		// Check if error is about unsupported token
@@ -29,5 +36,8 @@ func (a *Action) Execute(ctx context.Context, tokenName string, from, to time.Ti
 		return nil, err
 	}
 
+	if a.cache != nil && from.IsZero() && to.IsZero() && limit > 0 {
+		a.cache.SetLatestList(tokenName, limit, quotes)
+	}
 	return quotes, nil
 }
