@@ -1,8 +1,9 @@
 package get_latest
 
 import (
-	"net/http"
+	"quotes/internal/core/api/http/common"
 	"quotes/internal/core/application/quotes/get_latest"
+	coreerrors "quotes/internal/core/common/errors"
 	"quotes/internal/core/domain/quotes"
 
 	"github.com/gin-gonic/gin"
@@ -29,12 +30,9 @@ func (h *Handler) Handle(c *gin.Context) {
 	// Use mvrk token for /quotes/last endpoint (backward compatibility)
 	quote, err := h.action.Execute(c.Request.Context(), string(quotes.TokenMVRK))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to get latest quote",
-			"details": err.Error(),
-		})
+		common.RespondError(c, coreerrors.Internal("Unable to load the latest quote", err))
 		return
 	}
 
-	c.JSON(http.StatusOK, quote)
+	c.JSON(200, quote)
 }

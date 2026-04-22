@@ -65,6 +65,7 @@ API  → Application ← Infrastructure
 | Endpoint                   | Description                              | Parameters            |
 | -------------------------- | ---------------------------------------- | --------------------- |
 | `GET /health`              | Service health check                     | —                     |
+| `GET /health/db`           | DB reachability, Timescale extension, `mev` hypertables (read-only) | — |
 | `GET /quotes`              | Retrieve quotes for MVRK (legacy)       | `from`, `to`, `limit` |
 | `GET /quotes/last`         | Retrieve the latest MVRK quote (legacy)  | —                     |
 | `GET /quotes/count`        | Retrieve total number of MVRK quotes     | —                     |
@@ -75,10 +76,14 @@ API  → Application ← Infrastructure
 
 ### API Documentation (Swagger)
 
+**Swagger UI** loads the spec from **`/swagger.json`**, which is generated per request: `host` and `schemes` match the incoming request (and `X-Forwarded-Proto` behind ingress), same pattern as **mavryk-wallet-backend** — **Try it out** hits the same host you used to open `/swagger`.
+
+Unlike the wallet backend, this API exposes **`GET /:token`** at the site root (e.g. `/usdt`). Without extra routes, **`/swagger`** would be handled as token `swagger`, not the UI — so **`/swagger` and `/swagger/` redirect to `/swagger/index.html`**. Open the UI at **`/swagger/index.html`** or **`/swagger`** (redirect). If you still see **Failed to fetch**, confirm the app is running and try a normal browser (some IDE previews block `localhost`).
+
 Interactive API documentation is available at:
 - **Swagger UI**: `http://localhost:3010/swagger/index.html`
-- **JSON spec**: `http://localhost:3010/swagger/doc.json`
-- **YAML spec**: `http://localhost:3010/swagger/doc.yaml`
+- **OpenAPI JSON** (runtime, correct host for Try it out): `http://localhost:3010/swagger.json`
+- **YAML** (committed artifact, `make swagger`): `docs/swagger.yaml`
 
 To regenerate Swagger documentation after adding or modifying endpoints:
 ```bash
@@ -208,8 +213,7 @@ CREATE TABLE mev.mvrk (
     eth DECIMAL(20,8) DEFAULT 0,
     gbp DECIMAL(20,8) DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- USDT token table
@@ -225,8 +229,7 @@ CREATE TABLE mev.usdt (
     eth DECIMAL(20,8) DEFAULT 0,
     gbp DECIMAL(20,8) DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Indexes for each table
@@ -289,12 +292,16 @@ export POSTGRES_DATABASE=quotes
 psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/001_init.sql
 psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/002_add_usdt_table.up.sql
 psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/003_rename_quotes_to_mvrk.up.sql
+psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/004_quotes_timestamp_unique.up.sql
+psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/005_drop_quotes_deleted_at.up.sql
 ```
 
 **Migration files structure**:
 - `001_init.sql` - Creates schema, tables, and indexes
 - `002_add_usdt_table.up.sql` - Creates USDT table
 - `003_rename_quotes_to_mvrk.up.sql` - Renames quotes table to mvrk
+- `004_quotes_timestamp_unique.up.sql` - Deduplicates duplicate `timestamp` rows (keeps lowest `id`), then adds unique index for `ON CONFLICT DO NOTHING` inserts
+- `005_drop_quotes_deleted_at.up.sql` - Drops `deleted_at` column and its indexes on quote hypertables (no soft-delete)
 - `*_down.sql` - Rollback migrations (for down migrations)
 
 All migrations are **idempotent** and can be safely executed multiple times.
@@ -315,6 +322,8 @@ All migrations are **idempotent** and can be safely executed multiple times.
 | ----------------------- | --------------------------------------------- | ------------------------------ |
 | `SERVER_HOST`           | Server bind address                            | 0.0.0.0                        |
 | `SERVER_PORT`           | Server port                                    | 3010                           |
+| `SERVER_LATEST_QUOTE_CACHE_TTL_SECONDS` | Latest-quote in-process cache TTL (seconds); `0` disables | 5 (from config default if unset) |
+| `SERVER_CORS_ALLOWED_ORIGINS` | Comma-separated allowed browser `Origin` values (http/https only; no `*`) | from `config.yaml` / built-in dev list |
 | `POSTGRES_HOST`         | Postgres host                                  | localhost                      |
 | `POSTGRES_PORT`         | Postgres port                                  | 5432                           |
 | `POSTGRES_USER`         | Postgres user                                  | postgres                       |
@@ -325,7 +334,7 @@ All migrations are **idempotent** and can be safely executed multiple times.
 | `JOB_INTERVAL_SECONDS`  | Default quotes collector interval (seconds)     | 60                             |
 | `JOB_ENABLED`           | Enable quotes collector job (true/false)       | false                          |
 | `API_TIMEOUT_SECONDS`   | Default HTTP client timeout (seconds)          | 30                             |
-| `API_RATE_LIMIT_RPS`    | Internal per-second rate limit                 | 100                            |
+| `API_RATE_LIMIT_RPS`    | CoinGecko outbound token-bucket (req/s)        | 10                             |
 | `COINGECKO_API_KEY`     | CoinGecko API key (if required)                | —                              |
 | `COINGECKO_BASE_URL`    | CoinGecko API base URL                         | `https://api.coingecko.com/api/v3` |
 | `BACKFILL_ENABLED`      | Default: enable historical backfill            | false                          |

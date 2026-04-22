@@ -72,7 +72,7 @@ services:
 
       # API configuration
       API_TIMEOUT_SECONDS: ${API_TIMEOUT_SECONDS:-30}
-      API_RATE_LIMIT_RPS: ${API_RATE_LIMIT_RPS:-100}
+      API_RATE_LIMIT_RPS: ${API_RATE_LIMIT_RPS:-10}
 
       # CoinGecko API configuration
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-api_key}

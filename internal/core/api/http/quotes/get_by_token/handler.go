@@ -1,10 +1,9 @@
 package get_by_token
 
 import (
-	"net/http"
+	"quotes/internal/core/api/http/common"
 	"quotes/internal/core/application/quotes/get_by_token"
-	"strconv"
-	"time"
+	coreerrors "quotes/internal/core/common/errors"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,96 +34,28 @@ func New(action *get_by_token.Action) *Handler {
 func (h *Handler) Handle(c *gin.Context) {
 	tokenName := c.Param("token")
 	if tokenName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Token name is required",
-		})
+		common.RespondError(c, coreerrors.InvalidArgument("Token name is required"))
 		return
 	}
 
-	fromStr := c.Query("from")
-	toStr := c.Query("to")
-	limitStr := c.Query("limit")
-
-	// Default limit when no time range is specified
-	const defaultLimit = 100
-
-	var from, to time.Time
-	var useTimeRange bool
-
-	if fromStr != "" {
-		if parsedFrom, err := time.Parse(time.RFC3339, fromStr); err == nil {
-			from = parsedFrom
-			useTimeRange = true
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid 'from' parameter format. Use RFC3339 format (e.g., 2023-01-01T00:00:00Z)",
-			})
-			return
-		}
-	}
-
-	if toStr != "" {
-		if parsedTo, err := time.Parse(time.RFC3339, toStr); err == nil {
-			to = parsedTo
-			useTimeRange = true
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid 'to' parameter format. Use RFC3339 format (e.g., 2023-01-01T00:00:00Z)",
-			})
-			return
-		}
-	}
-
-	// If time range is specified, validate it
-	if useTimeRange {
-		// If only one of from/to is specified, set defaults
-		now := time.Now()
-		if fromStr == "" {
-			from = now.Add(-24 * time.Hour)
-		}
-		if toStr == "" {
-			to = now
-		}
-
-		if from.After(to) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid time range: 'from' must be before 'to'",
-			})
-			return
-		}
-	}
-
-	limit := 0
-	if limitStr != "" {
-		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid 'limit' parameter. Must be a positive integer",
-			})
-			return
-		}
-	}
-
-	// If no time range and no limit specified, use default limit
-	if !useTimeRange && limit == 0 {
-		limit = defaultLimit
-	}
-
-	quotes, err := h.action.Execute(c.Request.Context(), tokenName, from, to, limit)
+	q, err := common.BindQuotesQuery(c, common.QuotesQueryOptions{
+		Mode:               common.QuotesQueryModeByToken,
+		DefaultLatestLimit: 100,
+	})
 	if err != nil {
-		if err == get_by_token.ErrTokenNotFound {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": "Token not found",
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to get quotes",
-			"details": err.Error(),
-		})
+		common.RespondError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, quotes)
+	quotes, err := h.action.Execute(c.Request.Context(), tokenName, q.From, q.To, q.Limit)
+	if err != nil {
+		if get_by_token.IsTokenNotFound(err) {
+			common.RespondError(c, coreerrors.NotFound("Token not found"))
+			return
+		}
+		common.RespondError(c, coreerrors.Internal("Unable to load quotes", err))
+		return
+	}
+
+	c.JSON(200, quotes)
 }

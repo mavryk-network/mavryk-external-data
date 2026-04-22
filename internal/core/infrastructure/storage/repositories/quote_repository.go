@@ -5,19 +5,11 @@ import (
 	"fmt"
 	"quotes/internal/core/domain/quotes"
 	"quotes/internal/core/infrastructure/storage/entities"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
-
-// tokenNameToTableName maps token name to table name
-// mvrk -> mvrk (table renamed from quotes to mvrk)
-// other tokens -> use token name as table name
-func tokenNameToTableName(tokenName string) string {
-	tokenName = strings.ToLower(tokenName)
-	return tokenName
-}
 
 type QuoteRepository struct {
 	db *gorm.DB
@@ -29,11 +21,10 @@ func NewQuoteRepository(db *gorm.DB) *QuoteRepository {
 
 // Save saves a quote for a specific token
 func (r *QuoteRepository) Save(ctx context.Context, quote quotes.Quote, tokenName string) error {
-	if !quotes.IsTokenSupported(tokenName) {
-		return fmt.Errorf("token '%s' is not supported", tokenName)
+	tableName, err := quotes.QuoteHypertableQualifiedName(tokenName)
+	if err != nil {
+		return err
 	}
-
-	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	entity := &entities.QuoteEntity{
 		Timestamp: quote.Timestamp,
 		BTC:       quote.BTC,
@@ -46,7 +37,7 @@ func (r *QuoteRepository) Save(ctx context.Context, quote quotes.Quote, tokenNam
 		GBP:       quote.GBP,
 	}
 
-	result := r.db.WithContext(ctx).Table(tableName).Create(entity)
+	result := r.db.WithContext(ctx).Table(tableName).Clauses(quoteInsertOnConflict()).Create(entity)
 	if result.Error != nil {
 		return fmt.Errorf("failed to save quote for token %s: %w", tokenName, result.Error)
 	}
@@ -54,17 +45,25 @@ func (r *QuoteRepository) Save(ctx context.Context, quote quotes.Quote, tokenNam
 	return nil
 }
 
-// SaveBatch saves a batch of quotes for a specific token
-func (r *QuoteRepository) SaveBatch(ctx context.Context, quotesList []quotes.Quote, tokenName string) error {
+func quoteInsertOnConflict() clause.OnConflict {
+	return clause.OnConflict{
+		Columns:   []clause.Column{{Name: "timestamp"}},
+		DoNothing: true,
+	}
+}
+
+// SaveBatch inserts quotes in batches. Duplicate timestamps are skipped (requires unique index on timestamp — see migration 004).
+// Returns the number of rows inserted (excludes conflicts).
+func (r *QuoteRepository) SaveBatch(ctx context.Context, quotesList []quotes.Quote, tokenName string) (int64, error) {
 	if len(quotesList) == 0 {
-		return nil
+		return 0, nil
 	}
 
-	if !quotes.IsTokenSupported(tokenName) {
-		return fmt.Errorf("token '%s' is not supported", tokenName)
+	tableName, err := quotes.QuoteHypertableQualifiedName(tokenName)
+	if err != nil {
+		return 0, err
 	}
 
-	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	quoteEntities := make([]entities.QuoteEntity, len(quotesList))
 	for i, quote := range quotesList {
 		quoteEntities[i] = entities.QuoteEntity{
@@ -80,21 +79,20 @@ func (r *QuoteRepository) SaveBatch(ctx context.Context, quotesList []quotes.Quo
 		}
 	}
 
-	result := r.db.WithContext(ctx).Table(tableName).CreateInBatches(quoteEntities, 100)
+	result := r.db.WithContext(ctx).Table(tableName).Clauses(quoteInsertOnConflict()).CreateInBatches(quoteEntities, 100)
 	if result.Error != nil {
-		return fmt.Errorf("failed to save quotes batch for token %s: %w", tokenName, result.Error)
+		return 0, fmt.Errorf("failed to save quotes batch for token %s: %w", tokenName, result.Error)
 	}
 
-	return nil
+	return result.RowsAffected, nil
 }
 
 // GetLastQuote retrieves the last quote for a specific token
 func (r *QuoteRepository) GetLastQuote(ctx context.Context, tokenName string) (quotes.Quote, error) {
-	if !quotes.IsTokenSupported(tokenName) {
-		return quotes.Quote{}, fmt.Errorf("token '%s' is not supported", tokenName)
+	tableName, err := quotes.QuoteHypertableQualifiedName(tokenName)
+	if err != nil {
+		return quotes.Quote{}, err
 	}
-
-	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	var entity entities.QuoteEntity
 
 	result := r.db.WithContext(ctx).
@@ -116,11 +114,10 @@ func (r *QuoteRepository) GetLastQuote(ctx context.Context, tokenName string) (q
 // If from and to are zero times, returns latest quotes up to limit
 // Otherwise, returns quotes within the time range
 func (r *QuoteRepository) GetQuotes(ctx context.Context, from, to time.Time, limit int, tokenName string) ([]quotes.Quote, error) {
-	if !quotes.IsTokenSupported(tokenName) {
-		return nil, fmt.Errorf("token '%s' is not supported", tokenName)
+	tableName, err := quotes.QuoteHypertableQualifiedName(tokenName)
+	if err != nil {
+		return nil, err
 	}
-
-	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	var entities []entities.QuoteEntity
 
 	query := r.db.WithContext(ctx).Table(tableName)
@@ -163,11 +160,10 @@ func (r *QuoteRepository) GetQuotes(ctx context.Context, from, to time.Time, lim
 
 // GetCount returns count of quotes for a specific token
 func (r *QuoteRepository) GetCount(ctx context.Context, tokenName string) (int64, error) {
-	if !quotes.IsTokenSupported(tokenName) {
-		return 0, fmt.Errorf("token '%s' is not supported", tokenName)
+	tableName, err := quotes.QuoteHypertableQualifiedName(tokenName)
+	if err != nil {
+		return 0, err
 	}
-
-	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	var count int64
 	result := r.db.WithContext(ctx).Table(tableName).Count(&count)
 	if result.Error != nil {
@@ -179,11 +175,10 @@ func (r *QuoteRepository) GetCount(ctx context.Context, tokenName string) (int64
 
 // GetLastTimestamp returns last timestamp for a specific token
 func (r *QuoteRepository) GetLastTimestamp(ctx context.Context, tokenName string) (time.Time, error) {
-	if !quotes.IsTokenSupported(tokenName) {
-		return time.Time{}, fmt.Errorf("token '%s' is not supported", tokenName)
+	tableName, err := quotes.QuoteHypertableQualifiedName(tokenName)
+	if err != nil {
+		return time.Time{}, err
 	}
-
-	tableName := fmt.Sprintf("mev.%s", tokenNameToTableName(tokenName))
 	var entity entities.QuoteEntity
 	result := r.db.WithContext(ctx).
 		Table(tableName).

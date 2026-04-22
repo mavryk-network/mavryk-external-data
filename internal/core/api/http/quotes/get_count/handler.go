@@ -1,8 +1,9 @@
 package get_count
 
 import (
-	"net/http"
+	"quotes/internal/core/api/http/common"
 	"quotes/internal/core/application/quotes/get_count"
+	coreerrors "quotes/internal/core/common/errors"
 	"quotes/internal/core/domain/quotes"
 
 	"github.com/gin-gonic/gin"
@@ -29,14 +30,11 @@ func (h *Handler) Handle(c *gin.Context) {
 	// Use mvrk token for /quotes/count endpoint
 	count, err := h.action.Execute(c.Request.Context(), string(quotes.TokenMVRK))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to get quotes count",
-			"details": err.Error(),
-		})
+		common.RespondError(c, coreerrors.Internal("Unable to load quotes count", err))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	c.JSON(200, gin.H{
 		"count": count,
 	})
 }
