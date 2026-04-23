@@ -28,7 +28,11 @@ type Client struct {
 	log     *zerolog.Logger
 }
 
-func NewClient(baseURL, apiKey string, timeout time.Duration, log *zerolog.Logger, api *config.APIConfig) *Client {
+// NewClient builds a CoinGecko HTTP client. Per-service rate limit comes from
+// cg.RateLimit (shared across every CoinGecko client in-process via the
+// "coingecko" registry key). Retry + circuit breaker come from the shared api
+// section.
+func NewClient(cg config.CoinGeckoConfig, api *config.APIConfig, timeout time.Duration, log *zerolog.Logger) *Client {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
@@ -38,22 +42,18 @@ func NewClient(baseURL, apiKey string, timeout time.Duration, log *zerolog.Logge
 	}
 	lg := logging.WithComponent(log, "coingecko")
 	return &Client{
-		baseURL: baseURL,
-		apiKey:  apiKey,
+		baseURL: cg.BaseURL,
+		apiKey:  cg.APIKey,
 		log:     lg,
-		http:    newCoingeckoHTTPClient(timeout, api, lg),
+		http:    newCoingeckoHTTPClient(timeout, cg, api, lg),
 	}
 }
 
 // newCoingeckoHTTPClient builds Client.Timeout + Transport stack:
 // rate limit → (circuit breaker → retry → pooled transport).
-func newCoingeckoHTTPClient(timeout time.Duration, api *config.APIConfig, log *zerolog.Logger) *http.Client {
-	var apiCfg config.APIConfig
-	if api != nil {
-		apiCfg = *api
-	}
-	res := apiCfg.CoinGeckoOutboundResilience()
-	rl := apiCfg.CoinGeckoRateLimit()
+func newCoingeckoHTTPClient(timeout time.Duration, cg config.CoinGeckoConfig, api *config.APIConfig, log *zerolog.Logger) *http.Client {
+	res := api.OutboundResilience("coingecko")
+	rl := cg.RateLimit.Settings("coingecko")
 	rt := httpclient.WrapResilientTransport(httpclient.SharedTransport(), res)
 	rt = httpclient.WrapRateLimited(rt, rl)
 	rt = &logging.HTTPTransport{

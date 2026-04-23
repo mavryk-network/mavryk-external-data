@@ -67,7 +67,8 @@ func run() int {
 
 	httpApp := http.NewApp(cfg, db.DB, logger, quoteResponseCache)
 
-	quotesCollector := jobs.NewQuotesCollector(cfg, db.DB, logger, quoteResponseCache)
+	backfillJob := jobs.NewBackfillJob(cfg, db.DB, logger, quoteResponseCache)
+	liveJob := jobs.NewLiveQuotesJob(cfg, db.DB, logger, quoteResponseCache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -80,7 +81,10 @@ func run() int {
 		}
 	}()
 
-	quotesCollector.Start(ctx)
+	// Backfill runs first (blocks until historical catch-up is complete or disabled),
+	// then the live ticker starts. Both share the same "coingecko" rate-limit bucket.
+	backfillJob.Start(ctx)
+	liveJob.Start(ctx)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -96,9 +100,10 @@ func run() int {
 
 	logger.Info().Msg("shutting_down_server")
 
-	// Cancel background work first; collectors observe ctx.Done() and exit their loops.
+	// Cancel background work first; goroutines observe ctx.Done() and exit their loops.
 	cancel()
-	quotesCollector.Stop() // waits until all token collector goroutines return
+	liveJob.Stop()
+	backfillJob.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()

@@ -39,10 +39,31 @@ func Load(configPath string) (*Config, error) {
 			config.Server.LatestQuoteCacheTTLSeconds = val
 		}
 	}
+	// After defaults: explicit 0 in env disables the per-service rate limiter.
+	// setDefaults picks a safe 8 rps for CoinGecko when unset, so a plain pre-defaults
+	// override can't get you to 0. Equiteez defaults to 0 already; this hatch just
+	// keeps the pattern symmetrical for future tuning from ops.
+	applyRateLimitEnvOverride("COINGECKO_RATE_LIMIT_RPS", &config.CoinGecko.RateLimit.RPS)
+	applyRateLimitEnvOverride("EQUITEEZ_RATE_LIMIT_RPS", &config.Equiteez.RateLimit.RPS)
 
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	return config, nil
+}
+
+// applyRateLimitEnvOverride lets ops set a per-service RPS to 0 after defaults
+// are applied. Silently ignores unset or malformed values (validator catches
+// negatives downstream).
+func applyRateLimitEnvOverride(envKey string, dst *float64) {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return
+	}
+	val, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return
+	}
+	*dst = val
 }

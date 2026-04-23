@@ -1,8 +1,12 @@
 version: '3.8'
 
 services:
+  # Official Timescale image: TimescaleDB + PostgreSQL. Extension is preinstalled;
+  # `migrations/001_init.sql` still runs `CREATE EXTENSION IF NOT EXISTS timescaledb` (safe).
+  # Override with e.g. TIMESCALEDB_IMAGE=timescale/timescaledb:2.16.1-pg16 for a pinned build.
+  # If you switch from plain postgres: wipe the volume once: `docker compose down -v` (data loss).
   postgres:
-    image: postgres:16-alpine
+    image: ${TIMESCALEDB_IMAGE:-timescale/timescaledb:latest-pg16}
     container_name: mavryk-external-data-postgres
     restart: unless-stopped
     environment:
@@ -14,7 +18,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./internal/core/infrastructure/storage/migrations:/docker-entrypoint-initdb.d:ro
+      - ./migrations:/docker-entrypoint-initdb.d:ro
     networks:
       - mavryk-external-data-network
     healthcheck:

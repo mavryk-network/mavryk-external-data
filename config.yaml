@@ -32,10 +32,10 @@ job:
   enabled: true
 
 api:
+  # Shared outbound defaults (timeout + retry + circuit breaker) applied to every
+  # third-party client. Per-service rate limits live in the service section (see
+  # coingecko.rate_limit and equiteez.rate_limit below).
   timeout_seconds: 30
-  # Proactive CoinGecko client throttle (token bucket). Tune down for free-tier CoinGecko.
-  rate_limit_rps: 10
-  # rate_limit_burst: 0  # optional; 0 = auto (2× rate_limit_rps)
   outbound_http_retry_max_attempts: 3
   outbound_http_retry_initial_ms: 200
   outbound_http_retry_max_ms: 5000
@@ -48,6 +48,30 @@ api:
 coingecko:
   api_key: ""
   base_url: "https://api.coingecko.com/api/v3"
+  # Proactive outbound throttle (token bucket, shared across every CoinGecko client
+  # and backfill worker in-process via the "coingecko" registry key). Tier guide:
+  #   Demo (free):  ~30 req/min  → 0.5 rps
+  #   Pro Analyst: 500 req/min   → 8   rps  <-- default when unset
+  #   Pro Lite:   1000 req/min   → 16  rps
+  #   Pro:        4000 req/min   → 60  rps
+  # Env override: COINGECKO_RATE_LIMIT_RPS / COINGECKO_RATE_LIMIT_BURST.
+  # Set rps: 0 via env (post-defaults hatch) to disable.
+  rate_limit:
+    rps: 8
+    burst: 16    # 0 = auto (2× rps)
+
+equiteez:
+  # GraphQL/Hasura indexer credentials. Independent rate limit from CoinGecko —
+  # the two services share no quota and use separate token buckets.
+  # Hasura admin-secret endpoints typically have no per-IP limit; default 0 = disabled.
+  # Env override: EQUITEEZ_RATE_LIMIT_RPS / EQUITEEZ_RATE_LIMIT_BURST.
+  indexer_url: ""
+  indexer_password: ""
+  token_indexer_url: ""
+  token_indexer_password: ""
+  rate_limit:
+    rps: 0
+    burst: 0
 
 # Token-specific settings
 # If not specified, tokens will use global job and api settings

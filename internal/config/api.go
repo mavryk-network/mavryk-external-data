@@ -6,12 +6,11 @@ import (
 	"quotes/internal/core/infrastructure/httpclient"
 )
 
-// APIConfig holds outbound HTTP settings for CoinGecko (timeout, rate limit, retry, circuit breaker).
+// APIConfig holds shared outbound HTTP settings (timeout, retry, circuit breaker)
+// applied to every third-party client. Per-service rate limits live in the
+// service configs (see CoinGeckoConfig.RateLimit, EquiteezConfig.RateLimit).
 type APIConfig struct {
 	TimeoutSeconds int `yaml:"timeout_seconds"`
-	// RateLimitRPS is a proactive token-bucket limit (req/s) for the CoinGecko HTTP client. 0 disables.
-	RateLimitRPS   int `yaml:"rate_limit_rps"`
-	RateLimitBurst int `yaml:"rate_limit_burst"` // 0 = derive from RPS (2× rounded)
 
 	OutboundHTTPRetryMaxAttempts int `yaml:"outbound_http_retry_max_attempts"`
 	OutboundHTTPRetryInitialMS   int `yaml:"outbound_http_retry_initial_ms"`
@@ -24,35 +23,14 @@ type APIConfig struct {
 	OutboundHTTPCircuitBreakerTripAfterFailures   uint32 `yaml:"outbound_http_circuit_breaker_trip_after_failures"`
 }
 
-const coingeckoComponent = "coingecko"
-
-// CoinGeckoRateLimit builds token-bucket settings for the CoinGecko client from api.* fields.
-func (c *APIConfig) CoinGeckoRateLimit() httpclient.RateLimitSettings {
-	if c == nil || c.RateLimitRPS <= 0 {
-		return httpclient.RateLimitSettings{Component: coingeckoComponent}
-	}
-	rps := float64(c.RateLimitRPS)
-	burst := c.RateLimitBurst
-	if burst <= 0 {
-		burst = int(rps*2 + 0.5)
-		if burst < 1 {
-			burst = 1
-		}
-	}
-	return httpclient.RateLimitSettings{
-		Component: coingeckoComponent,
-		RPS:       rps,
-		Burst:     burst,
-	}
-}
-
-// CoinGeckoOutboundResilience builds retry + circuit breaker settings for CoinGecko.
-func (c *APIConfig) CoinGeckoOutboundResilience() httpclient.ResilienceSettings {
+// OutboundResilience builds retry + circuit-breaker settings tagged with the
+// given component name (used for metrics labels and the CB registry key).
+func (c *APIConfig) OutboundResilience(component string) httpclient.ResilienceSettings {
 	if c == nil {
-		return httpclient.ResilienceSettings{Component: coingeckoComponent}.Normalized()
+		return httpclient.ResilienceSettings{Component: component}.Normalized()
 	}
 	s := httpclient.ResilienceSettings{
-		Component:                      coingeckoComponent,
+		Component:                      component,
 		RetryMaxAttempts:               c.OutboundHTTPRetryMaxAttempts,
 		CircuitBreakerDisabled:         c.OutboundHTTPCircuitBreakerDisabled,
 		CBHalfOpenMaxRequests:          c.OutboundHTTPCircuitBreakerHalfOpenMaxRequests,

@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -22,11 +23,45 @@ func (s RateLimitSettings) Enabled() bool {
 	return s.RPS > 0 && s.Burst > 0
 }
 
+// sharedLimiters holds one token bucket per component so every *http.Client built for
+// the same external service (e.g. "coingecko") shares the same budget.
+// Without this the effective rate against the remote API scales with the number of
+// clients (one per token × collector + backfill), making the configured RPS misleading.
+var (
+	sharedLimitersMu sync.Mutex
+	sharedLimiters   = map[string]*rate.Limiter{}
+)
+
+func sharedLimiter(component string, rps float64, burst int) *rate.Limiter {
+	// No component name → caller wants an isolated limiter (e.g. tests).
+	if component == "" {
+		return rate.NewLimiter(rate.Limit(rps), burst)
+	}
+	sharedLimitersMu.Lock()
+	defer sharedLimitersMu.Unlock()
+	if l, ok := sharedLimiters[component]; ok {
+		// If settings change at runtime (e.g. tests), apply the newest ones.
+		if float64(l.Limit()) != rps {
+			l.SetLimit(rate.Limit(rps))
+		}
+		if l.Burst() != burst {
+			l.SetBurst(burst)
+		}
+		return l
+	}
+	l := rate.NewLimiter(rate.Limit(rps), burst)
+	sharedLimiters[component] = l
+	return l
+}
+
 // WrapRateLimited wraps next with a token-bucket limiter. Stack order (outer first):
 //
 //	circuit breaker → rate limiter → retry → base
 //
-// The limiter sits outside retry so retries do not consume extra tokens per wallet-backend design.
+// The limiter sits outside retry so retries do not consume extra tokens (matches
+// wallet-backend design). Per-component limiters are shared process-wide so that
+// additional HTTP clients (new tokens, backfill workers) do not multiply the RPS
+// actually sent to the upstream API.
 func WrapRateLimited(next http.RoundTripper, s RateLimitSettings) http.RoundTripper {
 	if next == nil {
 		next = http.DefaultTransport
@@ -36,7 +71,7 @@ func WrapRateLimited(next http.RoundTripper, s RateLimitSettings) http.RoundTrip
 	}
 	return &rateLimitedTransport{
 		next:      next,
-		limiter:   rate.NewLimiter(rate.Limit(s.RPS), s.Burst),
+		limiter:   sharedLimiter(s.Component, s.RPS, s.Burst),
 		component: s.Component,
 	}
 }
