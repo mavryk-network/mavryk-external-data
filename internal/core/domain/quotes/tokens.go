@@ -1,11 +1,8 @@
 package quotes
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
-// Token represents a supported token
+// Token represents a supported token identifier (stored as the `token` column in `quotes`).
 type Token string
 
 const (
@@ -18,33 +15,23 @@ var supportedTokens = map[Token]bool{
 	TokenUSDT: true,
 }
 
-// tokenTableSuffix maps each supported token to the PostgreSQL relation name under schema mev.
-// Only these literals may be used in qualified table names — never concatenate user input.
-var tokenTableSuffix = map[Token]string{
-	TokenMVRK: "mvrk",
-	TokenUSDT: "usdt",
-}
-
-// QuoteHypertableQualifiedName returns the qualified table name (mev.<suffix>) for quote storage.
-// It is the only supported way to resolve dynamic table names from a token string.
-func QuoteHypertableQualifiedName(tokenName string) (string, error) {
-	t := Token(strings.ToLower(strings.TrimSpace(tokenName)))
+// NormalizeToken returns the canonical Token for name, or ("", false) if not supported.
+// All storage / API layers must use this to validate user input before querying.
+func NormalizeToken(name string) (Token, bool) {
+	t := Token(strings.ToLower(strings.TrimSpace(name)))
 	if !supportedTokens[t] {
-		return "", fmt.Errorf("token '%s' is not supported", tokenName)
+		return "", false
 	}
-	suffix, ok := tokenTableSuffix[t]
-	if !ok || suffix == "" {
-		return "", fmt.Errorf("token '%s' is not supported", tokenName)
-	}
-	return "mev." + suffix, nil
+	return t, true
 }
 
-// IsTokenSupported checks if a token is supported
-func IsTokenSupported(tokenName string) bool {
-	return supportedTokens[Token(strings.ToLower(tokenName))]
+// IsTokenSupported checks if a token is supported.
+func IsTokenSupported(name string) bool {
+	_, ok := NormalizeToken(name)
+	return ok
 }
 
-// GetSupportedTokens returns a list of supported token names
+// GetSupportedTokens returns a list of supported tokens.
 func GetSupportedTokens() []Token {
 	tokens := make([]Token, 0, len(supportedTokens))
 	for token := range supportedTokens {
@@ -53,7 +40,7 @@ func GetSupportedTokens() []Token {
 	return tokens
 }
 
-// GetSupportedTokenNames returns a list of supported token names as strings
+// GetSupportedTokenNames returns a list of supported token names as strings.
 func GetSupportedTokenNames() []string {
 	tokens := make([]string, 0, len(supportedTokens))
 	for token := range supportedTokens {
@@ -62,7 +49,7 @@ func GetSupportedTokenNames() []string {
 	return tokens
 }
 
-// GetCoinGeckoID returns the CoinGecko coin ID for a token
+// GetCoinGeckoID returns the CoinGecko coin ID for a token.
 func GetCoinGeckoID(token Token) string {
 	switch token {
 	case TokenMVRK:

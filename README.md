@@ -65,7 +65,6 @@ API  → Application ← Infrastructure
 | Endpoint                   | Description                              | Parameters            |
 | -------------------------- | ---------------------------------------- | --------------------- |
 | `GET /health`              | Service health check                     | —                     |
-| `GET /health/db`           | DB reachability, Timescale extension, `mev` hypertables (read-only) | — |
 | `GET /quotes`              | Retrieve quotes for MVRK (legacy)       | `from`, `to`, `limit` |
 | `GET /quotes/last`         | Retrieve the latest MVRK quote (legacy)  | —                     |
 | `GET /quotes/count`        | Retrieve total number of MVRK quotes     | —                     |
@@ -78,7 +77,7 @@ API  → Application ← Infrastructure
 
 **Swagger UI** loads the spec from **`/swagger.json`**, which is generated per request: `host` and `schemes` match the incoming request (and `X-Forwarded-Proto` behind ingress), same pattern as **mavryk-wallet-backend** — **Try it out** hits the same host you used to open `/swagger`.
 
-Unlike the wallet backend, this API exposes **`GET /:token`** at the site root (e.g. `/usdt`). Without extra routes, **`/swagger`** would be handled as token `swagger`, not the UI — so **`/swagger` and `/swagger/` redirect to `/swagger/index.html`**. Open the UI at **`/swagger/index.html`** or **`/swagger`** (redirect). If you still see **Failed to fetch**, confirm the app is running and try a normal browser (some IDE previews block `localhost`).
+This API exposes **`GET /:token`** at the site root (e.g. `/usdt`). Swagger is wired the same way as **mavryk-wallet-backend**: dynamic **`/swagger.json`**, then **`GET /swagger/*any`** for the UI — register those before **`GET /:token`** so `swagger` is not treated as a token. Open the UI at **`/swagger/index.html`** (same as wallet-backend). If you still see **Failed to fetch**, confirm the app is running and try a normal browser (some IDE previews block `localhost`).
 
 Interactive API documentation is available at:
 - **Swagger UI**: `http://localhost:3010/swagger/index.html`
@@ -187,57 +186,38 @@ When requesting quotes with a limit:
    }
    ```
 4. Normalizes timestamps to seconds, applies forward-fill for missing values.
-5. Saves new quotes to token-specific tables (e.g., `mev.mvrk`, `mev.usdt`).
+5. Saves new quotes to the unified `quotes` hypertable with the token identifier as a column.
 6. API layer serves data using application and domain layers.
 7. If a large time gap is detected, data is collected in chunks to avoid timeouts.
 
 
 ## Database schema
 
-Each token has its own table in the `mev` schema:
+All quotes live in a single TimescaleDB hypertable `quotes`, partitioned by `timestamp`.
+The `token` column identifies the instrument; adding a new supported token does **not** require a DDL change — just a whitelist entry in the domain layer.
 
 ```sql
--- Schema
-CREATE SCHEMA IF NOT EXISTS mev;
-
--- MVRK token table (renamed from quotes)
-CREATE TABLE mev.mvrk (
-    id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMPTZ NOT NULL,
-    btc DECIMAL(20,8) DEFAULT 0,
-    usd DECIMAL(20,8) DEFAULT 0,
-    eur DECIMAL(20,8) DEFAULT 0,
-    cny DECIMAL(20,8) DEFAULT 0,
-    jpy DECIMAL(20,8) DEFAULT 0,
-    krw DECIMAL(20,8) DEFAULT 0,
-    eth DECIMAL(20,8) DEFAULT 0,
-    gbp DECIMAL(20,8) DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE quotes (
+    token      text          NOT NULL,
+    timestamp  timestamptz   NOT NULL,
+    btc        numeric(20,8) DEFAULT 0,
+    usd        numeric(20,8) DEFAULT 0,
+    eur        numeric(20,8) DEFAULT 0,
+    cny        numeric(20,8) DEFAULT 0,
+    jpy        numeric(20,8) DEFAULT 0,
+    krw        numeric(20,8) DEFAULT 0,
+    eth        numeric(20,8) DEFAULT 0,
+    gbp        numeric(20,8) DEFAULT 0,
+    created_at timestamptz   NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (token, timestamp)
 );
 
--- USDT token table
-CREATE TABLE mev.usdt (
-    id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMPTZ NOT NULL,
-    btc DECIMAL(20,8) DEFAULT 0,
-    usd DECIMAL(20,8) DEFAULT 0,
-    eur DECIMAL(20,8) DEFAULT 0,
-    cny DECIMAL(20,8) DEFAULT 0,
-    jpy DECIMAL(20,8) DEFAULT 0,
-    krw DECIMAL(20,8) DEFAULT 0,
-    eth DECIMAL(20,8) DEFAULT 0,
-    gbp DECIMAL(20,8) DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+SELECT create_hypertable('quotes', 'timestamp', chunk_time_interval => INTERVAL '7 days');
 
--- Indexes for each table
-CREATE INDEX idx_mev_mvrk_timestamp ON mev.mvrk (timestamp);
-CREATE INDEX idx_mev_usdt_timestamp ON mev.usdt (timestamp);
+CREATE INDEX idx_quotes_token_timestamp_desc ON quotes (token, timestamp DESC);
 ```
 
-Tables can be converted to TimescaleDB hypertables for better time-series performance.
+Inserts use `ON CONFLICT (token, timestamp) DO NOTHING`, so collectors and the backfill job can run concurrently without producing duplicates.
 
 
 ## Quick start
@@ -264,47 +244,38 @@ go mod tidy
 CREATE DATABASE mavryk_external_data;
 ```
 
-2. **Run migrations**:
+2. **Run migrations** (forward-only `.sql` in `migrations/`, same idea as `mavryk-wallet-backend/migrations`); they apply in **lexicographic** order, are idempotent, and are safe to re-run:
 
-Migrations are located in `internal/core/infrastructure/storage/migrations/` and are executed using native PostgreSQL client (`psql`).
+**From the Makefile** (local `psql`):
+```bash
+make migrate-up
+```
 
-**Using Docker Compose** (recommended):
+`migrate-down` prints a notice (no rollback files). `migrate-reset` and `migrate-redo` follow the same pattern as wallet-backend: **redo** and **reset** are essentially **migrate-up** again (down is a no-op).
+
+**Using Docker Compose**:
 ```bash
 docker-compose up migration
 ```
 
-**Manually using the migration script**:
+**Using the shell script** (e.g. local DB; optional `MIGRATIONS_DIR=./migrations`):
 ```bash
-# Set database connection parameters
 export POSTGRES_HOST=localhost
 export POSTGRES_PORT=5432
 export POSTGRES_USER=postgres
 export POSTGRES_PASSWORD=postgres
 export POSTGRES_DATABASE=quotes
-
-# Run migrations
 ./scripts/run-migrations.sh
 ```
 
-**Manually using psql**:
+**One file by hand**:
 ```bash
-# Apply all up migrations in order
-psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/001_init.sql
-psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/002_add_usdt_table.up.sql
-psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/003_rename_quotes_to_mvrk.up.sql
-psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/004_quotes_timestamp_unique.up.sql
-psql -h localhost -U postgres -d quotes -f internal/core/infrastructure/storage/migrations/005_drop_quotes_deleted_at.up.sql
+psql -h localhost -U postgres -d quotes -f migrations/001_init.sql
 ```
 
-**Migration files structure**:
-- `001_init.sql` - Creates schema, tables, and indexes
-- `002_add_usdt_table.up.sql` - Creates USDT table
-- `003_rename_quotes_to_mvrk.up.sql` - Renames quotes table to mvrk
-- `004_quotes_timestamp_unique.up.sql` - Deduplicates duplicate `timestamp` rows (keeps lowest `id`), then adds unique index for `ON CONFLICT DO NOTHING` inserts
-- `005_drop_quotes_deleted_at.up.sql` - Drops `deleted_at` column and its indexes on quote hypertables (no soft-delete)
-- `*_down.sql` - Rollback migrations (for down migrations)
+**`migrations/001_init.sql`**: creates the `quotes` table, enables TimescaleDB (if available), creates the hypertable, index `(token, timestamp DESC)`.
 
-All migrations are **idempotent** and can be safely executed multiple times.
+All forward migrations are **idempotent** and can be run multiple times. Rollback scripts are not maintained (as in wallet-backend); drop objects manually in dev if needed.
 
 ### Configuration
 
@@ -527,6 +498,8 @@ docker-compose logs -f
 docker-compose down
 ```
 
+The `postgres` service uses the official **TimescaleDB** image (`timescale/timescaledb`, default `latest-pg16`) so the `timescaledb` extension and hypertables work locally. Optional: set `TIMESCALEDB_IMAGE` in `.env` to pin a tag. If you previously used plain `postgres` and see init errors, reset the named volume: `docker compose down -v` (destroys local DB data).
+
 **Run migrations only**:
 ```bash
 docker-compose up migration
@@ -541,10 +514,9 @@ docker-compose up migration
 
 ### Migration script
 
-The migration script (`scripts/run-migrations.sh`) provides:
-- Automatic database health check before running migrations
-- Support for `up` and `down` migration commands
-- Idempotent migrations (safe to run multiple times)
+The migration script (`scripts/run-migrations.sh`) applies all `migrations/*.sql` in order (same contract as `make migrate-up`):
+- Waits until Postgres accepts connections
+- `COMMAND=down` is a no-op (no rollback files, as in wallet-backend)
 - Configurable via environment variables
 
 **Migration script environment variables**:
@@ -553,5 +525,5 @@ The migration script (`scripts/run-migrations.sh`) provides:
 - `POSTGRES_USER` - Database user (default: postgres)
 - `POSTGRES_PASSWORD` - Database password (default: postgres)
 - `POSTGRES_DATABASE` - Database name (default: quotes)
-- `MIGRATIONS_DIR` - Path to migrations directory (default: /app/migrations)
-- `COMMAND` - Migration command: `up` or `down` (default: up)
+- `MIGRATIONS_DIR` - Path to migrations directory (default: `/app/migrations` in Docker; for local use point at the repo’s `migrations/`)
+- `COMMAND` - `up` (default) runs migrations; `down` prints a notice and exits

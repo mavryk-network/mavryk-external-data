@@ -24,36 +24,6 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/health/db": {
-            "get": {
-                "description": "Read-only check: DB reachability, whether timescaledb extension is enabled, and hypertables in schema mev. Does not expose row data.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "health"
-                ],
-                "summary": "Database / TimescaleDB diagnostics",
-                "responses": {
-                    "200": {
-                        "description": "Diagnostics",
-                        "schema": {
-                            "$ref": "#/definitions/db_status.Response"
-                        }
-                    },
-                    "503": {
-                        "description": "Database unreachable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
         "/quotes": {
             "get": {
                 "description": "Retrieve quotes for MVRK token with optional filters. Returns quotes within the specified time range.",
@@ -268,29 +238,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "db_status.Response": {
-            "type": "object",
-            "properties": {
-                "database_reachable": {
-                    "type": "boolean"
-                },
-                "hypertables_mev": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "hypertables_query_note": {
-                    "type": "string"
-                },
-                "timescaledb_installed": {
-                    "type": "boolean"
-                },
-                "timescaledb_version": {
-                    "type": "string"
-                }
-            }
-        },
         "quotes.Quote": {
             "type": "object",
             "properties": {

@@ -74,14 +74,32 @@ func setDefaults(config *Config) {
 	if config.CoinGecko.BaseURL == "" {
 		config.CoinGecko.BaseURL = "https://api.coingecko.com/api/v3"
 	}
+	// Safe outbound default for CoinGecko Pro Analyst tier (500 req/min ≈ 8.33 rps).
+	// A missing value should never mean "unlimited" — override via env to tune up
+	// (Pro = 60, Pro Lite = 16) or set COINGECKO_RATE_LIMIT_RPS=0 to disable.
+	if config.CoinGecko.RateLimit.RPS == 0 {
+		config.CoinGecko.RateLimit.RPS = 8
+	}
+	// Equiteez indexer is private Hasura — leave RateLimit at 0 (disabled) by
+	// default. Consumers can opt in per deployment.
 
 	// Backfill defaults
-	// Disabled by default; explicit opt-in
-	// StartFrom default left empty (will be treated as no-op)
-	if config.Backfill.SleepMs == 0 {
-		config.Backfill.SleepMs = 3000
+	// Disabled by default; explicit opt-in.
+	// StartFrom default left empty (will be treated as no-op).
+	if config.Backfill.TickSeconds == 0 {
+		config.Backfill.TickSeconds = 5 // single reverse step every 5s per token, globally
 	}
 	if config.Backfill.ChunkMinutes == 0 {
-		config.Backfill.ChunkMinutes = 5
+		config.Backfill.ChunkMinutes = 360 // 6h per step → stays inside CoinGecko 5-min granularity window
 	}
+	if config.Backfill.BackfillMaxErrors == 0 {
+		config.Backfill.BackfillMaxErrors = 5
+	}
+	if config.Backfill.BackoffInitialMs == 0 {
+		config.Backfill.BackoffInitialMs = 2000
+	}
+	if config.Backfill.BackoffMaxMs == 0 {
+		config.Backfill.BackoffMaxMs = 60_000
+	}
+	// config.Backfill.SleepMs is deprecated and intentionally left untouched.
 }

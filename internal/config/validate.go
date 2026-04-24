@@ -86,25 +86,42 @@ func (c *Config) Validate() error {
 	if c.API.TimeoutSeconds <= 0 {
 		return fmt.Errorf("api.timeout_seconds must be > 0")
 	}
-	if c.API.RateLimitRPS < 0 {
-		return fmt.Errorf("api.rate_limit_rps must be >= 0")
-	}
-	if c.API.RateLimitBurst < 0 {
-		return fmt.Errorf("api.rate_limit_burst must be >= 0")
-	}
 
 	if strings.TrimSpace(c.CoinGecko.BaseURL) == "" {
 		return fmt.Errorf("coingecko.base_url is required")
 	}
+	if err := validateRateLimit("coingecko", c.CoinGecko.RateLimit); err != nil {
+		return err
+	}
+	if err := validateRateLimit("equiteez", c.Equiteez.RateLimit); err != nil {
+		return err
+	}
 
-	if c.Backfill.SleepMs < 0 {
-		return fmt.Errorf("backfill.sleep_ms must be >= 0")
+	if c.Backfill.TickSeconds < 0 {
+		return fmt.Errorf("backfill.tick_seconds must be >= 0")
 	}
 	if c.Backfill.ChunkMinutes < 0 {
 		return fmt.Errorf("backfill.chunk_minutes must be >= 0")
 	}
+	// CoinGecko market_chart/range granularity drops to 1h once the window exceeds
+	// ~1 day; we keep chunks <= 24h to preserve 5-min points for the backfill pass.
+	if c.Backfill.ChunkMinutes > 1440 {
+		return fmt.Errorf("backfill.chunk_minutes must be <= 1440 (24h) to keep CoinGecko 5-min granularity, got %d", c.Backfill.ChunkMinutes)
+	}
+	if c.Backfill.BackfillMaxErrors < 0 {
+		return fmt.Errorf("backfill.backfill_max_errors must be >= 0")
+	}
+	if c.Backfill.BackoffInitialMs < 0 {
+		return fmt.Errorf("backfill.backoff_initial_ms must be >= 0")
+	}
+	if c.Backfill.BackoffMaxMs < 0 {
+		return fmt.Errorf("backfill.backoff_max_ms must be >= 0")
+	}
 	if err := validateBackfillStartFrom(c.Backfill.StartFrom); err != nil {
 		return fmt.Errorf("backfill.start_from: %w", err)
+	}
+	if err := validateBackfillStartFrom(c.Backfill.MinStartFrom); err != nil {
+		return fmt.Errorf("backfill.min_start_from: %w", err)
 	}
 
 	for name := range c.Tokens {
@@ -115,6 +132,15 @@ func (c *Config) Validate() error {
 		tc := c.Tokens[name]
 		if err := validateBackfillStartFrom(tc.Backfill.StartFrom); err != nil {
 			return fmt.Errorf("tokens[%s].backfill.start_from: %w", name, err)
+		}
+		if tc.Backfill.ChunkMinutes < 0 {
+			return fmt.Errorf("tokens[%s].backfill.chunk_minutes must be >= 0", name)
+		}
+		if tc.Backfill.ChunkMinutes > 1440 {
+			return fmt.Errorf("tokens[%s].backfill.chunk_minutes must be <= 1440 (24h), got %d", name, tc.Backfill.ChunkMinutes)
+		}
+		if tc.LiveLookbackSeconds < 0 {
+			return fmt.Errorf("tokens[%s].live_lookback_seconds must be >= 0", name)
 		}
 	}
 
@@ -144,6 +170,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+func validateRateLimit(section string, r RateLimitConfig) error {
+	if r.RPS < 0 {
+		return fmt.Errorf("%s.rate_limit.rps must be >= 0, got %v", section, r.RPS)
+	}
+	if r.Burst < 0 {
+		return fmt.Errorf("%s.rate_limit.burst must be >= 0, got %d", section, r.Burst)
+	}
 	return nil
 }
 

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"quotes/internal/config"
-	"quotes/internal/core/api/http/health/db_status"
 	httpmw "quotes/internal/core/api/http/middleware"
 	httpGetAll "quotes/internal/core/api/http/quotes/get_all"
 	httpGetByToken "quotes/internal/core/api/http/quotes/get_by_token"
@@ -82,8 +81,6 @@ func NewApp(cfg *config.Config, db *gorm.DB, baseLogger *zerolog.Logger, quoteRe
 	getAllHandler := httpGetAll.New(getAllAction)
 	getByTokenHandler := httpGetByToken.New(getByTokenAction)
 
-	dbStatusHandler := db_status.New(db)
-
 	// Register /metrics before SetupRoutes so GET /:token does not capture "metrics".
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
@@ -92,7 +89,6 @@ func NewApp(cfg *config.Config, db *gorm.DB, baseLogger *zerolog.Logger, quoteRe
 		GetCountHandler:   getCountHandler,
 		GetAllHandler:     getAllHandler,
 		GetByTokenHandler: getByTokenHandler,
-		DBStatusHandler:   dbStatusHandler,
 	})
 	httpRouter.SetupRoutes(router)
 

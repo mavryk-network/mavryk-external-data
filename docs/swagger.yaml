@@ -1,20 +1,5 @@
 basePath: /
 definitions:
-  db_status.Response:
-    properties:
-      database_reachable:
-        type: boolean
-      hypertables_mev:
-        items:
-          type: string
-        type: array
-      hypertables_query_note:
-        type: string
-      timescaledb_installed:
-        type: boolean
-      timescaledb_version:
-        type: string
-    type: object
   quotes.Quote:
     properties:
       btc:
@@ -107,27 +92,6 @@ paths:
       summary: Get quotes for a specific token
       tags:
       - tokens
-  /health/db:
-    get:
-      consumes:
-      - application/json
-      description: 'Read-only check: DB reachability, whether timescaledb extension
-        is enabled, and hypertables in schema mev. Does not expose row data.'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Diagnostics
-          schema:
-            $ref: '#/definitions/db_status.Response'
-        "503":
-          description: Database unreachable
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Database / TimescaleDB diagnostics
-      tags:
-      - health
   /quotes:
     get:
       consumes:

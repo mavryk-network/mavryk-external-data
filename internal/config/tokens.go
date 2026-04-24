@@ -3,20 +3,27 @@ package config
 import "time"
 
 // TokenConfig holds per-token collector and backfill overrides.
+//
+// LiveLookbackSeconds is the maximum window the live job fetches per tick (the "safety
+// overlap" after a missed tick). The live job never backfills history — that is the
+// job of BackfillConfig. 0 means "use 2× interval_seconds" at resolution time.
 type TokenConfig struct {
 	IntervalSeconds     int                 `yaml:"interval_seconds"`       // Collection interval in seconds (0 = use global job.interval_seconds)
 	Enabled             bool                `yaml:"enabled"`                // Enable/disable collection for this token (default: true)
 	TimeoutSeconds      int                 `yaml:"timeout_seconds"`        // HTTP timeout in seconds (0 = use global api.timeout_seconds)
 	MinTimeRangeSeconds int                 `yaml:"min_time_range_seconds"` // Minimum time range to collect (0 = use default 60)
+	LiveLookbackSeconds int                 `yaml:"live_lookback_seconds"`  // Max window the live tick fetches; caps a stale last_ts. 0 = 2× interval.
 	MaxChunkMinutes     int                 `yaml:"max_chunk_minutes"`      // Maximum chunk size for catch-up (0 = use backfill.chunk_minutes or default 60)
 	Backfill            TokenBackfillConfig `yaml:"backfill"`               // Token-specific backfill settings
 }
 
 // TokenBackfillConfig holds per-token backfill overrides.
+//
+// SleepMs is deprecated — cadence is controlled globally by backfill.tick_seconds.
 type TokenBackfillConfig struct {
 	Enabled      bool   `yaml:"enabled"`       // Enable/disable backfill for this token (default: false, uses global backfill.enabled if not set)
 	StartFrom    string `yaml:"start_from"`    // Backfill start date for this token (ISO date or RFC3339, overrides global if set)
-	SleepMs      int    `yaml:"sleep_ms"`      // Delay between backfill chunks in milliseconds (0 = use global backfill.sleep_ms)
+	SleepMs      int    `yaml:"sleep_ms"`      // deprecated: replaced by backfill.tick_seconds; ignored at runtime
 	ChunkMinutes int    `yaml:"chunk_minutes"` // Size of each backfill window in minutes (0 = use global backfill.chunk_minutes)
 }
 
@@ -49,6 +56,14 @@ func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
 	}
 	if tokenCfg.MinTimeRangeSeconds == 0 {
 		tokenCfg.MinTimeRangeSeconds = 60 // default 60 seconds
+	}
+	if tokenCfg.LiveLookbackSeconds == 0 {
+		// Cap the live window at 2× interval so a stale last_ts after a DB wipe
+		// doesn't force the live tick to pull hours of history in one request.
+		tokenCfg.LiveLookbackSeconds = tokenCfg.IntervalSeconds * 2
+		if tokenCfg.LiveLookbackSeconds == 0 {
+			tokenCfg.LiveLookbackSeconds = 120 // belt-and-suspenders default
+		}
 	}
 	if tokenCfg.MaxChunkMinutes == 0 {
 		// Use backfill chunk size or default to 60 minutes
@@ -126,6 +141,12 @@ func (c *Config) GetTokenInterval(tokenName string) time.Duration {
 func (c *Config) GetTokenTimeout(tokenName string) time.Duration {
 	tokenCfg := c.GetTokenConfig(tokenName)
 	return time.Duration(tokenCfg.TimeoutSeconds) * time.Second
+}
+
+// GetTokenLiveLookback returns the live-job lookback window for a token.
+func (c *Config) GetTokenLiveLookback(tokenName string) time.Duration {
+	tokenCfg := c.GetTokenConfig(tokenName)
+	return time.Duration(tokenCfg.LiveLookbackSeconds) * time.Second
 }
 
 // IsTokenEnabled reports whether collection is enabled for the token.

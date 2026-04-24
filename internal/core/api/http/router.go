@@ -2,10 +2,8 @@ package http
 
 import (
 	"encoding/json"
-	"net/http"
 
 	"quotes/internal/core/api/http/common"
-	"quotes/internal/core/api/http/health/db_status"
 	"quotes/internal/core/api/http/quotes/get_all"
 	"quotes/internal/core/api/http/quotes/get_by_token"
 	"quotes/internal/core/api/http/quotes/get_count"
@@ -23,7 +21,6 @@ type Router struct {
 	getCountHandler   *get_count.Handler
 	getAllHandler     *get_all.Handler
 	getByTokenHandler *get_by_token.Handler
-	dbStatusHandler   *db_status.Handler
 }
 
 // RouterConfig wires HTTP handlers for NewRouter (struct-arg avoids brittle positional parameters).
@@ -32,7 +29,6 @@ type RouterConfig struct {
 	GetCountHandler   *get_count.Handler
 	GetAllHandler     *get_all.Handler
 	GetByTokenHandler *get_by_token.Handler
-	DBStatusHandler   *db_status.Handler
 }
 
 func NewRouter(cfg RouterConfig) *Router {
@@ -41,16 +37,18 @@ func NewRouter(cfg RouterConfig) *Router {
 		getCountHandler:   cfg.GetCountHandler,
 		getAllHandler:     cfg.GetAllHandler,
 		getByTokenHandler: cfg.GetByTokenHandler,
-		dbStatusHandler:   cfg.DBStatusHandler,
 	}
 }
 
 func (r *Router) SetupRoutes(engine *gin.Engine) {
-	// Swagger: serve dynamic spec so "Try it out" uses this request's host/scheme (same as mavryk-wallet-backend).
-	// Gin cannot register both "/swagger/*any" and "/swagger/doc.json", so the JSON lives at /swagger.json.
+	// Swagger documentation
+	// Serve a dynamic doc.json so Swagger UI always targets the same host/scheme it was loaded from
+	// (prevents "Try it out" from using stale hardcoded hosts in prod).
 	//
-	// This service also registers GET /:token at root for quotes — a single segment like "swagger" would
-	// otherwise be handled as a token name. Explicit /swagger routes must come before that catch-all.
+	// Note: Gin cannot register both "/swagger/*any" and "/swagger/doc.json" (conflicting routes),
+	// so we expose the doc at a separate top-level path.
+	//
+	// Register these before GET /:token at root so "swagger" is not treated as a token name.
 	engine.GET("/swagger.json", func(c *gin.Context) {
 		docStr, err := swag.ReadDoc()
 		if err != nil {
@@ -79,12 +77,7 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 		}
 		c.Data(200, "application/json; charset=utf-8", out)
 	})
-	engine.GET("/swagger", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "/swagger/index.html")
-	})
-	engine.GET("/swagger/", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "/swagger/index.html")
-	})
+
 	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
 
 	// HealthCheck godoc
@@ -101,7 +94,6 @@ func (r *Router) SetupRoutes(engine *gin.Engine) {
 			"service": "quotes",
 		})
 	})
-	engine.GET("/health/db", r.dbStatusHandler.Handle)
 
 	v1 := engine.Group("/")
 	{

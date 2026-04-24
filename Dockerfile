@@ -23,8 +23,7 @@ WORKDIR /app
 # Install postgresql-client for running migrations
 RUN apk add --no-cache postgresql-client
 
-# Copy migrations to migrations directory
-COPY internal/core/infrastructure/storage/migrations ./migrations
+COPY migrations ./migrations
 
 # Copy migration script
 COPY scripts/run-migrations.sh ./run-migrations.sh

@@ -7,6 +7,7 @@ type Config struct {
 	Job       JobConfig              `yaml:"job"`
 	API       APIConfig              `yaml:"api"`
 	CoinGecko CoinGeckoConfig        `yaml:"coingecko"`
+	Equiteez  EquiteezConfig         `yaml:"equiteez"`
 	Backfill  BackfillConfig         `yaml:"backfill"`
 	Tokens    map[string]TokenConfig `yaml:"tokens"`
 }

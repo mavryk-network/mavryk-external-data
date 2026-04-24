@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+//nolint:gocyclo // Many independent env key bindings; a single function keeps config wiring in one file.
 func overrideWithEnv(config *Config) error {
 	if port := os.Getenv("SERVER_PORT"); port != "" {
 		config.Server.Port = port
@@ -90,16 +91,6 @@ func overrideWithEnv(config *Config) error {
 			config.API.TimeoutSeconds = val
 		}
 	}
-	if rateLimit := os.Getenv("API_RATE_LIMIT_RPS"); rateLimit != "" {
-		if val, err := strconv.Atoi(rateLimit); err == nil {
-			config.API.RateLimitRPS = val
-		}
-	}
-	if burst := os.Getenv("API_RATE_LIMIT_BURST"); burst != "" {
-		if val, err := strconv.Atoi(burst); err == nil {
-			config.API.RateLimitBurst = val
-		}
-	}
 	if v := os.Getenv("OUTBOUND_HTTP_RETRY_MAX_ATTEMPTS"); v != "" {
 		if val, err := strconv.Atoi(v); err == nil {
 			config.API.OutboundHTTPRetryMaxAttempts = val
@@ -147,6 +138,44 @@ func overrideWithEnv(config *Config) error {
 	if baseURL := os.Getenv("COINGECKO_BASE_URL"); baseURL != "" {
 		config.CoinGecko.BaseURL = baseURL
 	}
+	// Per-service outbound throttle (shared registry key "coingecko"). Float
+	// accepted (e.g. 0.5 = one req / 2s). An explicit post-defaults 0 disables
+	// the limiter — that escape hatch lives in load.go.
+	if v := os.Getenv("COINGECKO_RATE_LIMIT_RPS"); v != "" {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			config.CoinGecko.RateLimit.RPS = val
+		}
+	}
+	if v := os.Getenv("COINGECKO_RATE_LIMIT_BURST"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			config.CoinGecko.RateLimit.Burst = val
+		}
+	}
+
+	if v := os.Getenv("EQUITEEZ_INDEXER_URL"); v != "" {
+		config.Equiteez.IndexerURL = v
+	}
+	if v := os.Getenv("EQUITEEZ_INDEXER_PASSWORD"); v != "" {
+		config.Equiteez.IndexerPassword = v
+	}
+	if v := os.Getenv("EQUITEEZ_TOKEN_INDEXER_URL"); v != "" {
+		config.Equiteez.TokenIndexerURL = v
+	}
+	if v := os.Getenv("EQUITEEZ_TOKEN_INDEXER_PASSWORD"); v != "" {
+		config.Equiteez.TokenIndexerPassword = v
+	}
+	// Equiteez outbound throttle (shared registry key "equiteez"). Default 0
+	// (disabled); Hasura admin-secret endpoints usually have no per-IP quota.
+	if v := os.Getenv("EQUITEEZ_RATE_LIMIT_RPS"); v != "" {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			config.Equiteez.RateLimit.RPS = val
+		}
+	}
+	if v := os.Getenv("EQUITEEZ_RATE_LIMIT_BURST"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			config.Equiteez.RateLimit.Burst = val
+		}
+	}
 
 	if enabled := os.Getenv("BACKFILL_ENABLED"); enabled != "" {
 		if val, err := strconv.ParseBool(enabled); err == nil {
@@ -156,6 +185,16 @@ func overrideWithEnv(config *Config) error {
 	if startFrom := os.Getenv("BACKFILL_START_FROM"); startFrom != "" {
 		config.Backfill.StartFrom = startFrom
 	}
+	if v := os.Getenv("BACKFILL_MIN_START_FROM"); v != "" {
+		config.Backfill.MinStartFrom = v
+	}
+	if v := os.Getenv("BACKFILL_TICK_SECONDS"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			config.Backfill.TickSeconds = val
+		}
+	}
+	// BACKFILL_SLEEP_MS is deprecated: cadence is set by BACKFILL_TICK_SECONDS. We still
+	// parse the value so old .env files do not break; it is ignored at runtime.
 	if sleep := os.Getenv("BACKFILL_SLEEP_MS"); sleep != "" {
 		if val, err := strconv.Atoi(sleep); err == nil {
 			config.Backfill.SleepMs = val
@@ -164,6 +203,21 @@ func overrideWithEnv(config *Config) error {
 	if chunk := os.Getenv("BACKFILL_CHUNK_MINUTES"); chunk != "" {
 		if val, err := strconv.Atoi(chunk); err == nil {
 			config.Backfill.ChunkMinutes = val
+		}
+	}
+	if v := os.Getenv("BACKFILL_MAX_ERRORS"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			config.Backfill.BackfillMaxErrors = val
+		}
+	}
+	if v := os.Getenv("BACKFILL_BACKOFF_INITIAL_MS"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			config.Backfill.BackoffInitialMs = val
+		}
+	}
+	if v := os.Getenv("BACKFILL_BACKOFF_MAX_MS"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			config.Backfill.BackoffMaxMs = val
 		}
 	}
 	return nil
