@@ -11,16 +11,31 @@ import (
 )
 
 // RateLimitSettings defines a proactive outbound HTTP rate limit for a single component.
-// Zero RPS (or Burst) disables the limiter.
+// RPS == 0 means "disabled". RPS > 0 with Burst <= 0 is auto-corrected by Normalized() to
+// Burst = max(1, round(2*RPS)) — see refactoring_v2 §3.1.
 type RateLimitSettings struct {
 	Component string
 	RPS       float64
 	Burst     int
 }
 
-// Enabled reports whether the limiter should be installed.
+// Normalized returns a copy with Burst auto-corrected when only RPS is set.
+// Idempotent under repeat calls.
+func (s RateLimitSettings) Normalized() RateLimitSettings {
+	if s.RPS > 0 && s.Burst <= 0 {
+		s.Burst = int(s.RPS*2 + 0.5)
+		if s.Burst < 1 {
+			s.Burst = 1
+		}
+	}
+	return s
+}
+
+// Enabled reports whether the limiter should be installed. Auto-normalizes first so
+// that RPS=0.5, Burst=0 (a common config mistake) doesn't silently disable throttling.
 func (s RateLimitSettings) Enabled() bool {
-	return s.RPS > 0 && s.Burst > 0
+	n := s.Normalized()
+	return n.RPS > 0 && n.Burst > 0
 }
 
 // sharedLimiters holds one token bucket per component so every *http.Client built for
@@ -54,18 +69,28 @@ func sharedLimiter(component string, rps float64, burst int) *rate.Limiter {
 	return l
 }
 
+// ResetSharedLimiters drops every entry from the shared limiter registry.
+// Test helper. Production code never calls this.
+func ResetSharedLimiters() {
+	sharedLimitersMu.Lock()
+	defer sharedLimitersMu.Unlock()
+	for k := range sharedLimiters {
+		delete(sharedLimiters, k)
+	}
+}
+
 // WrapRateLimited wraps next with a token-bucket limiter. Stack order (outer first):
 //
 //	circuit breaker → rate limiter → retry → base
 //
-// The limiter sits outside retry so retries do not consume extra tokens (matches
-// wallet-backend design). Per-component limiters are shared process-wide so that
-// additional HTTP clients (new tokens, backfill workers) do not multiply the RPS
-// actually sent to the upstream API.
+// The limiter sits outside retry so retries do not consume extra tokens. Per-component
+// limiters are shared process-wide so that additional HTTP clients (new tokens, backfill
+// workers) do not multiply the RPS actually sent to the upstream API.
 func WrapRateLimited(next http.RoundTripper, s RateLimitSettings) http.RoundTripper {
 	if next == nil {
 		next = http.DefaultTransport
 	}
+	s = s.Normalized()
 	if !s.Enabled() {
 		return next
 	}

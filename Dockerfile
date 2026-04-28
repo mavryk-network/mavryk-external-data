@@ -1,6 +1,10 @@
 # =========================
 # Builder stage
 # =========================
+# refactoring_v2 §8.1: pin base images by digest in production deployments.
+# Recommended setup: enable Renovate or Dependabot to auto-update the digest;
+# the simplest manual refresh is `docker pull golang:1.24-alpine && docker inspect`
+# then replace the tag with `golang:1.24-alpine@sha256:<digest>`.
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
@@ -11,7 +15,11 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main cmd/quotes/main.go
+ARG GIT_SHA=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build \
+        -trimpath \
+        -ldflags "-w -s -X main.Version=${GIT_SHA}" \
+        -o main cmd/quotes/main.go
 
 # =========================
 # Migration stage

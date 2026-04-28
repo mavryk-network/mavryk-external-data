@@ -25,7 +25,10 @@ func setDefaults(config *Config) {
 		config.Server.IdleTimeout = DurationYAML(120 * time.Second)
 	}
 	if config.Server.LatestQuoteCacheTTLSeconds == 0 {
-		config.Server.LatestQuoteCacheTTLSeconds = 5 // seconds; disable with SERVER_LATEST_QUOTE_CACHE_TTL_SECONDS=0 after defaults
+		config.Server.LatestQuoteCacheTTLSeconds = 5
+	}
+	if config.Server.MaxQueryLimit == 0 {
+		config.Server.MaxQueryLimit = 10000
 	}
 	if len(config.Server.CORS.AllowedOrigins) == 0 {
 		config.Server.CORS.AllowedOrigins = []string{
@@ -64,7 +67,7 @@ func setDefaults(config *Config) {
 	}
 
 	if config.Job.IntervalSeconds == 0 {
-		config.Job.IntervalSeconds = 60 // 1 minute
+		config.Job.IntervalSeconds = 60
 	}
 
 	if config.API.TimeoutSeconds == 0 {
@@ -74,23 +77,15 @@ func setDefaults(config *Config) {
 	if config.CoinGecko.BaseURL == "" {
 		config.CoinGecko.BaseURL = "https://api.coingecko.com/api/v3"
 	}
-	// Safe outbound default for CoinGecko Pro Analyst tier (500 req/min ≈ 8.33 rps).
-	// A missing value should never mean "unlimited" — override via env to tune up
-	// (Pro = 60, Pro Lite = 16) or set COINGECKO_RATE_LIMIT_RPS=0 to disable.
 	if config.CoinGecko.RateLimit.RPS == 0 {
 		config.CoinGecko.RateLimit.RPS = 8
 	}
-	// Equiteez indexer is private Hasura — leave RateLimit at 0 (disabled) by
-	// default. Consumers can opt in per deployment.
 
-	// Backfill defaults
-	// Disabled by default; explicit opt-in.
-	// StartFrom default left empty (will be treated as no-op).
 	if config.Backfill.TickSeconds == 0 {
-		config.Backfill.TickSeconds = 5 // single reverse step every 5s per token, globally
+		config.Backfill.TickSeconds = 5
 	}
 	if config.Backfill.ChunkMinutes == 0 {
-		config.Backfill.ChunkMinutes = 360 // 6h per step → stays inside CoinGecko 5-min granularity window
+		config.Backfill.ChunkMinutes = 360
 	}
 	if config.Backfill.BackfillMaxErrors == 0 {
 		config.Backfill.BackfillMaxErrors = 5
@@ -101,5 +96,15 @@ func setDefaults(config *Config) {
 	if config.Backfill.BackoffMaxMs == 0 {
 		config.Backfill.BackoffMaxMs = 60_000
 	}
-	// config.Backfill.SleepMs is deprecated and intentionally left untouched.
+	if config.Backfill.MaxBackoffMs == 0 {
+		// 24h hard cap so a stuck token doesn't stretch backoff to weeks.
+		config.Backfill.MaxBackoffMs = 24 * 60 * 60 * 1000
+	}
+
+	if config.RWA.IntervalSeconds == 0 && config.RWA.Enabled {
+		config.RWA.IntervalSeconds = 60
+	}
+	if config.RWA.Concurrency == 0 && config.RWA.Enabled {
+		config.RWA.Concurrency = 4
+	}
 }

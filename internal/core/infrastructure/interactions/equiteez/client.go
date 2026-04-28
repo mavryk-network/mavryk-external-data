@@ -39,13 +39,18 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	componentLogger := logging.WithComponent(logger, "equiteez_client")
 	res := api.OutboundResilience("equiteez")
 	rl := eq.RateLimit.Settings("equiteez")
-	rt := httpclient.WrapResilientTransport(httpclient.SharedTransport(), res)
-	rt = httpclient.WrapRateLimited(rt, rl)
+	var maxBytes int64
+	if api != nil {
+		maxBytes = api.OutboundMaxResponseBytes
+	}
+	rt := httpclient.MaxBytesReader(httpclient.SharedTransport(), maxBytes)
+	rt = httpclient.WrapResilientTransport(rt, res)
 	rt = &logging.HTTPTransport{
 		Base:      rt,
 		Logger:    componentLogger,
 		Component: "equiteez",
 	}
+	rt = httpclient.WrapRateLimited(rt, rl)
 	return &Client{
 		indexerURL:           eq.IndexerURL,
 		tokenIndexerURL:      eq.TokenIndexerURL,
@@ -113,6 +118,49 @@ func (c *Client) GetRWATransfers(ctx context.Context, walletAddress, assetAddres
 	}
 
 	return result.RWATransfers, nil
+}
+
+// GetAllowlistedTokensAndOrderbooks discovers active RWA pairs from the indexer:
+// returns every token where `in_allowlist=true` together with its orderbooks
+// where `in_allowlist=true`. The sync job (jobs/equiteez_rwa_sync.go) calls
+// this at startup and upserts the result into `rwa_pairs`.
+func (c *Client) GetAllowlistedTokensAndOrderbooks(ctx context.Context) ([]TokenWithOrderbooks, error) {
+	query := `
+		query allowlistedTokensWithOrderbooks {
+			token(where: { in_allowlist: { _eq: true } }) {
+				address
+				token_id
+				in_allowlist
+				token_metadata
+				token_standard
+				metadata
+				orderbooks(where: { in_allowlist: { _eq: true } }) {
+					address
+					in_allowlist
+					last_matched_price
+					lowest_sell_price
+					highest_buy_price
+					sell_order_fee
+					buy_order_fee
+					currencies(limit: 1, where: { token: { address: { _is_null: false } } }) {
+						currency_name
+						token { address token_id }
+					}
+				}
+			}
+		}
+	`
+	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, nil, c.headersForURL(c.indexerURL))
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Tokens []TokenWithOrderbooks `json:"token"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal allowlisted tokens: %w", err)
+	}
+	return result.Tokens, nil
 }
 
 // GetTokensWithOrderbooks queries tokens with orderbook data for multiple addresses.

@@ -2,24 +2,75 @@ package httpclient
 
 import (
 	"net/http"
+	"sync"
 	"time"
 )
 
-// NewPooledTransport creates an HTTP transport with optimized connection pooling.
-func NewPooledTransport() *http.Transport {
+// TransportSettings configures the pooled HTTP transport. Zero values are
+// replaced with sensible defaults in Normalized().
+type TransportSettings struct {
+	MaxIdleConns        int
+	MaxIdleConnsPerHost int
+	MaxConnsPerHost     int
+	IdleConnTimeout     time.Duration
+	TLSHandshakeTimeout time.Duration
+}
+
+// Normalized fills zero fields with defaults.
+func (s TransportSettings) Normalized() TransportSettings {
+	if s.MaxIdleConns <= 0 {
+		s.MaxIdleConns = 100
+	}
+	if s.MaxIdleConnsPerHost <= 0 {
+		s.MaxIdleConnsPerHost = 10
+	}
+	if s.MaxConnsPerHost <= 0 {
+		s.MaxConnsPerHost = 100
+	}
+	if s.IdleConnTimeout <= 0 {
+		s.IdleConnTimeout = 90 * time.Second
+	}
+	if s.TLSHandshakeTimeout <= 0 {
+		s.TLSHandshakeTimeout = 10 * time.Second
+	}
+	return s
+}
+
+// NewPooledTransport creates an HTTP transport with the given pool settings.
+// Empty/zero settings produce defaults; see TransportSettings.Normalized().
+func NewPooledTransport(s TransportSettings) *http.Transport {
+	s = s.Normalized()
 	return &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		MaxConnsPerHost:     100,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        s.MaxIdleConns,
+		MaxIdleConnsPerHost: s.MaxIdleConnsPerHost,
+		MaxConnsPerHost:     s.MaxConnsPerHost,
+		IdleConnTimeout:     s.IdleConnTimeout,
+		TLSHandshakeTimeout: s.TLSHandshakeTimeout,
 		DisableCompression:  false,
 	}
 }
 
-var sharedTransport = NewPooledTransport()
+var (
+	sharedTransportOnce sync.Once
+	sharedTransport     *http.Transport
+)
 
-// SharedTransport returns the application-wide shared HTTP transport.
+// ConfigureSharedTransport sets up the process-wide pooled transport. Safe to
+// call once at startup; subsequent calls are ignored. Tests that need a fresh
+// transport should construct their own via NewPooledTransport.
+func ConfigureSharedTransport(s TransportSettings) {
+	sharedTransportOnce.Do(func() {
+		sharedTransport = NewPooledTransport(s)
+	})
+}
+
+// SharedTransport returns the application-wide shared HTTP transport, lazily
+// initializing with defaults when ConfigureSharedTransport was never called.
 func SharedTransport() *http.Transport {
+	if sharedTransport == nil {
+		sharedTransportOnce.Do(func() {
+			sharedTransport = NewPooledTransport(TransportSettings{})
+		})
+	}
 	return sharedTransport
 }

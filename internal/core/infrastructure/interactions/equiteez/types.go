@@ -58,6 +58,7 @@ type OrderbookCurrency struct {
 // EquiteezOrderbook is one orderbook row nested under token.orderbooks (matches indexer orderbook table).
 type EquiteezOrderbook struct {
 	Address          string              `json:"address"`
+	InAllowlist      bool                `json:"in_allowlist"`
 	LastMatchedPrice FlexibleFloat       `json:"last_matched_price"`
 	LowestSellPrice  FlexibleFloat       `json:"lowest_sell_price"`
 	HighestBuyPrice  FlexibleFloat       `json:"highest_buy_price"`
@@ -66,10 +67,20 @@ type EquiteezOrderbook struct {
 	Currencies       []OrderbookCurrency `json:"currencies"`
 }
 
+// QuoteSymbol returns the human-readable currency name for the orderbook
+// (the first row of `currencies`); empty when not reported.
+func (o *EquiteezOrderbook) QuoteSymbol() string {
+	if o == nil || len(o.Currencies) == 0 {
+		return ""
+	}
+	return o.Currencies[0].CurrencyName
+}
+
 // TokenWithOrderbooks is one token row from the tokensWithOrderbooks GraphQL query.
 type TokenWithOrderbooks struct {
 	Address       string              `json:"address"`
 	TokenID       int                 `json:"token_id"`
+	InAllowlist   bool                `json:"in_allowlist"`
 	TokenMetadata json.RawMessage     `json:"token_metadata"`
 	TokenStandard *int                `json:"token_standard,omitempty"`
 	Metadata      json.RawMessage     `json:"metadata,omitempty"`

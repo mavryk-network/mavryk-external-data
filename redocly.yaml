@@ -1,0 +1,34 @@
+# Redocly CLI config — drives both `make openapi-lint` locally and the
+# `openapi-lint` job in .github/workflows/main.yml. The spec file path is
+# also passed explicitly to redocly so older CLI versions that don't auto-
+# resolve `apis.default` keep working — `apis:` here is for future tooling
+# and `redocly bundle`/`redocly preview-docs`.
+#
+# Docs: https://redocly.com/docs/cli/configuration/
+
+apis:
+  default:
+    root: docs/openapi.yaml
+
+extends:
+  - recommended
+
+rules:
+  # No auth scheme yet — service runs on an internal network. Demote to warn
+  # so the rule nags but doesn't fail CI; flip back to `error` once a
+  # `security` block lands on the spec.
+  security-defined: warn
+
+  # localhost in `servers:` is intentional for the dev URL; production is a
+  # separate {host} variable on the same list.
+  no-server-example.com: 'off'
+  no-server-trailing-slash: warn
+
+  # Health/metrics/probe endpoints have no documented 4xx behaviour by
+  # design (auth is via network policy, not API). Demote so they don't have
+  # to ship fake error responses just to satisfy the linter.
+  operation-4xx-response: warn
+
+  # Multi-line summaries with terminal periods are fine for our handful of
+  # operations.
+  operation-summary: warn

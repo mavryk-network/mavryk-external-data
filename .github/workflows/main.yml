@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.21.x'
+  GO_VERSION: '1.24.x'
 
 jobs:
   lint-build:
@@ -38,22 +38,70 @@ jobs:
       - name: Go version
         run: go version
 
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5.0
 
-      - name: Test
-        run: go test ./... -v
+      - name: Test (race + coverage)
+        run: |
+          go test -race -timeout 10m -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out | tail -5
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
 
       - name: Build binary
-        run: go build ./cmd/quotes
+        run: go build -trimpath -ldflags "-w -s" ./cmd/quotes
+
+  openapi-lint:
+    name: OpenAPI lint (Redocly)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node is preinstalled on ubuntu-latest; setup-node pins the version
+      # and gives us a clean PATH. We could also use `docker://redocly/cli`
+      # via uses: but setup-node + npx is faster and more transparent.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Cache the global npm dir so npx doesn't redownload @redocly/cli
+      # every run. The key is intentionally version-bumped only on
+      # @redocly/cli major upgrades — otherwise we'd thrash the cache.
+      - name: Cache @redocly/cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-redocly-cli-v1
+
+      # `.redocly.yaml` at the repo root holds the rule overrides; the
+      # spec path is passed explicitly so older redocly versions that
+      # don't auto-resolve `apis.default` still work. Identical command
+      # to `make openapi-lint`.
+      - name: Lint OpenAPI spec
+        run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
 
   docker-publish:
     name: Build and Publish Docker Image
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [lint-build]
+    needs: [lint-build, openapi-lint]
     env:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       IMAGE_NAME: ${{ secrets.DOCKER_IMAGE_NAME }}

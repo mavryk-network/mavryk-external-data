@@ -1,19 +1,9 @@
-// @title           Mavryk External Data API
-// @version         1.0
-// @description     High-performance Go service for collecting and serving cryptocurrency quotes (MVRK, USDT, and more)
-// @termsOfService  http://swagger.io/terms/
-
-// @contact.name   API Support
-// @contact.url    http://www.swagger.io/support
-// @contact.email  support@swagger.io
-
-// @license.name  Apache 2.0
-// @license.url   http://www.apache.org/licenses/LICENSE-2.0.html
-
-// @BasePath  /
-// @schemes   http https
-// (No fixed @host — Swagger UI calls the same origin as /swagger, so Try it works over port-forward and on non-localhost URLs.)
-
+// Command quotes is the entry point for the mavryk-external-data service.
+//
+// API documentation lives in [docs/openapi.yaml] (OpenAPI 3.0); the spec and
+// Swagger UI are served at /openapi.yaml and /docs respectively. We removed
+// swaggo/swag (which only emits Swagger 2.0) along with the dependency tree
+// it pulled in — see docs/adr/0011-openapi-3-hand-written.md.
 package main
 
 import (
@@ -22,69 +12,132 @@ import (
 	stdhttp "net/http"
 	"os"
 	"os/signal"
-	"quotes/internal/config"
-	"quotes/internal/core/api/http"
-	"quotes/internal/core/infrastructure/jobs"
-	"quotes/internal/core/infrastructure/responsecache"
-	"quotes/internal/core/infrastructure/storage"
-	"quotes/internal/logging"
+	"strings"
 	"syscall"
 	"time"
 
-	_ "quotes/docs" // Swagger documentation
+	"quotes/internal/config"
+	httpapp "quotes/internal/core/api/http"
+	apiprices "quotes/internal/core/application/prices"
+	"quotes/internal/core/domain/prices"
+	"quotes/internal/core/infrastructure/httpclient"
+	"quotes/internal/core/infrastructure/jobs"
+	"quotes/internal/core/infrastructure/storage"
+	"quotes/internal/core/infrastructure/storage/repositories"
+	"quotes/internal/logging"
+	"quotes/internal/metrics"
+
+	"github.com/rs/zerolog"
 )
 
 func main() {
 	os.Exit(run())
 }
 
-// run contains the full process lifecycle so defers (e.g. DB close) always run and
-// HTTP listen errors can exit with code 1 without log.Fatalf (which would skip defers).
+// run is split out so defers (DB close, etc.) run on every exit path. log.Fatalf
+// would skip them.
 func run() int {
 	logger := logging.NewLogger()
 
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
-		logger.Error().Err(err).Msg("failed_to_load_configuration")
+		logger.Error().Err(err).Msg("config_load_failed")
 		return 1
 	}
+	warnDevDefaults(cfg, logger)
+
+	httpclient.ConfigureSharedTransport(httpclient.TransportSettings{
+		MaxIdleConns:        cfg.API.TransportMaxIdleConns,
+		MaxIdleConnsPerHost: cfg.API.TransportMaxIdleConnsPerHost,
+		MaxConnsPerHost:     cfg.API.TransportMaxConnsPerHost,
+		IdleConnTimeout:     cfg.API.TransportIdleConnTimeout.D(),
+		TLSHandshakeTimeout: cfg.API.TransportTLSHandshakeTimeout.D(),
+	})
 
 	db, err := storage.NewDB(cfg, logger)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed_to_connect_database")
+		logger.Error().Err(err).Msg("db_connect_failed")
 		return 1
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
-			logger.Error().Err(err).Msg("database_close_error")
+			logger.Error().Err(err).Msg("db_close_failed")
 		}
 	}()
 
-	var quoteResponseCache *responsecache.Cache
-	if cfg.Server.LatestQuoteCacheTTLSeconds > 0 {
-		quoteResponseCache = responsecache.New(time.Duration(cfg.Server.LatestQuoteCacheTTLSeconds) * time.Second)
+	// Bootstrap: lookup-tables drive the runtime token/source registries. Without
+	// this, prices.NewToken("mvrk") fails because the registry is empty.
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	lookup := repositories.NewLookupRepository(db.DB)
+	tokens, err := lookup.Tokens(bootstrapCtx)
+	bootstrapCancel()
+	if err != nil {
+		logger.Error().Err(err).Msg("registry_bootstrap_failed")
+		return 1
 	}
+	if len(tokens) == 0 {
+		logger.Warn().Msg("token_registry_empty_check_seed_migration")
+	}
+	prices.RegisterTokens(tokens)
 
-	httpApp := http.NewApp(cfg, db.DB, logger, quoteResponseCache)
+	// Repositories: storage layer. Batch size from config (with safe fallback).
+	batch := storage.BatchSize(cfg)
+	tokenRepo := repositories.NewTokenPriceRepository(db.DB).WithBatchSize(batch)
+	rwaRepo := repositories.NewRWAPriceRepository(db.DB).WithBatchSize(batch)
+	stateRepo := repositories.NewBackfillStateRepository(db.DB)
 
-	backfillJob := jobs.NewBackfillJob(cfg, db.DB, logger, quoteResponseCache)
-	liveJob := jobs.NewLiveQuotesJob(cfg, db.DB, logger, quoteResponseCache)
+	// Application repositories: cache decorator on top, used by HTTP and by jobs
+	// (jobs write through, decorator invalidates).
+	cacheTTL := time.Duration(cfg.Server.LatestQuoteCacheTTLSeconds) * time.Second
+	tokenAppRepo := apiprices.NewCachedRepository(tokenRepoAdapter{tokenRepo}, cacheTTL)
+	rwaAppRepo := apiprices.NewCachedRepository(rwaRepoAdapter{rwaRepo}, cacheTTL)
+
+	httpApp := httpapp.NewApp(httpapp.AppDeps{
+		Config:          cfg,
+		DB:              db.DB,
+		Logger:          logger,
+		TokenPriceQuery: tokenAppRepo,
+		RWAPriceQuery:   rwaAppRepo,
+		TokenPriceRepo:  tokenRepo,
+	})
+
+	liveJob := jobs.NewCoinGeckoLiveJob(cfg, tokenAppRepo, logger)
+	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
+	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	stopPoolCollector := metrics.StartDBPoolCollector(ctx, db.DB, 15*time.Second)
+	defer stopPoolCollector()
+
 	serverErrors := make(chan error, 1)
 	go func() {
-		err := httpApp.Run()
-		if err != nil && !errors.Is(err, stdhttp.ErrServerClosed) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error().Interface("panic", r).Msg("http_server_panic")
+				serverErrors <- errors.New("http server panic")
+			}
+		}()
+		if err := httpApp.Run(); err != nil && !errors.Is(err, stdhttp.ErrServerClosed) {
 			serverErrors <- err
 		}
 	}()
 
-	// Backfill runs first (blocks until historical catch-up is complete or disabled),
-	// then the live ticker starts. Both share the same "coingecko" rate-limit bucket.
-	backfillJob.Start(ctx)
 	liveJob.Start(ctx)
+	backfillJob.Start(ctx)
+
+	// Discovery: pull the current Equiteez allowlist into rwa_pairs before the
+	// collector reads from it. Failure here logs but doesn't block startup —
+	// the collector falls back to whatever is already in DB (operator's manual
+	// rows, previous sync). When `rwa.enabled=false` SyncRWAPairs is a no-op.
+	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+	if _, err := jobs.SyncRWAPairs(syncCtx, cfg, lookup, logger); err != nil {
+		logger.Error().Err(err).Msg("rwa_pair_sync_failed_continuing")
+	}
+	syncCancel()
+
+	rwaJob.Start(ctx)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -98,24 +151,80 @@ func run() int {
 		logger.Error().Err(err).Msg("http_server_failed")
 	}
 
-	logger.Info().Msg("shutting_down_server")
-
-	// Cancel background work first; goroutines observe ctx.Done() and exit their loops.
+	logger.Info().Msg("shutting_down")
+	// Phase 1 — drain: flip /readyz to 503 so a load balancer pulls us out of
+	// rotation before we stop accepting new connections.
+	httpApp.StartDraining()
+	if cfg.Server.ShutdownDrainSeconds > 0 {
+		drain := time.Duration(cfg.Server.ShutdownDrainSeconds) * time.Second
+		logger.Info().Dur("drain", drain).Msg("readyz_draining")
+		select {
+		case <-time.After(drain):
+		case <-quit:
+			// second signal — abort the drain
+		}
+	}
+	// Phase 2 — stop background work and HTTP server.
 	cancel()
 	liveJob.Stop()
 	backfillJob.Stop()
+	rwaJob.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
-
 	if err := httpApp.Server().Shutdown(shutdownCtx); err != nil {
-		logger.Error().Err(err).Msg("http_server_shutdown_error")
+		logger.Error().Err(err).Msg("http_shutdown_error")
 	} else {
-		logger.Info().Msg("http_server_shutdown_complete")
+		logger.Info().Msg("http_shutdown_complete")
 	}
 
 	if listenErr != nil {
 		return 1
 	}
 	return 0
+}
+
+// warnDevDefaults logs warnings when production-looking config (gin_mode=release)
+// still leans on dev defaults that wouldn't survive an audit. Hard rejects (e.g.
+// default postgres password) live in Validate; here we only nudge.
+func warnDevDefaults(cfg *config.Config, logger *zerolog.Logger) {
+	if !strings.EqualFold(strings.TrimSpace(cfg.Server.GinMode), "release") {
+		return
+	}
+	for _, o := range cfg.Server.CORS.AllowedOrigins {
+		s := strings.ToLower(strings.TrimSpace(o))
+		if strings.Contains(s, "localhost") || strings.Contains(s, "127.0.0.1") {
+			logger.Warn().
+				Strs("cors_allowed_origins", cfg.Server.CORS.AllowedOrigins).
+				Msg("dev_cors_origin_in_release_mode")
+			break
+		}
+	}
+	if cfg.Server.RateLimit.RPS <= 0 {
+		logger.Warn().Msg("inbound_rate_limit_disabled_in_release_mode")
+	}
+}
+
+// tokenRepoAdapter and rwaRepoAdapter let the concrete repos satisfy
+// apiprices.Repository without importing the application package.
+type tokenRepoAdapter struct {
+	r *repositories.TokenPriceRepository
+}
+
+func (a tokenRepoAdapter) Save(ctx context.Context, points []prices.PricePoint) (int64, error) {
+	return a.r.Save(ctx, points)
+}
+func (a tokenRepoAdapter) Query(ctx context.Context, q prices.Query) ([]prices.PricePoint, error) {
+	return a.r.Query(ctx, q)
+}
+
+type rwaRepoAdapter struct {
+	r *repositories.RWAPriceRepository
+}
+
+func (a rwaRepoAdapter) Save(ctx context.Context, points []prices.PricePoint) (int64, error) {
+	return a.r.Save(ctx, points)
+}
+func (a rwaRepoAdapter) Query(ctx context.Context, q prices.Query) ([]prices.PricePoint, error) {
+	return a.r.Query(ctx, q)
 }

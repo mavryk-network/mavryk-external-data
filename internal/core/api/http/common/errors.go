@@ -53,8 +53,3 @@ func RespondError(c *gin.Context, err error) {
 func RespondErrorWithStatus(c *gin.Context, status int, code coreerrors.Code, message string) {
 	c.JSON(status, ErrorResponse{Code: string(code), Message: message})
 }
-
-// RespondBindingError maps binding / parse failures to INVALID_ARGUMENT without echoing raw parser internals.
-func RespondBindingError(c *gin.Context, _ error) {
-	RespondError(c, coreerrors.InvalidArgument("Invalid request parameters"))
-}

@@ -209,10 +209,29 @@ func newCircuitBreakerRoundTripper(s ResilienceSettings, next http.RoundTripper)
 	comp := s.Component
 	st.OnStateChange = func(_ string, from gobreaker.State, to gobreaker.State) {
 		metrics.OutboundHTTPCircuitBreakerTransitionsTotal.WithLabelValues(comp, from.String(), to.String()).Inc()
+		metrics.OutboundHTTPCircuitBreakerState.WithLabelValues(comp).Set(cbStateValue(to))
 	}
+	// Initial state — gobreaker starts closed; record so the gauge isn't blank
+	// until the first failure.
+	metrics.OutboundHTTPCircuitBreakerState.WithLabelValues(comp).Set(cbStateValue(gobreaker.StateClosed))
 	return &circuitBreakerRoundTripper{
 		cb:   gobreaker.NewCircuitBreaker(st),
 		next: next,
+	}
+}
+
+// cbStateValue maps gobreaker states to numeric gauge values so dashboards can
+// render "current state" without joining transition counters.
+//
+//	0 = closed, 1 = open, 2 = half-open
+func cbStateValue(s gobreaker.State) float64 {
+	switch s {
+	case gobreaker.StateOpen:
+		return 1
+	case gobreaker.StateHalfOpen:
+		return 2
+	default:
+		return 0
 	}
 }
 

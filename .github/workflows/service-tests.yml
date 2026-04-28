@@ -31,7 +31,7 @@ on:
         value: ${{ jobs.test.outputs.test-result }}
 
 env:
-  GO_VERSION: '1.21.x'
+  GO_VERSION: '1.24.x'
 
   # Server configuration
   SERVER_PORT:  ${{ vars.SERVER_PORT }}
@@ -103,4 +103,4 @@ jobs:
       - name: Run Go tests
         id: test
         run: |
-          go test ./... -v
+          go test -race -timeout 10m ./... -v
