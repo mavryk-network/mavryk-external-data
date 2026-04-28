@@ -57,6 +57,10 @@ func mapDomainError(err error) error {
 	case stderrors.Is(err, prices.ErrSourceNotFound):
 		return coreerrors.NotFound("Source not found")
 	}
+	var ambig *prices.PairAmbiguousError
+	if stderrors.As(err, &ambig) {
+		return coreerrors.Conflict(ambig.Error(), map[string]any{"pair_ids": ambig.IDs})
+	}
 	var ce *coreerrors.Error
 	if stderrors.As(err, &ce) {
 		return ce

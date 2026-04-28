@@ -72,6 +72,41 @@ func (r *LookupRepository) LookupRWAPair(ctx context.Context, id int64) (prices.
 	return entityToRWAPair(e), nil
 }
 
+// LookupRWAPairBySymbol returns the single enabled pair matching
+// (base, quote) ignoring case. Returns:
+//
+//   - prices.ErrPairNotFound        — no enabled row matches.
+//   - *prices.PairAmbiguousError    — 2+ enabled rows share the same
+//     (base, quote); the IDs slice is populated for the caller to
+//     surface to the operator.
+//
+// `base` and `quote` must already be lowercased by the caller.
+func (r *LookupRepository) LookupRWAPairBySymbol(ctx context.Context, base, quote string) (prices.RWAPair, error) {
+	var rows []entities.RWAPairEntity
+	err := r.db.WithContext(ctx).
+		Where("LOWER(base_symbol) = ?", base).
+		Where("LOWER(quote_symbol) = ?", quote).
+		Where("enabled = ?", true).
+		Order("id").
+		Limit(2). // LIMIT 2 = enough to detect a collision.
+		Find(&rows).Error
+	if err != nil {
+		return prices.RWAPair{}, fmt.Errorf("lookup rwa_pair by symbol %s-%s: %w", base, quote, err)
+	}
+	switch len(rows) {
+	case 0:
+		return prices.RWAPair{}, prices.ErrPairNotFound
+	case 1:
+		return entityToRWAPair(rows[0]), nil
+	default:
+		return prices.RWAPair{}, &prices.PairAmbiguousError{
+			Base:  base,
+			Quote: quote,
+			IDs:   []int64{rows[0].ID, rows[1].ID},
+		}
+	}
+}
+
 // UpsertRWAPair finds-or-creates by `(source_code, orderbook_addr)` and
 // updates metadata + `last_synced_at`. Returns the persisted ID.
 //

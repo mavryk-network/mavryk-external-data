@@ -27,8 +27,8 @@ type RouterDeps struct {
 //	/v1/prices/:token        — list (range or latest)
 //	/v1/prices/:token/latest — transposed snapshot
 //	/v1/prices/:token/count  — total row count
-//	/v1/rwa/:pair_id         — list (range or latest)
-//	/v1/rwa/:pair_id/latest  — transposed snapshot
+//	/v1/rwa/:symbol          — list (range or latest); symbol = {base}-{quote}
+//	/v1/rwa/:symbol/latest   — transposed snapshot
 func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 	engine.GET("/healthz", handlers.Liveness())
 	engine.GET("/readyz", handlers.Readiness(deps.DB, deps.ReadinessGate))
@@ -49,8 +49,8 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 		}
 		rwa := v1.Group("/rwa")
 		{
-			rwa.GET("/:pair_id", deps.RWAPrice.ListByPair())
-			rwa.GET("/:pair_id/latest", deps.RWAPrice.LatestByPair())
+			rwa.GET("/:symbol", deps.RWAPrice.ListBySymbol())
+			rwa.GET("/:symbol/latest", deps.RWAPrice.LatestBySymbol())
 		}
 	}
 }

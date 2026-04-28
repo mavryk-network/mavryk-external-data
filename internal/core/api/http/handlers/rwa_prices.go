@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	stderrors "errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,17 +17,22 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// PairLookup is the read-only contract handlers need to resolve `pair_id` →
-// `quote_symbol` for the multi-currency `?in=` flow.
+// maxSymbolLen caps `{base}-{quote}` URL length defensively. Sync produces
+// short tickers; anything longer is gateway-grade input noise.
+const maxSymbolLen = 64
+
+// PairLookup is the read-only contract handlers need to resolve a pair
+// `{base}-{quote}` symbol into the canonical RWAPair (used for both the
+// price query EntityKey and the `?in=` quote-token resolution).
 type PairLookup interface {
-	LookupRWAPair(ctx context.Context, id int64) (prices.RWAPair, error)
+	LookupRWAPairBySymbol(ctx context.Context, base, quote string) (prices.RWAPair, error)
 }
 
 // RWAPriceDeps wires the RWA-side dependencies.
 type RWAPriceDeps struct {
 	Service       apiprices.QueryService
+	Lookup        PairLookup       // required: resolves `{base}-{quote}` -> RWAPair
 	Converter     apiprices.PriceConverter // optional; when nil, `?in=` returns 400
-	Lookup        PairLookup               // optional; required only when Converter is set
 	DefaultSource prices.Source            // typically prices.SourceEquiteez
 	MaxLimit      int
 	DefaultLimit  int
@@ -37,20 +41,20 @@ type RWAPriceDeps struct {
 	MaxInCurrencies int
 }
 
-// ListByPair — GET /v1/rwa/:pair_id
+// ListBySymbol — GET /v1/rwa/:symbol
 //
+// `:symbol` is `{base}-{quote}` (case-insensitive), e.g. `mars1-usdt`.
 // Optional `?in=usd,eur` adds a per-row `in` map with converted prices.
-func (d RWAPriceDeps) ListByPair() gin.HandlerFunc {
+func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 	type request struct {
-		PairID    int64
+		Pair      prices.RWAPair
 		Query     prices.Query
 		InTargets []prices.Currency
 	}
 	bind := func(c *gin.Context) (request, error) {
-		raw := strings.TrimSpace(c.Param("pair_id"))
-		pid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || pid <= 0 {
-			return request{}, coreerrors.InvalidArgument("pair_id must be a positive integer")
+		pair, err := d.resolvePairFromPath(c)
+		if err != nil {
+			return request{}, err
 		}
 		opts := common.QueryOptions{
 			MaxLimit:           d.MaxLimit,
@@ -71,10 +75,10 @@ func (d RWAPriceDeps) ListByPair() gin.HandlerFunc {
 			return request{}, err
 		}
 		return request{
-			PairID: pid,
+			Pair: pair,
 			Query: prices.Query{
 				Source:    d.DefaultSource,
-				EntityKey: strconv.FormatInt(pid, 10),
+				EntityKey: pair.EntityKey(),
 				Metrics:   pq.Metrics,
 				From:      pq.From,
 				To:        pq.To,
@@ -98,11 +102,7 @@ func (d RWAPriceDeps) ListByPair() gin.HandlerFunc {
 		var quoteToken prices.Token
 		var quoteResolved bool
 		if len(req.InTargets) > 0 {
-			t, ok, err := d.resolveQuoteToken(ctx, req.PairID)
-			if err != nil {
-				return nil, err
-			}
-			quoteToken, quoteResolved = t, ok
+			quoteToken, quoteResolved = promoteQuoteToken(req.Pair.QuoteSymbol)
 		}
 		out := make([]pointDTO, len(points))
 		for i, p := range points {
@@ -122,30 +122,29 @@ func (d RWAPriceDeps) ListByPair() gin.HandlerFunc {
 	return common.Wrap(bind, action)
 }
 
-// LatestByPair — GET /v1/rwa/:pair_id/latest
+// LatestBySymbol — GET /v1/rwa/:symbol/latest
 //
 // Optional `?in=usd,eur,aed` adds a transposed `in` block per currency.
-func (d RWAPriceDeps) LatestByPair() gin.HandlerFunc {
+func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	type request struct {
-		PairID    int64
+		Pair      prices.RWAPair
 		Query     prices.Query
 		InTargets []prices.Currency
 	}
 	bind := func(c *gin.Context) (request, error) {
-		raw := strings.TrimSpace(c.Param("pair_id"))
-		pid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || pid <= 0 {
-			return request{}, coreerrors.InvalidArgument("pair_id must be a positive integer")
+		pair, err := d.resolvePairFromPath(c)
+		if err != nil {
+			return request{}, err
 		}
 		inTargets, err := d.parseInQuery(c)
 		if err != nil {
 			return request{}, err
 		}
 		return request{
-			PairID: pid,
+			Pair: pair,
 			Query: prices.Query{
 				Source:    d.DefaultSource,
-				EntityKey: strconv.FormatInt(pid, 10),
+				EntityKey: pair.EntityKey(),
 			},
 			InTargets: inTargets,
 		}, nil
@@ -168,10 +167,7 @@ func (d RWAPriceDeps) LatestByPair() gin.HandlerFunc {
 		if len(req.InTargets) == 0 {
 			return dto, nil
 		}
-		quoteToken, quoteResolved, err := d.resolveQuoteToken(ctx, req.PairID)
-		if err != nil {
-			return snapshotDTO{}, err
-		}
+		quoteToken, quoteResolved := promoteQuoteToken(req.Pair.QuoteSymbol)
 		if quoteResolved {
 			dto.NativeQuote = string(quoteToken)
 		}
@@ -218,6 +214,55 @@ type fxMetaDTO struct {
 
 // --- internal helpers ---
 
+// resolvePairFromPath parses `:symbol` and resolves it to a single enabled
+// RWAPair. Returns:
+//   - 400 INVALID_ARGUMENT — symbol does not parse as `{base}-{quote}`.
+//   - 404 NOT_FOUND        — no enabled pair matches (via ErrPairNotFound).
+//   - 409 CONFLICT         — 2+ enabled pairs match (via PairAmbiguousError;
+//     mapped to coreerrors.Conflict in common.mapDomainError, with pair_ids
+//     surfaced in the response details).
+func (d RWAPriceDeps) resolvePairFromPath(c *gin.Context) (prices.RWAPair, error) {
+	raw := c.Param("symbol")
+	base, quote, ok := parseRWASymbol(raw)
+	if !ok {
+		return prices.RWAPair{}, coreerrors.InvalidArgument(
+			"symbol must be {base}-{quote}, e.g. mars1-usdt")
+	}
+	return d.Lookup.LookupRWAPairBySymbol(c.Request.Context(), base, quote)
+}
+
+// parseRWASymbol splits `{base}-{quote}` on the LAST hyphen so that future
+// dashes inside `base_symbol` (e.g. `X-AT-USDT`) keep parsing. Returns
+// lowercased components for case-insensitive SQL comparison.
+func parseRWASymbol(s string) (base, quote string, ok bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > maxSymbolLen {
+		return "", "", false
+	}
+	i := strings.LastIndex(s, "-")
+	if i <= 0 || i == len(s)-1 {
+		return "", "", false
+	}
+	base = strings.ToLower(strings.TrimSpace(s[:i]))
+	quote = strings.ToLower(strings.TrimSpace(s[i+1:]))
+	if base == "" || quote == "" {
+		return "", "", false
+	}
+	return base, quote, true
+}
+
+// promoteQuoteToken tries to lift the pair's quote_symbol into a registered
+// Token. Returns (zero, false) when the symbol is unregistered — handler
+// renders this as `fx.error: "quote_currency_not_in_registry"` per `?in=`
+// target rather than failing the whole response.
+func promoteQuoteToken(quoteSymbol string) (prices.Token, bool) {
+	t, err := prices.NewToken(quoteSymbol)
+	if err != nil {
+		return "", false
+	}
+	return t, true
+}
+
 // parseInQuery validates the comma-separated `?in=` parameter against
 // `prices.NewCurrency`. Empty / missing returns nil. Unknown values OR
 // requests larger than MaxInCurrencies fail with 400 INVALID_ARGUMENT.
@@ -246,25 +291,6 @@ func (d RWAPriceDeps) parseInQuery(c *gin.Context) ([]prices.Currency, error) {
 		out = append(out, cur)
 	}
 	return out, nil
-}
-
-// resolveQuoteToken loads the pair from the lookup repository and tries to
-// promote `quote_symbol` into a registered Token. Returns (token, true,
-// nil) only when the pair exists AND its quote_symbol is registered.
-//
-//   - Pair not found → 404 (propagated through Wrap).
-//   - Quote symbol unregistered → (zero, false, nil) — handler then renders
-//     `fx.error: "quote_currency_not_in_registry"` per `?in=` target.
-func (d RWAPriceDeps) resolveQuoteToken(ctx context.Context, pairID int64) (prices.Token, bool, error) {
-	pair, err := d.Lookup.LookupRWAPair(ctx, pairID)
-	if err != nil {
-		return "", false, err
-	}
-	t, err := prices.NewToken(pair.QuoteSymbol)
-	if err != nil {
-		return "", false, nil
-	}
-	return t, true, nil
 }
 
 // convertSnapshotBlock builds one `in.<currency>` block for /latest.

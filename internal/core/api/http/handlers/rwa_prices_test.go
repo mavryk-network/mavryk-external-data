@@ -17,16 +17,19 @@ import (
 )
 
 // stubLookup satisfies handlers.PairLookup. Returns the configured pair for
-// any ID; tracks requested ID so tests can assert.
+// any (base, quote); tracks call count + last (base, quote) so tests can
+// assert (a) which symbol was looked up and (b) that the handler does not
+// double-resolve.
 type stubLookup struct {
-	pair  prices.RWAPair
-	err   error
-	gotID int64
-	calls int
+	pair     prices.RWAPair
+	err      error
+	gotBase  string
+	gotQuote string
+	calls    int
 }
 
-func (s *stubLookup) LookupRWAPair(_ context.Context, id int64) (prices.RWAPair, error) {
-	s.gotID = id
+func (s *stubLookup) LookupRWAPairBySymbol(_ context.Context, base, quote string) (prices.RWAPair, error) {
+	s.gotBase, s.gotQuote = base, quote
 	s.calls++
 	if s.err != nil {
 		return prices.RWAPair{}, s.err
@@ -65,53 +68,84 @@ func (s *stubConverter) Convert(
 func newRWAEngine(_ *testing.T, deps RWAPriceDeps) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/v1/rwa/:pair_id", deps.ListByPair())
-	r.GET("/v1/rwa/:pair_id/latest", deps.LatestByPair())
+	r.GET("/v1/rwa/:symbol", deps.ListBySymbol())
+	r.GET("/v1/rwa/:symbol/latest", deps.LatestBySymbol())
 	return r
 }
 
-func TestRWA_NonNumericPairID_400(t *testing.T) {
-	deps := RWAPriceDeps{
-		Service:       &stubQueryService{},
-		DefaultSource: prices.SourceEquiteez,
+// --- Symbol parsing / bind layer ---
+
+func TestParseRWASymbol(t *testing.T) {
+	cases := []struct {
+		in            string
+		base, quote   string
+		ok            bool
+	}{
+		{"mars1-usdt", "mars1", "usdt", true},
+		{"MARS1-USDT", "mars1", "usdt", true},   // uppercased lowered
+		{" Mars1-USDT ", "mars1", "usdt", true}, // trimmed
+		{"x-at-usdt", "x-at", "usdt", true},     // split on LAST hyphen
+		{"a-b", "a", "b", true},
+		{"", "", "", false},                                       // empty
+		{"mars1", "", "", false},                                  // no hyphen
+		{"-usdt", "", "", false},                                  // empty base
+		{"mars1-", "", "", false},                                 // empty quote
+		{string(make([]byte, maxSymbolLen+1)), "", "", false},     // too long
 	}
-	r := newRWAEngine(t, deps)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/abc", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", w.Code)
+	for _, c := range cases {
+		base, quote, ok := parseRWASymbol(c.in)
+		if ok != c.ok || base != c.base || quote != c.quote {
+			t.Errorf("parseRWASymbol(%q) = (%q,%q,%v), want (%q,%q,%v)",
+				c.in, base, quote, ok, c.base, c.quote, c.ok)
+		}
 	}
 }
 
-func TestRWA_NegativePairID_400(t *testing.T) {
+func TestRWA_BadSymbolFormat_400(t *testing.T) {
 	deps := RWAPriceDeps{
 		Service:       &stubQueryService{},
+		Lookup:        &stubLookup{},
 		DefaultSource: prices.SourceEquiteez,
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/0", nil)
+	for _, path := range []string{"/v1/rwa/mars1", "/v1/rwa/-usdt", "/v1/rwa/mars1-"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", path, w.Code)
+		}
+	}
+}
+
+// Numeric path (`/v1/rwa/42`) — historical pair_id form — must be rejected
+// as a malformed symbol now that the route is symbol-only.
+func TestRWA_NumericPath_400(t *testing.T) {
+	deps := RWAPriceDeps{
+		Service:       &stubQueryService{},
+		Lookup:        &stubLookup{},
+		DefaultSource: prices.SourceEquiteez,
+	}
+	r := newRWAEngine(t, deps)
+
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/42", nil))
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for pair_id=0", w.Code)
+		t.Errorf("status = %d, want 400 for numeric path (no hyphen)", w.Code)
 	}
 }
 
 func TestRWA_BadSide_400(t *testing.T) {
 	deps := RWAPriceDeps{
 		Service:       &stubQueryService{},
+		Lookup:        &stubLookup{pair: prices.RWAPair{ID: 42, QuoteSymbol: "USDT"}},
 		DefaultSource: prices.SourceEquiteez,
 		MaxLimit:      1000,
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/123?side=foo", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt?side=foo", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for unknown side", w.Code)
 	}
@@ -119,16 +153,67 @@ func TestRWA_BadSide_400(t *testing.T) {
 
 func TestRWA_LatestNoData_404(t *testing.T) {
 	deps := RWAPriceDeps{
-		Service:       &stubQueryService{},
+		Service:       &stubQueryService{}, // empty points
+		Lookup:        &stubLookup{pair: prices.RWAPair{ID: 42, QuoteSymbol: "USDT"}},
 		DefaultSource: prices.SourceEquiteez,
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/123/latest", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt/latest", nil))
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+// Pair lookup returns ErrPairNotFound → 404.
+func TestRWA_SymbolNotFound_404(t *testing.T) {
+	deps := RWAPriceDeps{
+		Service:       &stubQueryService{},
+		Lookup:        &stubLookup{err: prices.ErrPairNotFound},
+		DefaultSource: prices.SourceEquiteez,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/unknown-usdt/latest", nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for unknown symbol", w.Code)
+	}
+}
+
+// Pair lookup returns *PairAmbiguousError → 409 with `details.pair_ids` populated.
+func TestRWA_SymbolAmbiguous_409(t *testing.T) {
+	lookup := &stubLookup{err: &prices.PairAmbiguousError{
+		Base: "mars1", Quote: "usdt", IDs: []int64{42, 77},
+	}}
+	deps := RWAPriceDeps{
+		Service:       &stubQueryService{},
+		Lookup:        lookup,
+		DefaultSource: prices.SourceEquiteez,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt", nil))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 for ambiguous symbol; body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Details struct {
+			PairIDs []int64 `json:"pair_ids"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, w.Body.String())
+	}
+	if got.Code != "CONFLICT" {
+		t.Errorf("code = %q, want CONFLICT", got.Code)
+	}
+	if len(got.Details.PairIDs) != 2 || got.Details.PairIDs[0] != 42 || got.Details.PairIDs[1] != 77 {
+		t.Errorf("details.pair_ids = %v, want [42,77]", got.Details.PairIDs)
 	}
 }
 
@@ -161,17 +246,17 @@ func rwaSnapshotForTests(t *testing.T) (*stubQueryService, *stubLookup) {
 }
 
 func TestRWA_Latest_InNotEnabled_400(t *testing.T) {
-	svc, _ := rwaSnapshotForTests(t)
+	svc, lookup := rwaSnapshotForTests(t)
 	deps := RWAPriceDeps{
 		Service:       svc,
+		Lookup:        lookup,
 		DefaultSource: prices.SourceEquiteez,
-		// No Converter / Lookup → ?in= must be rejected.
+		// No Converter → ?in= must be rejected.
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=usd", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=usd", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 when ?in= used without converter wired", w.Code)
 	}
@@ -188,9 +273,8 @@ func TestRWA_Latest_BadInCurrency_400(t *testing.T) {
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=xyz", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=xyz", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for unknown ?in= currency", w.Code)
 	}
@@ -207,9 +291,8 @@ func TestRWA_Latest_TooManyInCurrencies_400(t *testing.T) {
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=usd,eur,gbp", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=usd,eur,gbp", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 when ?in= exceeds MaxInCurrencies", w.Code)
 	}
@@ -217,6 +300,8 @@ func TestRWA_Latest_TooManyInCurrencies_400(t *testing.T) {
 
 // TestRWA_Latest_InUSD_Success — happy path: USDT pair → USD with rate 1.0001.
 // Verifies the response shape: native_quote, values, in.usd.values, in.usd.fx.
+// Also verifies that the symbol resolver fires exactly once per request (no
+// double-lookup that the legacy ?in= flow had).
 func TestRWA_Latest_InUSD_Success(t *testing.T) {
 	svc, lookup := rwaSnapshotForTests(t)
 	rate := decimal.NewFromFloat(1.0001)
@@ -235,12 +320,17 @@ func TestRWA_Latest_InUSD_Success(t *testing.T) {
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=usd", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=usd", nil))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if lookup.calls != 1 {
+		t.Errorf("lookup.calls = %d, want 1 (single resolve per request)", lookup.calls)
+	}
+	if lookup.gotBase != "tst" || lookup.gotQuote != "usdt" {
+		t.Errorf("lookup got (%q,%q), want (tst,usdt)", lookup.gotBase, lookup.gotQuote)
 	}
 	var got struct {
 		NativeQuote string            `json:"native_quote"`
@@ -296,9 +386,8 @@ func TestRWA_Latest_InEUR_NoFXRate(t *testing.T) {
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=eur", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=eur", nil))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (partial success); body=%s", w.Code, w.Body.String())
@@ -330,8 +419,6 @@ func TestRWA_Latest_InEUR_NoFXRate(t *testing.T) {
 // and EUR fails. USD block has values + fx.rate; EUR block has fx.error only.
 func TestRWA_Latest_InMulti_PartialSuccess(t *testing.T) {
 	svc, lookup := rwaSnapshotForTests(t)
-	// One converter for both currencies — flips behavior based on call order.
-	// We instead use a routed stub by mutating between calls.
 	calls := 0
 	conv := &stubFnConverter{
 		fn: func(_ context.Context, _ prices.Token, target prices.Currency, amount decimal.Decimal, _ time.Time) (apiprices.ConversionResult, error) {
@@ -356,9 +443,8 @@ func TestRWA_Latest_InMulti_PartialSuccess(t *testing.T) {
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=usd,eur", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=usd,eur", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
@@ -411,9 +497,8 @@ func TestRWA_Latest_QuoteNotInRegistry(t *testing.T) {
 	}
 	r := newRWAEngine(t, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=usd", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=usd", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
@@ -432,29 +517,6 @@ func TestRWA_Latest_QuoteNotInRegistry(t *testing.T) {
 	}
 	if got.In["usd"].FX.Error != "quote_currency_not_in_registry" {
 		t.Errorf("fx.error = %q, want quote_currency_not_in_registry", got.In["usd"].FX.Error)
-	}
-}
-
-// TestRWA_Latest_PairNotFound_404 — lookup returns ErrPairNotFound;
-// handler maps this to 404 (via mapDomainError).
-func TestRWA_Latest_PairNotFound_404(t *testing.T) {
-	svc, _ := rwaSnapshotForTests(t)
-	lookup := &stubLookup{err: prices.ErrPairNotFound}
-	conv := &stubConverter{}
-	deps := RWAPriceDeps{
-		Service:         svc,
-		Converter:       conv,
-		Lookup:          lookup,
-		DefaultSource:   prices.SourceEquiteez,
-		MaxInCurrencies: 10,
-	}
-	r := newRWAEngine(t, deps)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/42/latest?in=usd", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404 when pair lookup fails with ErrPairNotFound", w.Code)
 	}
 }
 

@@ -174,13 +174,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/Internal" }
 
-  /v1/rwa/{pair_id}:
+  /v1/rwa/{symbol}:
     get:
       tags: [prices-rwa]
       summary: List RWA orderbook price points
       description: |
-        Returns RWA price points for `pair_id` from `equiteez`.
-        Window/latest semantics match `/v1/prices/{token}`.
+        Returns RWA price points for the pair identified by
+        `{symbol}` (`{base}-{quote}`, case-insensitive, e.g. `mars1-usdt`)
+        from `equiteez`. Window/latest semantics match `/v1/prices/{token}`.
 
         `side` filters metrics: `bid`, `ask`, `last`, `mid` (comma-separated).
 
@@ -189,7 +190,7 @@ paths:
         series (read-side conversion; native quote currency stays canonical).
       operationId: listRWAPrices
       parameters:
-        - $ref: "#/components/parameters/PairID"
+        - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/Limit"
@@ -208,16 +209,17 @@ paths:
                 - { timestamp: "2026-04-27T12:00:00Z", side: ask, price: "100.50" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
-  /v1/rwa/{pair_id}/latest:
+  /v1/rwa/{symbol}/latest:
     get:
       tags: [prices-rwa]
       summary: Latest snapshot for an RWA pair
       description: |
-        Freshest price per `side` (bid/ask/last/mid) for an RWA pair,
-        transposed into one Snapshot object.
+        Freshest price per `side` (bid/ask/last/mid) for the pair identified
+        by `{symbol}`, transposed into one Snapshot object.
 
         Optional `?in=usd,eur,...` adds an `in` block per requested target
         currency, converted from the pair's native quote currency through
@@ -227,7 +229,7 @@ paths:
         `RWAExtendedSnapshot` schema for the partial-success envelope.
       operationId: latestRWASnapshot
       parameters:
-        - $ref: "#/components/parameters/PairID"
+        - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/InFilter"
       responses:
         "200":
@@ -254,7 +256,9 @@ paths:
                       method: rate
                   eur:
                     fx: { error: no_fx_rate }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/Internal" }
 
 components:
@@ -269,16 +273,18 @@ components:
         pattern: "^[a-z0-9]{1,16}$"
         example: mvrk
 
-    PairID:
-      name: pair_id
+    Symbol:
+      name: symbol
       in: path
       required: true
-      description: Positive integer primary key from `rwa_pairs.id`.
+      description: |
+        Pair symbol in `{base}-{quote}` form (case-insensitive),
+        e.g. `mars1-usdt`. The split is on the LAST hyphen so future
+        bases containing a dash (e.g. `x-at-usdt`) keep parsing.
       schema:
-        type: integer
-        format: int64
-        minimum: 1
-        example: 42
+        type: string
+        pattern: "^[A-Za-z0-9-]{3,64}$"
+        example: mars1-usdt
 
     From:
       name: from
@@ -366,6 +372,19 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
           example: { code: NOT_FOUND, message: "Token not found" }
+    Conflict:
+      description: |
+        Resource state cannot be uniquely resolved (`code: CONFLICT`).
+        For RWA: 2+ enabled `rwa_pairs` rows match the requested
+        `{base}-{quote}` symbol. The `details.pair_ids` field lists the
+        conflicting IDs; resolution is operator-side (e.g. disable one row).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            code: CONFLICT
+            message: "rwa pair ambiguous for mars1-usdt: 2 enabled rows"
+            details: { pair_ids: [42, 77] }
     RateLimited:
       description: "Inbound rate-limit exceeded (`code: RATE_LIMITED`)."
       content:
@@ -542,7 +561,7 @@ components:
           enum: [coingecko, equiteez]
         entity:
           type: string
-          description: Token symbol (FT) or pair_id rendered as decimal string (RWA).
+          description: Token symbol (FT) or `rwa_pairs.id` rendered as decimal string (RWA).
           example: mvrk
         timestamp:
           type: string
@@ -595,7 +614,14 @@ components:
       properties:
         code:
           type: string
-          enum: [INVALID_ARGUMENT, NOT_FOUND, UNAVAILABLE, INTERNAL, RATE_LIMITED]
+          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, UNAVAILABLE, INTERNAL, RATE_LIMITED]
         message:
           type: string
           description: Client-safe message. Internal causes are NOT included; check server logs by `request_id` for the underlying error.
+        details:
+          type: object
+          additionalProperties: true
+          description: |
+            Optional machine-readable disambiguation. Currently set only on
+            `CONFLICT` responses for RWA symbol lookup, where it contains
+            `pair_ids: int64[]` of the conflicting rows.

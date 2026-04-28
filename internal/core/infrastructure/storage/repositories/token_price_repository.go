@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/storage/entities"
@@ -178,19 +179,23 @@ func (r *TokenPriceRepository) LatestTimestamp(ctx context.Context, source price
 	return parseSentinel(*holder.MaxTs)
 }
 
-// metricFilterFragment renders an optional `AND quote_currency = ANY(?)` fragment.
-// Builds raw SQL because GORM can't compose Raw + Where conditionally.
+// metricFilterFragment renders an optional `AND quote_currency IN (?,?,...)`
+// fragment. Each metric becomes its own placeholder so pgx-via-GORM binds
+// them as scalars; using `= ANY(?)` with a Go []string here would push the
+// whole slice as a single text-array literal and fail with `malformed array
+// literal` (pgx does not auto-wrap slices for raw SQL). All values still
+// flow through prepared-statement parameters — no SQL injection.
 func metricFilterFragment(metrics []string) string {
 	if len(metrics) == 0 {
 		return ""
 	}
-	return ` AND quote_currency = ANY(?)`
+	return ` AND quote_currency IN (` + strings.Repeat("?,", len(metrics)-1) + `?)`
 }
 
 func rawArgs(q prices.Query) []any {
 	args := []any{q.EntityKey, string(q.Source)}
-	if len(q.Metrics) > 0 {
-		args = append(args, q.Metrics)
+	for _, m := range q.Metrics {
+		args = append(args, m)
 	}
 	return args
 }

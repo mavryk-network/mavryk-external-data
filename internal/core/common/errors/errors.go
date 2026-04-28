@@ -8,6 +8,7 @@ type Code string
 const (
 	CodeInvalidArgument Code = "INVALID_ARGUMENT"
 	CodeNotFound        Code = "NOT_FOUND"
+	CodeConflict        Code = "CONFLICT"
 	CodeInternal        Code = "INTERNAL"
 	CodeUnavailable     Code = "UNAVAILABLE"
 )
@@ -16,7 +17,8 @@ const (
 type Error struct {
 	Code    Code
 	Message string
-	Cause   error // optional; never serialized to JSON; use for logs / Unwrap
+	Cause   error          // optional; never serialized to JSON; use for logs / Unwrap
+	Details map[string]any // optional; serialized into the error envelope as `details`
 }
 
 func (e *Error) Error() string {
@@ -45,6 +47,12 @@ func InvalidArgument(message string) *Error {
 // NotFound marks a missing resource (HTTP 404).
 func NotFound(message string) *Error {
 	return &Error{Code: CodeNotFound, Message: message}
+}
+
+// Conflict marks a state conflict the client cannot fix (HTTP 409). Use
+// Details to surface machine-readable disambiguation info.
+func Conflict(message string, details map[string]any) *Error {
+	return &Error{Code: CodeConflict, Message: message, Details: details}
 }
 
 // Internal marks a server-side failure. message must be safe for clients; cause is for logging only.
