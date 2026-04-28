@@ -89,8 +89,8 @@ mavryk-external-data/
 | `GET /v1/prices/:token`           | FT price points (range or latest)                    |
 | `GET /v1/prices/:token/latest`    | FT snapshot — all currencies, transposed             |
 | `GET /v1/prices/:token/count`     | Total row count for token                            |
-| `GET /v1/rwa/:pair_id`            | RWA orderbook points (range or latest)               |
-| `GET /v1/rwa/:pair_id/latest`     | RWA snapshot — all sides, transposed                 |
+| `GET /v1/rwa/:symbol`             | RWA orderbook points (range or latest); `:symbol` is `{base}-{quote}`, case-insensitive (e.g. `mars1-usdt`) |
+| `GET /v1/rwa/:symbol/latest`      | RWA snapshot — all sides, transposed                 |
 
 ### Common query parameters
 

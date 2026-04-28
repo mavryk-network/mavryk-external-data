@@ -103,10 +103,13 @@ treatment.
 
 ## Notes
 
-- API surface: `/v1/rwa/{pair_id}` and `/v1/rwa/{pair_id}/latest`
-  accept the optional `?in=` query parameter. See
+- API surface: `/v1/rwa/{symbol}` and `/v1/rwa/{symbol}/latest` accept
+  the optional `?in=` query parameter. See
   [docs/openapi.yaml](../openapi.yaml) for `RWAExtendedSnapshot`,
   `ConvertedSnapshotBlock`, and `FXMeta` schemas.
+  *(Path scheme later switched from `{pair_id}` to `{symbol}` —
+  `{base}-{quote}`, e.g. `mars1-usdt`. Original wording kept for
+  historical accuracy; see `get_symbol.md`.)*
 - Server config: `server.fx_max_staleness_seconds` (default 300),
   `server.max_in_currencies` (default 10).
 - Metrics: `fx_conversion_duration_seconds`, `fx_conversions_total`
