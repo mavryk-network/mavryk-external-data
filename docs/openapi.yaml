@@ -121,8 +121,8 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/TokenPricePoint" }
               example:
-                - { timestamp: "2026-04-27T12:00:00Z", currency: usd, price: "0.0715412" }
-                - { timestamp: "2026-04-27T12:00:00Z", currency: eur, price: "0.06094094" }
+                - { timestamp: "2026-04-27T12:00:00Z", currency: usd, price: 0.071541 }
+                - { timestamp: "2026-04-27T12:00:00Z", currency: eur, price: 0.060941 }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -146,8 +146,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Snapshot" }
               example:
-                source: coingecko
-                entity: mvrk
                 timestamp: "2026-04-27T12:00:00Z"
                 values: { usd: "0.0715412", eur: "0.06094094" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -177,36 +175,33 @@ paths:
   /v1/rwa/{symbol}:
     get:
       tags: [prices-rwa]
-      summary: List RWA orderbook price points
+      summary: List RWA last prices
       description: |
-        Returns RWA price points for the pair identified by
-        `{symbol}` (`{base}-{quote}`, case-insensitive, e.g. `mars1-usdt`)
-        from `equiteez`. Window/latest semantics match `/v1/prices/{token}`.
+        Returns `last` price points for the pair identified by `{symbol}`
+        (`{base}-{quote}`, case-insensitive, e.g. `mars1-usdt`) from
+        `equiteez`. Window/latest semantics match `/v1/prices/{token}`.
 
-        `side` filters metrics: `bid`, `ask`, `last`, `mid` (comma-separated).
-
-        `?in=usd,eur,...` adds an `in` map per row with prices converted
-        to each requested currency through the FT-side `token_prices`
-        series (read-side conversion; native quote currency stays canonical).
+        `?in=usd,eur,...` adds converted prices as flat top-level numeric
+        keys per row. Targets that fail conversion are silently omitted;
+        the row is still returned with the native `price`.
       operationId: listRWAPrices
       parameters:
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/SideFilter"
         - $ref: "#/components/parameters/InFilter"
       responses:
         "200":
-          description: Array of RWA price points.
+          description: Array of RWAPrice objects (one per timestamp).
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/RWAPricePoint" }
+                items: { $ref: "#/components/schemas/RWAPrice" }
               example:
-                - { timestamp: "2026-04-27T12:00:00Z", side: bid, price: "100.42", size: "1500" }
-                - { timestamp: "2026-04-27T12:00:00Z", side: ask, price: "100.50" }
+                - { timestamp: "2026-04-27T12:00:00Z", native_quote: usdt, price: 100.42, usd: 100.4300, eur: 85.62 }
+                - { timestamp: "2026-04-27T11:00:00Z", native_quote: usdt, price: 99.80 }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -216,46 +211,31 @@ paths:
   /v1/rwa/{symbol}/latest:
     get:
       tags: [prices-rwa]
-      summary: Latest snapshot for an RWA pair
+      summary: Latest RWA price
       description: |
-        Freshest price per `side` (bid/ask/last/mid) for the pair identified
-        by `{symbol}`, transposed into one Snapshot object.
+        Freshest `last` price for the pair identified by `{symbol}`.
+        Returns 404 when no `last` row exists yet.
 
-        Optional `?in=usd,eur,...` adds an `in` block per requested target
-        currency, converted from the pair's native quote currency through
-        the FT-side `token_prices` series (read-side, no storage growth).
-        Per-target failures (`no_fx_rate`, `quote_currency_not_in_registry`,
-        ...) surface as `fx.error` while the request stays 200 — see
-        `RWAExtendedSnapshot` schema for the partial-success envelope.
+        Optional `?in=usd,eur,...` adds converted prices as flat top-level
+        numeric keys. Targets that fail conversion (no FX rate, unregistered
+        quote currency, etc.) are silently omitted; the response stays 200.
       operationId: latestRWASnapshot
       parameters:
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/InFilter"
       responses:
         "200":
-          description: |
-            Snapshot of latest prices. Without `?in=` the response matches
-            the legacy `Snapshot` shape; with `?in=` it carries
-            `RWAExtendedSnapshot` (extra `native_quote` and `in` fields).
+          description: Latest RWAPrice object.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/RWAExtendedSnapshot" }
+              schema: { $ref: "#/components/schemas/RWAPrice" }
               example:
-                source: equiteez
-                entity: "42"
                 timestamp: "2026-04-27T12:00:00Z"
                 native_quote: usdt
-                values: { bid: "100.42", ask: "100.50", last: "100.45" }
-                in:
-                  usd:
-                    values: { bid: "100.4300", ask: "100.5101", last: "100.4601" }
-                    fx:
-                      rate: "1.0001"
-                      source: coingecko
-                      ts: "2026-04-27T11:59:30Z"
-                      method: rate
-                  eur:
-                    fx: { error: no_fx_rate }
+                price: 100.45
+                usd: 100.46
+                eur: 85.63
+                aed: 368.72
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -325,20 +305,6 @@ components:
         type: string
         example: usd,eur
 
-    SideFilter:
-      name: side
-      in: query
-      required: false
-      description: |
-        Comma-separated orderbook-side filter. Each value must be one of
-        `bid`, `ask`, `last`, `mid`; unknown values return 400.
-      schema:
-        type: string
-        # Pattern is a comma-list of valid sides (no enum, since enum is per-value
-        # and we accept comma lists like "bid,ask").
-        pattern: "^(bid|ask|last|mid)(,(bid|ask|last|mid))*$"
-        example: "bid,ask"
-
     InFilter:
       name: in
       in: query
@@ -353,8 +319,8 @@ components:
         Conversion uses the FT-side `token_prices` series as the FX
         source: for a pair quoted in `USDT`, `?in=usd` looks up the
         latest `USDT/USD` rate from CoinGecko and multiplies. Per-target
-        failures (`no_fx_rate`, `quote_currency_not_in_registry`, ...)
-        surface as `fx.error` in the response without failing the request.
+        failures are silently omitted from the response (the key is absent);
+        the request stays 200 as long as the native price was found.
       schema:
         type: string
         example: "usd,eur,aed"
@@ -420,160 +386,70 @@ components:
           description: Quote currency (lowercase ISO/crypto code).
           example: usd
         price:
-          $ref: "#/components/schemas/DecimalString"
+          type: number
+          description: Price rounded to 6 decimal places, serialised as a JSON number.
+          example: 0.071541
 
-    RWAPricePoint:
+    RWAPrice:
       type: object
       description: |
-        One RWA orderbook quote at a point in time. `price` is in **human
-        units of the orderbook's native quote currency** (e.g. 56.25 USDT —
-        not micro-USDT) — the collector normalizes the indexer's raw
-        smallest-unit value via the `tokens.decimals` registry before
-        storage. The native quote currency itself (e.g. `USDT`) is on
-        the parent `rwa_pairs.quote_symbol`; clients that need other
-        currencies will get a future `?in=usd,eur,...` parameter
-        (see `rwa_quotes_adds.md` design doc).
-      required: [timestamp, side, price]
+        One RWA price observation. `price` is the `last` trade price in
+        the orderbook's native quote currency (e.g. 56.25 USDT), rounded
+        to 6 decimal places and serialised as a JSON number.
+
+        When `?in=usd,eur,...` is requested, each successfully converted
+        currency appears as an additional top-level numeric key (lowercase
+        ISO-4217 code). Targets that fail conversion are silently absent —
+        the response stays 200 as long as the native price was found.
+
+        Top-level reserved keys: `timestamp`, `native_quote`, `price`.
+        All other top-level keys are converted currencies (3-letter codes
+        that can never collide with the reserved names).
+      required: [timestamp, native_quote, price]
       properties:
         timestamp:
           type: string
           format: date-time
+          description: RFC3339 UTC, second precision.
           example: "2026-04-27T12:00:00Z"
-        side:
-          type: string
-          enum: [bid, ask, last, mid]
-        price:
-          $ref: "#/components/schemas/DecimalString"
-        size:
-          # Inlined rather than $ref'd to DecimalString because OpenAPI 3.0
-          # linters reject `allOf + nullable` without a sibling `type`.
-          type: string
-          pattern: "^-?\\d+(\\.\\d+)?$"
-          nullable: true
-          description: Volume for that side, when the source reports it (Equiteez orderbooks may omit it).
-          example: "1500"
-
-    RWAExtendedSnapshot:
-      type: object
-      description: |
-        RWA `/latest` response — same as `Snapshot` plus optional
-        multi-currency block. `native_quote` is the orderbook's settlement
-        currency (the symbol stored in `rwa_pairs.quote_symbol`); it's
-        always present so clients can disambiguate `values` units. `in`
-        is populated when the request includes `?in=`.
-      required: [source, entity, timestamp, values]
-      properties:
-        source:
-          type: string
-          example: equiteez
-          enum: [coingecko, equiteez]
-        entity:
-          type: string
-          example: "42"
-        timestamp:
-          type: string
-          format: date-time
         native_quote:
           type: string
           description: |
-            Orderbook's native quote currency (lowercase). Present when
-            the pair's `quote_symbol` resolves through the FT token registry.
+            Lowercase ticker of the orderbook's settlement currency
+            (`rwa_pairs.quote_symbol`).
           example: usdt
-        values:
-          type: object
-          description: Map of side → decimal-string price in `native_quote`.
-          additionalProperties:
-            $ref: "#/components/schemas/DecimalString"
-        in:
-          type: object
+        price:
+          type: number
           description: |
-            Per-target conversion blocks. Key is the lowercase target
-            currency. Block value follows `ConvertedSnapshotBlock`.
-          additionalProperties:
-            $ref: "#/components/schemas/ConvertedSnapshotBlock"
-
-    ConvertedSnapshotBlock:
-      type: object
-      description: |
-        One target-currency conversion of an RWA snapshot. `values` is
-        the same shape as the parent `values` (side → price) but in the
-        target currency. `fx` is metadata describing how the conversion
-        was performed; on partial failure (e.g. `no_fx_rate`) `values`
-        may be omitted and `fx.error` set.
-      required: [fx]
-      properties:
-        values:
-          type: object
-          description: Converted side → price in the target currency.
-          additionalProperties:
-            $ref: "#/components/schemas/DecimalString"
-        fx:
-          $ref: "#/components/schemas/FXMeta"
-
-    FXMeta:
-      type: object
-      description: |
-        Metadata about an FX conversion. `rate`/`source`/`ts`/`method`
-        are populated on success; `error` and/or `stale`/`warning` mark
-        partial-success states (the parent envelope still returns 200).
-      properties:
-        rate:
-          allOf: [{ $ref: "#/components/schemas/DecimalString" }]
-          description: Multiplicative rate used for conversion.
-        source:
-          type: string
-          description: FX-data source code (e.g. `coingecko`).
-        ts:
-          type: string
-          format: date-time
-          description: Timestamp of the FX rate (latest ≤ snapshot ts).
-        method:
-          type: string
-          enum: [rate, identity, close_of_bucket]
-          description: |
-            How the conversion was computed. `identity` for same-currency
-            (`?in=usdt` on USDT-quoted pair). `close_of_bucket` reserved
-            for future OHLC conversions (see ADR-0013).
-        stale:
-          type: boolean
-          description: |
-            True when (now − ts) > `server.fx_max_staleness_seconds`.
-            Returned alongside the converted value — clients decide
-            whether to trust it.
-        warning:
-          type: string
-          description: Soft signal; `stale` is the structured form.
-        error:
-          type: string
-          enum: [no_fx_rate, unsupported_target, quote_currency_not_in_registry, internal]
-          description: |
-            Set when the conversion failed for this target. The parent
-            response still has 200; consumers branch on this field.
+            Last price in `native_quote`, rounded to 6 decimal places.
+            Serialised as a JSON number (not a quoted string).
+          example: 100.45
+      additionalProperties:
+        type: number
+        description: |
+          Converted price for a target currency from `?in=`.
+          Key is the lowercase ISO-4217 code (`usd`, `eur`, `aed`, …).
+          Rounded to 6 decimal places.
 
     Snapshot:
       type: object
-      description: Transposed view — all metrics for one entity at one timestamp.
-      required: [source, entity, timestamp, values]
+      description: Transposed view — all metrics for one token at one timestamp.
+      required: [timestamp, values]
       properties:
-        source:
-          type: string
-          example: coingecko
-          enum: [coingecko, equiteez]
-        entity:
-          type: string
-          description: Token symbol (FT) or `rwa_pairs.id` rendered as decimal string (RWA).
-          example: mvrk
         timestamp:
           type: string
           format: date-time
+          description: RFC3339 UTC, second precision.
         values:
           type: object
-          description: Map of metric → decimal-string price. Keys are currencies for FT, sides for RWA.
+          description: |
+            Map of currency → price, rounded to 6 decimal places and
+            serialised as a JSON number (not a quoted string).
           additionalProperties:
-            $ref: "#/components/schemas/DecimalString"
+            type: number
           example:
-            usd: "0.0715412"
-            eur: "0.06094094"
+            usd: 0.071541
+            eur: 0.060941
 
     CountResponse:
       type: object

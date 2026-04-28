@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"strings"
 	"time"
@@ -21,6 +22,11 @@ import (
 // short tickers; anything longer is gateway-grade input noise.
 const maxSymbolLen = 64
 
+// lastSide is the only orderbook side surfaced on the read-side. bid/ask/mid
+// stay in storage for future endpoints (e.g. /orderbook), but are not part
+// of this contract — which keeps the response flat and the SQL narrow.
+const lastSide = "last"
+
 // PairLookup is the read-only contract handlers need to resolve a pair
 // `{base}-{quote}` symbol into the canonical RWAPair (used for both the
 // price query EntityKey and the `?in=` quote-token resolution).
@@ -31,7 +37,7 @@ type PairLookup interface {
 // RWAPriceDeps wires the RWA-side dependencies.
 type RWAPriceDeps struct {
 	Service       apiprices.QueryService
-	Lookup        PairLookup       // required: resolves `{base}-{quote}` -> RWAPair
+	Lookup        PairLookup               // required: resolves `{base}-{quote}` -> RWAPair
 	Converter     apiprices.PriceConverter // optional; when nil, `?in=` returns 400
 	DefaultSource prices.Source            // typically prices.SourceEquiteez
 	MaxLimit      int
@@ -43,8 +49,9 @@ type RWAPriceDeps struct {
 
 // ListBySymbol — GET /v1/rwa/:symbol
 //
-// `:symbol` is `{base}-{quote}` (case-insensitive), e.g. `mars1-usdt`.
-// Optional `?in=usd,eur` adds a per-row `in` map with converted prices.
+// Returns an array of RWAPrice objects (one per timestamp, only `last`
+// side). Optional `?in=usd,eur,...` adds converted prices as flat
+// top-level keys per row.
 func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
@@ -56,19 +63,14 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 		if err != nil {
 			return request{}, err
 		}
+		// MetricParam: "" disables `?side=` parsing — only `last` is surfaced.
 		opts := common.QueryOptions{
 			MaxLimit:           d.MaxLimit,
 			DefaultLatestLimit: d.DefaultLimit,
-			MetricParam:        "side",
 		}
 		pq, err := common.BindPriceQuery(c, opts)
 		if err != nil {
 			return request{}, err
-		}
-		for _, m := range pq.Metrics {
-			if _, err := prices.NewSide(m); err != nil {
-				return request{}, coreerrors.InvalidArgument("Invalid 'side' value: " + m)
-			}
 		}
 		inTargets, err := d.parseInQuery(c)
 		if err != nil {
@@ -79,7 +81,7 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 			Query: prices.Query{
 				Source:    d.DefaultSource,
 				EntityKey: pair.EntityKey(),
-				Metrics:   pq.Metrics,
+				Metrics:   []string{lastSide},
 				From:      pq.From,
 				To:        pq.To,
 				Limit:     pq.Limit,
@@ -87,35 +89,24 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 			InTargets: inTargets,
 		}, nil
 	}
-	type pointDTO struct {
-		Timestamp string                           `json:"timestamp"`
-		Side      string                           `json:"side"`
-		Price     decimal.Decimal                  `json:"price"`
-		Size      *decimal.Decimal                 `json:"size,omitempty"`
-		In        map[string]convertedListEntryDTO `json:"in,omitempty"`
-	}
-	action := func(ctx context.Context, req request) ([]pointDTO, error) {
+	action := func(ctx context.Context, req request) ([]rwaPriceDTO, error) {
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
 			return nil, err
 		}
-		var quoteToken prices.Token
-		var quoteResolved bool
-		if len(req.InTargets) > 0 {
-			quoteToken, quoteResolved = promoteQuoteToken(req.Pair.QuoteSymbol)
-		}
-		out := make([]pointDTO, len(points))
-		for i, p := range points {
-			row := pointDTO{
-				Timestamp: p.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
-				Side:      p.Metric,
-				Price:     p.Price,
-				Size:      p.Size,
+		quoteToken, quoteResolved := promoteQuoteToken(req.Pair.QuoteSymbol)
+		nativeQuote := strings.ToLower(req.Pair.QuoteSymbol)
+		out := make([]rwaPriceDTO, 0, len(points))
+		for _, p := range points {
+			row := rwaPriceDTO{
+				Timestamp:   p.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
+				NativeQuote: nativeQuote,
+				Price:       newNum6(p.Price),
 			}
 			if len(req.InTargets) > 0 {
-				row.In = d.convertOnePoint(ctx, quoteToken, quoteResolved, req.InTargets, p.Price, p.Timestamp)
+				row.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, p.Price, p.Timestamp)
 			}
-			out[i] = row
+			out = append(out, row)
 		}
 		return out, nil
 	}
@@ -124,7 +115,8 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 
 // LatestBySymbol — GET /v1/rwa/:symbol/latest
 //
-// Optional `?in=usd,eur,aed` adds a transposed `in` block per currency.
+// Returns one RWAPrice object — same shape as a single element of
+// ListBySymbol's array. 404 when the pair has no `last` row yet.
 func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
@@ -145,71 +137,75 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 			Query: prices.Query{
 				Source:    d.DefaultSource,
 				EntityKey: pair.EntityKey(),
+				Metrics:   []string{lastSide},
+				// Empty From/To ⇒ IsLatest ⇒ DISTINCT ON (side) DESC; with
+				// Metrics narrowed to [last] only one row comes back.
 			},
 			InTargets: inTargets,
 		}, nil
 	}
-	action := func(ctx context.Context, req request) (snapshotDTO, error) {
+	action := func(ctx context.Context, req request) (rwaPriceDTO, error) {
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
-			return snapshotDTO{}, err
+			return rwaPriceDTO{}, err
 		}
-		snap, ok := prices.LatestSnapshot(points)
+		picked, ok := pickLatestLast(points)
 		if !ok {
-			return snapshotDTO{}, coreerrors.NotFound("No prices for pair")
-		}
-		dto := snapshotDTO{
-			Source:    string(snap.Source),
-			Entity:    snap.EntityKey,
-			Timestamp: snap.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
-			Values:    snap.Values,
-		}
-		if len(req.InTargets) == 0 {
-			return dto, nil
+			return rwaPriceDTO{}, coreerrors.NotFound("No prices for pair")
 		}
 		quoteToken, quoteResolved := promoteQuoteToken(req.Pair.QuoteSymbol)
-		if quoteResolved {
-			dto.NativeQuote = string(quoteToken)
+		dto := rwaPriceDTO{
+			Timestamp:   picked.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
+			NativeQuote: strings.ToLower(req.Pair.QuoteSymbol),
+			Price:       newNum6(picked.Price),
 		}
-		dto.In = make(map[string]convertedSnapshotDTO, len(req.InTargets))
-		for _, target := range req.InTargets {
-			block := d.convertSnapshotBlock(ctx, quoteToken, quoteResolved, target, snap.Values, snap.Timestamp)
-			dto.In[string(target)] = block
+		if len(req.InTargets) > 0 {
+			dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, picked.Price, picked.Timestamp)
 		}
 		return dto, nil
 	}
 	return common.Wrap(bind, action)
 }
 
-// --- Response DTOs (handler-local) ---
+// --- DTO ---
 
-type snapshotDTO struct {
-	Source      string                          `json:"source"`
-	Entity      string                          `json:"entity"`
-	Timestamp   string                          `json:"timestamp"`
-	NativeQuote string                          `json:"native_quote,omitempty"`
-	Values      map[string]decimal.Decimal      `json:"values"`
-	In          map[string]convertedSnapshotDTO `json:"in,omitempty"`
+// rwaPriceDTO is the on-wire shape of a single RWA price observation.
+// Used identically by the list and latest endpoints — only the cardinality
+// differs (array vs single object).
+//
+// Top-level keys are `timestamp`, `native_quote`, `price`, plus one
+// numeric key per converted currency. The converted currencies are
+// inlined via custom MarshalJSON so the response stays flat. ISO-4217
+// codes are 3 letters and never collide with the reserved keys.
+type rwaPriceDTO struct {
+	Timestamp   string
+	NativeQuote string
+	Price       num6
+	Converted   map[string]num6 // optional; one key per `?in=` target that succeeded
 }
 
-type convertedSnapshotDTO struct {
-	Values map[string]decimal.Decimal `json:"values,omitempty"`
-	FX     fxMetaDTO                  `json:"fx"`
+func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, 3+len(d.Converted))
+	out["timestamp"] = d.Timestamp
+	out["native_quote"] = d.NativeQuote
+	out["price"] = d.Price
+	for cur, v := range d.Converted {
+		out[cur] = v
+	}
+	return json.Marshal(out)
 }
 
-type convertedListEntryDTO struct {
-	Price *decimal.Decimal `json:"price,omitempty"`
-	FX    fxMetaDTO        `json:"fx"`
-}
+// num6 carries a price rounded to 6 decimal places and serialises as a
+// JSON number (no quotes). Stays in decimal precision — no float64
+// round-trip — so values like 156.25 don't drift to 156.249999...
+type num6 struct{ d decimal.Decimal }
 
-type fxMetaDTO struct {
-	Rate    *decimal.Decimal `json:"rate,omitempty"`
-	Source  string           `json:"source,omitempty"`
-	TS      string           `json:"ts,omitempty"`
-	Method  string           `json:"method,omitempty"` // "rate" | "identity"
-	Stale   bool             `json:"stale,omitempty"`
-	Warning string           `json:"warning,omitempty"`
-	Error   string           `json:"error,omitempty"`
+func newNum6(d decimal.Decimal) num6 { return num6{d: d.Round(6)} }
+
+func (n num6) MarshalJSON() ([]byte, error) {
+	// decimal.String() is the canonical form: "34", "0.5", "124.857494".
+	// No trailing zeros, no quotes — already a valid JSON number.
+	return []byte(n.d.String()), nil
 }
 
 // --- internal helpers ---
@@ -218,9 +214,7 @@ type fxMetaDTO struct {
 // RWAPair. Returns:
 //   - 400 INVALID_ARGUMENT — symbol does not parse as `{base}-{quote}`.
 //   - 404 NOT_FOUND        — no enabled pair matches (via ErrPairNotFound).
-//   - 409 CONFLICT         — 2+ enabled pairs match (via PairAmbiguousError;
-//     mapped to coreerrors.Conflict in common.mapDomainError, with pair_ids
-//     surfaced in the response details).
+//   - 409 CONFLICT         — 2+ enabled pairs match (via PairAmbiguousError).
 func (d RWAPriceDeps) resolvePairFromPath(c *gin.Context) (prices.RWAPair, error) {
 	raw := c.Param("symbol")
 	base, quote, ok := parseRWASymbol(raw)
@@ -251,10 +245,29 @@ func parseRWASymbol(s string) (base, quote string, ok bool) {
 	return base, quote, true
 }
 
+// pickLatestLast returns the single freshest `last` PricePoint. Defensive
+// — the repository's latestPerSide already returns at most one row when
+// Metrics is pinned to [last], so this is a tiebreaker for the (rare)
+// case where stub or test data carries multiple last-rows.
+func pickLatestLast(points []prices.PricePoint) (prices.PricePoint, bool) {
+	var picked prices.PricePoint
+	found := false
+	for _, p := range points {
+		if !strings.EqualFold(p.Metric, lastSide) {
+			continue
+		}
+		if !found || p.Timestamp.After(picked.Timestamp) {
+			picked = p
+			found = true
+		}
+	}
+	return picked, found
+}
+
 // promoteQuoteToken tries to lift the pair's quote_symbol into a registered
-// Token. Returns (zero, false) when the symbol is unregistered — handler
-// renders this as `fx.error: "quote_currency_not_in_registry"` per `?in=`
-// target rather than failing the whole response.
+// Token. Returns (zero, false) when the symbol is unregistered — the
+// flat-response handler then simply omits all converted-currency keys
+// (we'd never get a usable rate without a registered source token).
 func promoteQuoteToken(quoteSymbol string) (prices.Token, bool) {
 	t, err := prices.NewToken(quoteSymbol)
 	if err != nil {
@@ -293,93 +306,39 @@ func (d RWAPriceDeps) parseInQuery(c *gin.Context) ([]prices.Currency, error) {
 	return out, nil
 }
 
-// convertSnapshotBlock builds one `in.<currency>` block for /latest.
-func (d RWAPriceDeps) convertSnapshotBlock(
-	ctx context.Context,
-	quoteToken prices.Token,
-	quoteResolved bool,
-	target prices.Currency,
-	nativeValues map[string]decimal.Decimal,
-	ts time.Time,
-) convertedSnapshotDTO {
-	block := convertedSnapshotDTO{}
-	if !quoteResolved {
-		block.FX.Error = "quote_currency_not_in_registry"
-		metrics.FXConversionsTotal.WithLabelValues("unknown", string(target), "unregistered_source").Inc()
-		return block
-	}
-
-	values := make(map[string]decimal.Decimal, len(nativeValues))
-	var (
-		firstFX  *fxMetaDTO
-		anyOK    bool
-		firstErr string
-		anyStale bool
-	)
-	for side, native := range nativeValues {
-		res, err := timedConvert(ctx, d.Converter, quoteToken, target, native, ts)
-		if err != nil {
-			if firstErr == "" {
-				firstErr = errToFXReason(err)
-			}
-			continue
-		}
-		values[side] = res.Amount
-		anyOK = true
-		if res.Stale {
-			anyStale = true
-		}
-		if firstFX == nil {
-			firstFX = fxMetaFromResult(res)
-		}
-	}
-	if anyOK {
-		block.Values = values
-	}
-	if firstFX != nil {
-		block.FX = *firstFX
-	}
-	if !anyOK && firstErr != "" {
-		block.FX.Error = firstErr
-	}
-	if anyStale {
-		block.FX.Stale = true
-		metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
-	}
-	return block
-}
-
-// convertOnePoint builds the `in` map for one row in the list response.
-func (d RWAPriceDeps) convertOnePoint(
+// convertFlat builds the per-currency map for one row. Failed conversions
+// (no FX rate, unsupported target, unregistered source) are silently
+// dropped from the output map — observability lives in the
+// `fx_conversions_total` counter, not on the wire.
+func (d RWAPriceDeps) convertFlat(
 	ctx context.Context,
 	quoteToken prices.Token,
 	quoteResolved bool,
 	targets []prices.Currency,
 	native decimal.Decimal,
 	ts time.Time,
-) map[string]convertedListEntryDTO {
-	out := make(map[string]convertedListEntryDTO, len(targets))
-	for _, target := range targets {
-		entry := convertedListEntryDTO{}
-		if !quoteResolved {
-			entry.FX.Error = "quote_currency_not_in_registry"
-			metrics.FXConversionsTotal.WithLabelValues("unknown", string(target), "unregistered_source").Inc()
-			out[string(target)] = entry
-			continue
+) map[string]num6 {
+	if !quoteResolved {
+		// Account for the registry-miss in metrics for every requested target;
+		// the wire response just omits the currency keys.
+		for _, t := range targets {
+			metrics.FXConversionsTotal.WithLabelValues("unknown", string(t), "unregistered_source").Inc()
 		}
+		return nil
+	}
+	out := make(map[string]num6, len(targets))
+	for _, target := range targets {
 		res, err := timedConvert(ctx, d.Converter, quoteToken, target, native, ts)
 		if err != nil {
-			entry.FX.Error = errToFXReason(err)
-			out[string(target)] = entry
-			continue
+			continue // drop on error; metrics already incremented inside timedConvert
 		}
-		amount := res.Amount
-		entry.Price = &amount
-		entry.FX = *fxMetaFromResult(res)
+		out[string(target)] = newNum6(res.Amount)
 		if res.Stale {
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
 		}
-		out[string(target)] = entry
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -406,34 +365,6 @@ func timedConvert(
 		metrics.FXConversionsTotal.WithLabelValues(string(sourceToken), string(target), errToMetricLabel(err)).Inc()
 	}
 	return res, err
-}
-
-func fxMetaFromResult(r apiprices.ConversionResult) *fxMetaDTO {
-	rate := r.Rate
-	method := "rate"
-	if r.Identity {
-		method = "identity"
-	}
-	return &fxMetaDTO{
-		Rate:   &rate,
-		Source: string(r.Source),
-		TS:     r.RateTS.UTC().Format("2006-01-02T15:04:05Z"),
-		Method: method,
-		Stale:  r.Stale,
-	}
-}
-
-func errToFXReason(err error) string {
-	switch {
-	case stderrors.Is(err, apiprices.ErrNoFXRate):
-		return "no_fx_rate"
-	case stderrors.Is(err, apiprices.ErrUnsupportedTargetCurrency):
-		return "unsupported_target"
-	case stderrors.Is(err, apiprices.ErrSourceTokenNotRegistered):
-		return "quote_currency_not_in_registry"
-	default:
-		return "internal"
-	}
 }
 
 func errToMetricLabel(err error) string {

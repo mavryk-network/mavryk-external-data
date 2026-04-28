@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,9 +36,8 @@ func (s *stubLookup) LookupRWAPairBySymbol(_ context.Context, base, quote string
 	return s.pair, nil
 }
 
-// stubConverter satisfies apiprices.PriceConverter. Returns one of:
-//   - configured `result` (with Identity flag honored)
-//   - `err` (returned as-is, caller maps to fx.error)
+// stubConverter satisfies apiprices.PriceConverter. Returns the configured
+// result (applying rate to amount) or err.
 type stubConverter struct {
 	result apiprices.ConversionResult
 	err    error
@@ -77,20 +75,20 @@ func newRWAEngine(_ *testing.T, deps RWAPriceDeps) *gin.Engine {
 
 func TestParseRWASymbol(t *testing.T) {
 	cases := []struct {
-		in            string
-		base, quote   string
-		ok            bool
+		in          string
+		base, quote string
+		ok          bool
 	}{
 		{"mars1-usdt", "mars1", "usdt", true},
 		{"MARS1-USDT", "mars1", "usdt", true},   // uppercased lowered
 		{" Mars1-USDT ", "mars1", "usdt", true}, // trimmed
 		{"x-at-usdt", "x-at", "usdt", true},     // split on LAST hyphen
 		{"a-b", "a", "b", true},
-		{"", "", "", false},                                       // empty
-		{"mars1", "", "", false},                                  // no hyphen
-		{"-usdt", "", "", false},                                  // empty base
-		{"mars1-", "", "", false},                                 // empty quote
-		{string(make([]byte, maxSymbolLen+1)), "", "", false},     // too long
+		{"", "", "", false},                                   // empty
+		{"mars1", "", "", false},                              // no hyphen
+		{"-usdt", "", "", false},                              // empty base
+		{"mars1-", "", "", false},                             // empty quote
+		{string(make([]byte, maxSymbolLen+1)), "", "", false}, // too long
 	}
 	for _, c := range cases {
 		base, quote, ok := parseRWASymbol(c.in)
@@ -132,22 +130,6 @@ func TestRWA_NumericPath_400(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/42", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for numeric path (no hyphen)", w.Code)
-	}
-}
-
-func TestRWA_BadSide_400(t *testing.T) {
-	deps := RWAPriceDeps{
-		Service:       &stubQueryService{},
-		Lookup:        &stubLookup{pair: prices.RWAPair{ID: 42, QuoteSymbol: "USDT"}},
-		DefaultSource: prices.SourceEquiteez,
-		MaxLimit:      1000,
-	}
-	r := newRWAEngine(t, deps)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt?side=foo", nil))
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for unknown side", w.Code)
 	}
 }
 
@@ -219,9 +201,9 @@ func TestRWA_SymbolAmbiguous_409(t *testing.T) {
 
 // --- ?in= multi-currency tests ---
 
-// rwaSnapshotForTests returns a stub query service that emits one bid+ask
-// snapshot, plus a registered USDT token registry for the converter.
-func rwaSnapshotForTests(t *testing.T) (*stubQueryService, *stubLookup) {
+// rwaLastPointForTests returns a stub query service with one `last` point
+// and a USDT-registered lookup.
+func rwaLastPointForTests(t *testing.T) (*stubQueryService, *stubLookup) {
 	t.Helper()
 	prices.RegisterTokens([]prices.TokenInfo{
 		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
@@ -229,8 +211,7 @@ func rwaSnapshotForTests(t *testing.T) (*stubQueryService, *stubLookup) {
 	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
 	svc := &stubQueryService{
 		points: []prices.PricePoint{
-			{Source: prices.SourceEquiteez, EntityKey: "42", Timestamp: now, Metric: "bid", Price: decimal.NewFromFloat(100.00)},
-			{Source: prices.SourceEquiteez, EntityKey: "42", Timestamp: now, Metric: "ask", Price: decimal.NewFromFloat(101.00)},
+			{Source: prices.SourceEquiteez, EntityKey: "42", Timestamp: now, Metric: "last", Price: decimal.NewFromFloat(100.00)},
 		},
 	}
 	lookup := &stubLookup{
@@ -246,7 +227,7 @@ func rwaSnapshotForTests(t *testing.T) (*stubQueryService, *stubLookup) {
 }
 
 func TestRWA_Latest_InNotEnabled_400(t *testing.T) {
-	svc, lookup := rwaSnapshotForTests(t)
+	svc, lookup := rwaLastPointForTests(t)
 	deps := RWAPriceDeps{
 		Service:       svc,
 		Lookup:        lookup,
@@ -263,7 +244,7 @@ func TestRWA_Latest_InNotEnabled_400(t *testing.T) {
 }
 
 func TestRWA_Latest_BadInCurrency_400(t *testing.T) {
-	svc, lookup := rwaSnapshotForTests(t)
+	svc, lookup := rwaLastPointForTests(t)
 	deps := RWAPriceDeps{
 		Service:         svc,
 		Converter:       &stubConverter{},
@@ -281,7 +262,7 @@ func TestRWA_Latest_BadInCurrency_400(t *testing.T) {
 }
 
 func TestRWA_Latest_TooManyInCurrencies_400(t *testing.T) {
-	svc, lookup := rwaSnapshotForTests(t)
+	svc, lookup := rwaLastPointForTests(t)
 	deps := RWAPriceDeps{
 		Service:         svc,
 		Converter:       &stubConverter{},
@@ -298,18 +279,16 @@ func TestRWA_Latest_TooManyInCurrencies_400(t *testing.T) {
 	}
 }
 
-// TestRWA_Latest_InUSD_Success — happy path: USDT pair → USD with rate 1.0001.
-// Verifies the response shape: native_quote, values, in.usd.values, in.usd.fx.
-// Also verifies that the symbol resolver fires exactly once per request (no
-// double-lookup that the legacy ?in= flow had).
+// TestRWA_Latest_InUSD_Success — happy path: USDT pair, rate 1.0001 → USD.
+// Verifies flat response shape: native_quote, price as number, usd as number.
+// Also verifies that the symbol resolver fires exactly once per request.
 func TestRWA_Latest_InUSD_Success(t *testing.T) {
-	svc, lookup := rwaSnapshotForTests(t)
+	svc, lookup := rwaLastPointForTests(t)
 	rate := decimal.NewFromFloat(1.0001)
-	rateTS := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
 	conv := &stubConverter{result: apiprices.ConversionResult{
 		Rate:   rate,
 		Source: prices.SourceCoinGecko,
-		RateTS: rateTS,
+		RateTS: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
 	}}
 	deps := RWAPriceDeps{
 		Service:         svc,
@@ -332,50 +311,102 @@ func TestRWA_Latest_InUSD_Success(t *testing.T) {
 	if lookup.gotBase != "tst" || lookup.gotQuote != "usdt" {
 		t.Errorf("lookup got (%q,%q), want (tst,usdt)", lookup.gotBase, lookup.gotQuote)
 	}
-	var got struct {
-		NativeQuote string            `json:"native_quote"`
-		Values      map[string]string `json:"values"`
-		In          map[string]struct {
-			Values map[string]string `json:"values"`
-			FX     struct {
-				Rate   string `json:"rate"`
-				Source string `json:"source"`
-				Method string `json:"method"`
-			} `json:"fx"`
-		} `json:"in"`
-	}
+
+	// Decode into a flat map so we can check both fixed and dynamic keys.
+	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, w.Body.String())
 	}
-	if got.NativeQuote != "usdt" {
-		t.Errorf("native_quote = %q, want usdt", got.NativeQuote)
+	if got["native_quote"] != "usdt" {
+		t.Errorf("native_quote = %v, want usdt", got["native_quote"])
 	}
-	usd, ok := got.In["usd"]
+	// price should be JSON number (float64 after unmarshal), not a string.
+	price, ok := got["price"].(float64)
 	if !ok {
-		t.Fatalf("in.usd missing in response: %s", w.Body.String())
+		t.Fatalf("price is %T (%v), want float64 (JSON number)", got["price"], got["price"])
 	}
-	if got, want := usd.FX.Source, "coingecko"; got != want {
-		t.Errorf("fx.source = %q, want %q", got, want)
+	if price != 100.0 {
+		t.Errorf("price = %v, want 100.0", price)
 	}
-	if usd.FX.Method != "rate" {
-		t.Errorf("fx.method = %q, want rate", usd.FX.Method)
+	// 100.00 * 1.0001 = 100.01 → rounded to 6 dp → 100.01 (exact).
+	usd, ok := got["usd"].(float64)
+	if !ok {
+		t.Fatalf("usd is %T (%v), want float64; body=%s", got["usd"], got["usd"], w.Body.String())
 	}
-	// 100.00 USDT * 1.0001 = 100.01 USD.
-	if got, want := usd.Values["bid"], "100.01"; got != want {
-		t.Errorf("in.usd.bid = %q, want %q", got, want)
+	if usd != 100.01 {
+		t.Errorf("usd = %v, want 100.01", usd)
 	}
-	if got, want := usd.Values["ask"], "101.0101"; got != want {
-		t.Errorf("in.usd.ask = %q, want %q", got, want)
+	if conv.calls != 1 {
+		t.Errorf("converter called %d times, want 1 (one last point)", conv.calls)
 	}
-	if conv.calls != 2 {
-		t.Errorf("converter called %d times, want 2 (bid+ask)", conv.calls)
+}
+
+// TestRWA_Latest_NumericJSON — price is a JSON number, not a quoted string.
+func TestRWA_Latest_NumericJSON(t *testing.T) {
+	svc, lookup := rwaLastPointForTests(t)
+	deps := RWAPriceDeps{
+		Service:       svc,
+		Lookup:        lookup,
+		DefaultSource: prices.SourceEquiteez,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := got["price"].(float64); !ok {
+		t.Errorf("price type = %T, want float64 (JSON number); body=%s", got["price"], w.Body.String())
+	}
+}
+
+// TestRWA_Latest_RoundedTo6 — converter returns high-precision amount; response
+// rounds to 6 decimal places.
+func TestRWA_Latest_RoundedTo6(t *testing.T) {
+	svc, lookup := rwaLastPointForTests(t)
+	// rate produces 33.99992345678... after multiplication with 100
+	conv := &stubConverter{result: apiprices.ConversionResult{
+		Rate:   decimal.RequireFromString("0.3399992345678"),
+		Source: prices.SourceCoinGecko,
+		RateTS: time.Now().UTC(),
+	}}
+	deps := RWAPriceDeps{
+		Service:         svc,
+		Converter:       conv,
+		Lookup:          lookup,
+		DefaultSource:   prices.SourceEquiteez,
+		MaxInCurrencies: 10,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=usd", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	usd, ok := got["usd"].(float64)
+	if !ok {
+		t.Fatalf("usd type = %T, want float64", got["usd"])
+	}
+	// 100 * 0.3399992345678 = 33.99992345678 → Round(6) = 33.999923
+	if usd != 33.999923 {
+		t.Errorf("usd = %v, want 33.999923 (rounded to 6 dp)", usd)
 	}
 }
 
 // TestRWA_Latest_InEUR_NoFXRate — converter returns ErrNoFXRate; response is
-// 200 with `in.eur.fx.error: "no_fx_rate"` and no values block.
+// 200 with `eur` key absent from the flat object.
 func TestRWA_Latest_InEUR_NoFXRate(t *testing.T) {
-	svc, lookup := rwaSnapshotForTests(t)
+	svc, lookup := rwaLastPointForTests(t)
 	conv := &stubConverter{err: apiprices.ErrNoFXRate}
 	deps := RWAPriceDeps{
 		Service:         svc,
@@ -392,37 +423,25 @@ func TestRWA_Latest_InEUR_NoFXRate(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (partial success); body=%s", w.Code, w.Body.String())
 	}
-	var got struct {
-		In map[string]struct {
-			Values map[string]string `json:"values,omitempty"`
-			FX     struct {
-				Error string `json:"error"`
-			} `json:"fx"`
-		} `json:"in"`
-	}
+	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	eur, ok := got.In["eur"]
-	if !ok {
-		t.Fatalf("in.eur missing: %s", w.Body.String())
+	if _, present := got["eur"]; present {
+		t.Errorf("eur key should be absent when conversion fails, got %v", got["eur"])
 	}
-	if eur.FX.Error != "no_fx_rate" {
-		t.Errorf("fx.error = %q, want no_fx_rate", eur.FX.Error)
-	}
-	if len(eur.Values) != 0 {
-		t.Errorf("values should be empty when conversion fails, got %v", eur.Values)
+	// native price must still be present.
+	if _, ok := got["price"].(float64); !ok {
+		t.Errorf("price missing or wrong type; body=%s", w.Body.String())
 	}
 }
 
 // TestRWA_Latest_InMulti_PartialSuccess — `?in=usd,eur` where USD succeeds
-// and EUR fails. USD block has values + fx.rate; EUR block has fx.error only.
+// and EUR fails. `usd` key present, `eur` key absent.
 func TestRWA_Latest_InMulti_PartialSuccess(t *testing.T) {
-	svc, lookup := rwaSnapshotForTests(t)
-	calls := 0
+	svc, lookup := rwaLastPointForTests(t)
 	conv := &stubFnConverter{
 		fn: func(_ context.Context, _ prices.Token, target prices.Currency, amount decimal.Decimal, _ time.Time) (apiprices.ConversionResult, error) {
-			calls++
 			if target == prices.CurrencyEUR {
 				return apiprices.ConversionResult{}, apiprices.ErrNoFXRate
 			}
@@ -448,31 +467,21 @@ func TestRWA_Latest_InMulti_PartialSuccess(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
-	var got struct {
-		In map[string]struct {
-			Values map[string]string `json:"values,omitempty"`
-			FX     struct {
-				Error string `json:"error"`
-				Rate  string `json:"rate"`
-			} `json:"fx"`
-		} `json:"in"`
-	}
+	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := got.In["usd"]; !ok {
-		t.Errorf("in.usd missing")
+	if _, ok := got["usd"].(float64); !ok {
+		t.Errorf("usd key missing or wrong type; body=%s", w.Body.String())
 	}
-	if got.In["usd"].FX.Error != "" {
-		t.Errorf("usd.fx.error = %q, want empty", got.In["usd"].FX.Error)
-	}
-	if got.In["eur"].FX.Error != "no_fx_rate" {
-		t.Errorf("eur.fx.error = %q, want no_fx_rate", got.In["eur"].FX.Error)
+	if _, present := got["eur"]; present {
+		t.Errorf("eur key should be absent when conversion fails")
 	}
 }
 
 // TestRWA_Latest_QuoteNotInRegistry — pair quoted in a token not in the FT
-// `tokens` registry. Converter is never called; fx.error is set per target.
+// `tokens` registry. Converter is never called; all ?in= keys absent.
+// Native `price` still returned.
 func TestRWA_Latest_QuoteNotInRegistry(t *testing.T) {
 	prices.RegisterTokens([]prices.TokenInfo{
 		// usdt intentionally NOT registered to simulate the case.
@@ -481,7 +490,7 @@ func TestRWA_Latest_QuoteNotInRegistry(t *testing.T) {
 	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
 	svc := &stubQueryService{
 		points: []prices.PricePoint{
-			{Source: prices.SourceEquiteez, EntityKey: "42", Timestamp: now, Metric: "bid", Price: decimal.NewFromFloat(100.00)},
+			{Source: prices.SourceEquiteez, EntityKey: "42", Timestamp: now, Metric: "last", Price: decimal.NewFromFloat(100.00)},
 		},
 	}
 	lookup := &stubLookup{pair: prices.RWAPair{
@@ -505,18 +514,131 @@ func TestRWA_Latest_QuoteNotInRegistry(t *testing.T) {
 	if conv.calls != 0 {
 		t.Errorf("converter called %d times, want 0 (quote should fail registry check first)", conv.calls)
 	}
-	var got struct {
-		In map[string]struct {
-			FX struct {
-				Error string `json:"error"`
-			} `json:"fx"`
-		} `json:"in"`
-	}
+	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.In["usd"].FX.Error != "quote_currency_not_in_registry" {
-		t.Errorf("fx.error = %q, want quote_currency_not_in_registry", got.In["usd"].FX.Error)
+	if _, present := got["usd"]; present {
+		t.Errorf("usd key should be absent when quote not in registry; body=%s", w.Body.String())
+	}
+	if _, ok := got["price"].(float64); !ok {
+		t.Errorf("price missing or wrong type; body=%s", w.Body.String())
+	}
+}
+
+// TestRWA_List_SameShapeAsLatest — list endpoint returns an array where each
+// element has the same shape as the /latest response.
+func TestRWA_List_SameShapeAsLatest(t *testing.T) {
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	svc := &stubQueryService{
+		points: []prices.PricePoint{
+			{Source: prices.SourceEquiteez, EntityKey: "42", Timestamp: now.Add(-time.Hour), Metric: "last", Price: decimal.NewFromFloat(99.0)},
+			{Source: prices.SourceEquiteez, EntityKey: "42", Timestamp: now, Metric: "last", Price: decimal.NewFromFloat(100.0)},
+		},
+	}
+	lookup := &stubLookup{pair: prices.RWAPair{
+		ID: 42, Source: prices.SourceEquiteez, QuoteSymbol: "USDT", Enabled: true,
+	}}
+	conv := &stubConverter{result: apiprices.ConversionResult{
+		Rate:   decimal.NewFromFloat(1.0001),
+		Source: prices.SourceCoinGecko,
+		RateTS: now,
+	}}
+	deps := RWAPriceDeps{
+		Service:         svc,
+		Converter:       conv,
+		Lookup:          lookup,
+		DefaultSource:   prices.SourceEquiteez,
+		MaxInCurrencies: 10,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt?in=usd", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v\n%s", err, w.Body.String())
+	}
+	if len(rows) != 2 {
+		t.Fatalf("len = %d, want 2", len(rows))
+	}
+	for i, row := range rows {
+		if _, ok := row["timestamp"].(string); !ok {
+			t.Errorf("row[%d].timestamp missing or not string", i)
+		}
+		if row["native_quote"] != "usdt" {
+			t.Errorf("row[%d].native_quote = %v, want usdt", i, row["native_quote"])
+		}
+		if _, ok := row["price"].(float64); !ok {
+			t.Errorf("row[%d].price is %T, want float64 (JSON number)", i, row["price"])
+		}
+		if _, ok := row["usd"].(float64); !ok {
+			t.Errorf("row[%d].usd is %T, want float64", i, row["usd"])
+		}
+		// No old-format keys present.
+		for _, badKey := range []string{"side", "values", "in", "source", "entity", "size"} {
+			if _, present := row[badKey]; present {
+				t.Errorf("row[%d] has unexpected key %q", i, badKey)
+			}
+		}
+	}
+}
+
+// TestRWA_List_OnlyLastSide — query service must be called with Metrics == ["last"].
+func TestRWA_List_OnlyLastSide(t *testing.T) {
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	svc := &stubQueryService{}
+	lookup := &stubLookup{pair: prices.RWAPair{
+		ID: 42, Source: prices.SourceEquiteez, QuoteSymbol: "USDT", Enabled: true,
+	}}
+	deps := RWAPriceDeps{
+		Service:       svc,
+		Lookup:        lookup,
+		DefaultSource: prices.SourceEquiteez,
+		MaxLimit:      1000,
+		DefaultLimit:  100,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if len(svc.gotQ.Metrics) != 1 || svc.gotQ.Metrics[0] != "last" {
+		t.Errorf("query Metrics = %v, want [last]", svc.gotQ.Metrics)
+	}
+}
+
+// TestRWA_List_EmptyResult_200 — empty list returns [] (200), not 404.
+func TestRWA_List_EmptyResult_200(t *testing.T) {
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	deps := RWAPriceDeps{
+		Service:       &stubQueryService{}, // no points
+		Lookup:        &stubLookup{pair: prices.RWAPair{ID: 42, QuoteSymbol: "USDT"}},
+		DefaultSource: prices.SourceEquiteez,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if body != "[]" && body != "[]\n" {
+		// tolerate trailing newline from JSON encoder
+		t.Errorf("body = %q, want []", body)
 	}
 }
 
@@ -531,6 +653,3 @@ func (s *stubFnConverter) Convert(
 ) (apiprices.ConversionResult, error) {
 	return s.fn(ctx, src, target, amt, ts)
 }
-
-// silence vet about unused imports if test file shrinks
-var _ = errors.New

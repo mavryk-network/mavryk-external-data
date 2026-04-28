@@ -13,7 +13,6 @@ import (
 	"quotes/internal/core/infrastructure/storage/repositories"
 
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 )
 
 // TokenPriceDeps wires the FT-side dependencies for the handlers below.
@@ -74,9 +73,9 @@ func (d TokenPriceDeps) ListByToken() gin.HandlerFunc {
 		}, nil
 	}
 	type pointDTO struct {
-		Timestamp string          `json:"timestamp"`
-		Currency  string          `json:"currency"`
-		Price     decimal.Decimal `json:"price"`
+		Timestamp string `json:"timestamp"`
+		Currency  string `json:"currency"`
+		Price     num6   `json:"price"`
 	}
 	action := func(ctx context.Context, req request) ([]pointDTO, error) {
 		points, err := d.Service.Query(ctx, req.Query)
@@ -88,7 +87,7 @@ func (d TokenPriceDeps) ListByToken() gin.HandlerFunc {
 			out[i] = pointDTO{
 				Timestamp: p.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
 				Currency:  p.Metric,
-				Price:     p.Price,
+				Price:     newNum6(p.Price),
 			}
 		}
 		return out, nil
@@ -120,16 +119,27 @@ func (d TokenPriceDeps) LatestSnapshot() gin.HandlerFunc {
 			},
 		}, nil
 	}
-	action := func(ctx context.Context, req request) (prices.Snapshot, error) {
+	type snapshotDTO struct {
+		Timestamp string          `json:"timestamp"`
+		Values    map[string]num6 `json:"values"`
+	}
+	action := func(ctx context.Context, req request) (snapshotDTO, error) {
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
-			return prices.Snapshot{}, err
+			return snapshotDTO{}, err
 		}
 		snap, ok := prices.LatestSnapshot(points)
 		if !ok {
-			return prices.Snapshot{}, coreerrors.NotFound("No prices for token")
+			return snapshotDTO{}, coreerrors.NotFound("No prices for token")
 		}
-		return snap, nil
+		vals := make(map[string]num6, len(snap.Values))
+		for cur, v := range snap.Values {
+			vals[cur] = newNum6(v)
+		}
+		return snapshotDTO{
+			Timestamp: snap.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
+			Values:    vals,
+		}, nil
 	}
 	return common.Wrap(bind, action)
 }

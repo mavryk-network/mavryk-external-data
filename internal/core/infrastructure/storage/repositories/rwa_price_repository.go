@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/storage/entities"
@@ -101,11 +102,17 @@ func (r *RWAPriceRepository) Query(ctx context.Context, q prices.Query) ([]price
 }
 
 func (r *RWAPriceRepository) latestPerSide(ctx context.Context, pairID int64, q prices.Query) ([]prices.PricePoint, error) {
+	// Build a `side IN (?,?,...)` fragment with one placeholder per metric;
+	// `= ANY(?)` with a Go []string would push the whole slice as a single
+	// text-array literal under pgx/raw-SQL and fail with `malformed array
+	// literal`. All values still flow through prepared-statement parameters.
 	args := []any{pairID}
 	frag := ""
 	if q.HasMetricFilter() {
-		frag = ` AND side = ANY(?)`
-		args = append(args, q.Metrics)
+		frag = " AND side IN (" + strings.Repeat("?,", len(q.Metrics)-1) + "?)"
+		for _, m := range q.Metrics {
+			args = append(args, m)
+		}
 	}
 	var rows []entities.RWAQuotePriceEntity
 	err := r.db.WithContext(ctx).Raw(

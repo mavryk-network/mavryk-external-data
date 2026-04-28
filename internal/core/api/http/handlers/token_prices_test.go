@@ -130,6 +130,9 @@ func TestListByToken_OK_ReturnsArray(t *testing.T) {
 	if out[0]["currency"] != "usd" {
 		t.Errorf("currency = %v, want usd", out[0]["currency"])
 	}
+	if _, ok := out[0]["price"].(float64); !ok {
+		t.Errorf("price type = %T, want float64 (JSON number); body=%s", out[0]["price"], w.Body.String())
+	}
 	// Validate the query reached the service correctly.
 	if stub.gotQ.EntityKey != "mvrk" || stub.gotQ.Source != prices.SourceCoinGecko {
 		t.Errorf("query EntityKey/Source = %q/%q", stub.gotQ.EntityKey, stub.gotQ.Source)
@@ -179,20 +182,29 @@ func TestLatestSnapshot_Transposed(t *testing.T) {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
 	var snap struct {
-		Source    string            `json:"source"`
-		EntityKey string            `json:"entity"`
-		Values    map[string]string `json:"values"`
+		Timestamp string             `json:"timestamp"`
+		Values    map[string]float64 `json:"values"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &snap); err != nil {
 		t.Fatalf("decode body: %v\n%s", err, w.Body.String())
 	}
-	if snap.EntityKey != "mvrk" {
-		t.Errorf("entity = %q, want mvrk", snap.EntityKey)
+	if snap.Timestamp == "" {
+		t.Errorf("timestamp missing in snapshot; body=%s", w.Body.String())
 	}
-	if _, ok := snap.Values["usd"]; !ok {
-		t.Errorf("missing usd in snapshot: %+v", snap.Values)
+	if snap.Values["usd"] != 1.5 {
+		t.Errorf("values.usd = %v, want 1.5", snap.Values["usd"])
 	}
-	if _, ok := snap.Values["eur"]; !ok {
-		t.Errorf("missing eur in snapshot: %+v", snap.Values)
+	if snap.Values["eur"] != 1.4 {
+		t.Errorf("values.eur = %v, want 1.4", snap.Values["eur"])
+	}
+	// source and entity must not be present.
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	for _, badKey := range []string{"source", "entity"} {
+		if _, present := raw[badKey]; present {
+			t.Errorf("unexpected key %q in snapshot response", badKey)
+		}
 	}
 }
