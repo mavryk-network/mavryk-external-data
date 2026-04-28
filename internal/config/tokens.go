@@ -51,11 +51,17 @@ func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
 		tokenCfg.MinTimeRangeSeconds = 60
 	}
 	if tokenCfg.LiveLookbackSeconds == 0 {
-		// 2× interval covers a missed tick without forcing a multi-hour fetch on
-		// a stale cursor.
+		// 2× interval covers a missed tick — but CoinGecko's market_chart/range
+		// has 5-minute granularity for windows ≤ 1 day, so a 120s window for an
+		// interval=60s token systematically misses bucket boundaries on
+		// low-liquidity coins (returns `prices: []`). Floor the default at 600s
+		// (10 min = 2 CG buckets) so the live tick always overlaps at least one
+		// data point. Operators can still override per-token to lower this when
+		// dealing with high-frequency upstreams.
+		const minLookback = 600
 		tokenCfg.LiveLookbackSeconds = tokenCfg.IntervalSeconds * 2
-		if tokenCfg.LiveLookbackSeconds == 0 {
-			tokenCfg.LiveLookbackSeconds = 120
+		if tokenCfg.LiveLookbackSeconds < minLookback {
+			tokenCfg.LiveLookbackSeconds = minLookback
 		}
 	}
 	if tokenCfg.MaxChunkMinutes == 0 {

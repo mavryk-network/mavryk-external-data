@@ -92,6 +92,14 @@ func run() int {
 	tokenAppRepo := apiprices.NewCachedRepository(tokenRepoAdapter{tokenRepo}, cacheTTL)
 	rwaAppRepo := apiprices.NewCachedRepository(rwaRepoAdapter{rwaRepo}, cacheTTL)
 
+	// FX converter for RWA `?in=` multi-currency conversions. Reads from
+	// the same `token_prices` series the live job populates.
+	fxConverter := apiprices.NewTokenFXConverter(
+		tokenRepoAdapter{tokenRepo},
+		time.Duration(cfg.Server.FXMaxStalenessSeconds)*time.Second,
+		prices.SourceCoinGecko,
+	)
+
 	httpApp := httpapp.NewApp(httpapp.AppDeps{
 		Config:          cfg,
 		DB:              db.DB,
@@ -99,6 +107,8 @@ func run() int {
 		TokenPriceQuery: tokenAppRepo,
 		RWAPriceQuery:   rwaAppRepo,
 		TokenPriceRepo:  tokenRepo,
+		FXConverter:     fxConverter,
+		Lookup:          lookup,
 	})
 
 	liveJob := jobs.NewCoinGeckoLiveJob(cfg, tokenAppRepo, logger)

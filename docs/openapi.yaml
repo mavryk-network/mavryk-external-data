@@ -183,6 +183,10 @@ paths:
         Window/latest semantics match `/v1/prices/{token}`.
 
         `side` filters metrics: `bid`, `ask`, `last`, `mid` (comma-separated).
+
+        `?in=usd,eur,...` adds an `in` map per row with prices converted
+        to each requested currency through the FT-side `token_prices`
+        series (read-side conversion; native quote currency stays canonical).
       operationId: listRWAPrices
       parameters:
         - $ref: "#/components/parameters/PairID"
@@ -190,6 +194,7 @@ paths:
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/SideFilter"
+        - $ref: "#/components/parameters/InFilter"
       responses:
         "200":
           description: Array of RWA price points.
@@ -213,20 +218,42 @@ paths:
       description: |
         Freshest price per `side` (bid/ask/last/mid) for an RWA pair,
         transposed into one Snapshot object.
+
+        Optional `?in=usd,eur,...` adds an `in` block per requested target
+        currency, converted from the pair's native quote currency through
+        the FT-side `token_prices` series (read-side, no storage growth).
+        Per-target failures (`no_fx_rate`, `quote_currency_not_in_registry`,
+        ...) surface as `fx.error` while the request stays 200 — see
+        `RWAExtendedSnapshot` schema for the partial-success envelope.
       operationId: latestRWASnapshot
       parameters:
         - $ref: "#/components/parameters/PairID"
+        - $ref: "#/components/parameters/InFilter"
       responses:
         "200":
-          description: Snapshot of latest prices, one per side.
+          description: |
+            Snapshot of latest prices. Without `?in=` the response matches
+            the legacy `Snapshot` shape; with `?in=` it carries
+            `RWAExtendedSnapshot` (extra `native_quote` and `in` fields).
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Snapshot" }
+              schema: { $ref: "#/components/schemas/RWAExtendedSnapshot" }
               example:
                 source: equiteez
                 entity: "42"
                 timestamp: "2026-04-27T12:00:00Z"
+                native_quote: usdt
                 values: { bid: "100.42", ask: "100.50", last: "100.45" }
+                in:
+                  usd:
+                    values: { bid: "100.4300", ask: "100.5101", last: "100.4601" }
+                    fx:
+                      rate: "1.0001"
+                      source: coingecko
+                      ts: "2026-04-27T11:59:30Z"
+                      method: rate
+                  eur:
+                    fx: { error: no_fx_rate }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/Internal" }
 
@@ -305,6 +332,26 @@ components:
         # and we accept comma lists like "bid,ask").
         pattern: "^(bid|ask|last|mid)(,(bid|ask|last|mid))*$"
         example: "bid,ask"
+
+    InFilter:
+      name: in
+      in: query
+      required: false
+      description: |
+        Comma-separated list of target currencies for read-side conversion
+        (e.g. `usd`, `usd,eur,aed`). Each must be a registered quote
+        currency in `prices.AllSupportedCurrencies` — unknown values
+        return 400. The server caps the list length via
+        `server.max_in_currencies` (default 10).
+
+        Conversion uses the FT-side `token_prices` series as the FX
+        source: for a pair quoted in `USDT`, `?in=usd` looks up the
+        latest `USDT/USD` rate from CoinGecko and multiplies. Per-target
+        failures (`no_fx_rate`, `quote_currency_not_in_registry`, ...)
+        surface as `fx.error` in the response without failing the request.
+      schema:
+        type: string
+        example: "usd,eur,aed"
 
   responses:
     BadRequest:
@@ -386,6 +433,103 @@ components:
           nullable: true
           description: Volume for that side, when the source reports it (Equiteez orderbooks may omit it).
           example: "1500"
+
+    RWAExtendedSnapshot:
+      type: object
+      description: |
+        RWA `/latest` response — same as `Snapshot` plus optional
+        multi-currency block. `native_quote` is the orderbook's settlement
+        currency (the symbol stored in `rwa_pairs.quote_symbol`); it's
+        always present so clients can disambiguate `values` units. `in`
+        is populated when the request includes `?in=`.
+      required: [source, entity, timestamp, values]
+      properties:
+        source:
+          type: string
+          example: equiteez
+          enum: [coingecko, equiteez]
+        entity:
+          type: string
+          example: "42"
+        timestamp:
+          type: string
+          format: date-time
+        native_quote:
+          type: string
+          description: |
+            Orderbook's native quote currency (lowercase). Present when
+            the pair's `quote_symbol` resolves through the FT token registry.
+          example: usdt
+        values:
+          type: object
+          description: Map of side → decimal-string price in `native_quote`.
+          additionalProperties:
+            $ref: "#/components/schemas/DecimalString"
+        in:
+          type: object
+          description: |
+            Per-target conversion blocks. Key is the lowercase target
+            currency. Block value follows `ConvertedSnapshotBlock`.
+          additionalProperties:
+            $ref: "#/components/schemas/ConvertedSnapshotBlock"
+
+    ConvertedSnapshotBlock:
+      type: object
+      description: |
+        One target-currency conversion of an RWA snapshot. `values` is
+        the same shape as the parent `values` (side → price) but in the
+        target currency. `fx` is metadata describing how the conversion
+        was performed; on partial failure (e.g. `no_fx_rate`) `values`
+        may be omitted and `fx.error` set.
+      required: [fx]
+      properties:
+        values:
+          type: object
+          description: Converted side → price in the target currency.
+          additionalProperties:
+            $ref: "#/components/schemas/DecimalString"
+        fx:
+          $ref: "#/components/schemas/FXMeta"
+
+    FXMeta:
+      type: object
+      description: |
+        Metadata about an FX conversion. `rate`/`source`/`ts`/`method`
+        are populated on success; `error` and/or `stale`/`warning` mark
+        partial-success states (the parent envelope still returns 200).
+      properties:
+        rate:
+          allOf: [{ $ref: "#/components/schemas/DecimalString" }]
+          description: Multiplicative rate used for conversion.
+        source:
+          type: string
+          description: FX-data source code (e.g. `coingecko`).
+        ts:
+          type: string
+          format: date-time
+          description: Timestamp of the FX rate (latest ≤ snapshot ts).
+        method:
+          type: string
+          enum: [rate, identity, close_of_bucket]
+          description: |
+            How the conversion was computed. `identity` for same-currency
+            (`?in=usdt` on USDT-quoted pair). `close_of_bucket` reserved
+            for future OHLC conversions (see ADR-0013).
+        stale:
+          type: boolean
+          description: |
+            True when (now − ts) > `server.fx_max_staleness_seconds`.
+            Returned alongside the converted value — clients decide
+            whether to trust it.
+        warning:
+          type: string
+          description: Soft signal; `stale` is the structured form.
+        error:
+          type: string
+          enum: [no_fx_rate, unsupported_target, quote_currency_not_in_registry, internal]
+          description: |
+            Set when the conversion failed for this target. The parent
+            response still has 200; consumers branch on this field.
 
     Snapshot:
       type: object

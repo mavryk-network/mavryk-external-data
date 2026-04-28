@@ -27,7 +27,15 @@ type ServerConfig struct {
 	HandlerTimeout DurationYAML `yaml:"handler_timeout"`
 	// RateLimit is an optional inbound rate limit applied to all routes.
 	RateLimit ServerRateLimitConfig `yaml:"rate_limit"`
-	CORS      CORSConfig            `yaml:"cors"`
+	// FXMaxStalenessSeconds — how old a CoinGecko FX rate may be before
+	// `?in=` responses tag it `fx.stale=true` (still served, never blocks).
+	// 0 means use the in-code default (300s).
+	FXMaxStalenessSeconds int `yaml:"fx_max_staleness_seconds"`
+	// MaxInCurrencies — cap on the number of comma-separated currencies a
+	// single request may pass to `?in=`. Defends against `?in=usd,eur,...`
+	// spam. 0 means use the in-code default (10).
+	MaxInCurrencies int        `yaml:"max_in_currencies"`
+	CORS            CORSConfig `yaml:"cors"`
 }
 
 // ServerRateLimitConfig controls inbound HTTP throttling.

@@ -101,6 +101,7 @@ mavryk-external-data/
 | `limit`    | list              | capped by `server.max_query_limit` (10000)  |
 | `currency` | FT list           | filter: `usd`, `usd,eur`                    |
 | `side`     | RWA list          | filter: `bid`, `ask`, `last`, `mid`         |
+| `in`       | RWA list+latest   | read-side conversion targets, e.g. `usd,eur,aed` (see [ADR-0013](docs/adr/0013-multi-currency-rwa-conversion-read-side.md)); capped by `server.max_in_currencies` (10) |
 
 ### Examples
 
@@ -111,8 +112,21 @@ curl http://localhost:3010/v1/prices/mvrk/latest
 # MVRK in USD over a window
 curl "http://localhost:3010/v1/prices/mvrk?currency=usd&from=2026-04-01T00:00:00Z&to=2026-04-02T00:00:00Z"
 
-# RWA pair 42 — last bid/ask
+# RWA pair 42 — last bid/ask in native quote (USDT)
 curl http://localhost:3010/v1/rwa/42/latest
+
+# RWA pair 42 — same snapshot rendered into USD / EUR / AED via FT-side FX
+curl "http://localhost:3010/v1/rwa/42/latest?in=usd,eur,aed"
+# →
+# {
+#   "source": "equiteez", "entity": "42", "timestamp": "...",
+#   "native_quote": "usdt",
+#   "values": { "bid": "100.42", "ask": "100.50", "last": "100.45" },
+#   "in": {
+#     "usd": { "values": { "bid": "100.43", ... }, "fx": { "rate": "1.0001", "source": "coingecko", "ts": "...", "method": "rate" } },
+#     "eur": { "fx": { "error": "no_fx_rate" } }   ← partial success, still 200
+#   }
+# }
 ```
 
 ### Response shapes

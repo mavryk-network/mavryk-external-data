@@ -175,8 +175,11 @@ func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector)
 	}
 	metrics.JobRowsAffectedTotal.WithLabelValues("live", string(prices.SourceCoinGecko), tokenName).
 		Add(float64(n))
-	// Refactoring v2 §2.4 — Info on tick success is too noisy for steady-state ops.
-	logger.Debug().
+	// Successful tick at Info level — operators need the visible heartbeat per
+	// token (the alternative is debugging "why does my graph for MVRK show
+	// nothing" through Prometheus). `live_no_points` and `live_skip_*` stay at
+	// Debug since they're normal during a quiet upstream window.
+	logger.Info().
 		Int("batch_size", len(points)).
 		Int64("rows_affected", n).
 		Msg("live_collected")

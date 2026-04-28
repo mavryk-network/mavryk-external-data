@@ -45,6 +45,7 @@ Status values:
 | [0010](0010-runtime-token-registry.md) | Token registry loaded from DB at startup | Accepted |
 | [0011](0011-openapi-3-hand-written.md) | Hand-written OpenAPI 3.0 spec; drop `swaggo/swag` | Accepted |
 | [0012](0012-rwa-pair-discovery-and-normalization.md) | RWA pair discovery from Equiteez allowlist + price normalization via `tokens.decimals` | Accepted |
+| [0013](0013-multi-currency-rwa-conversion-read-side.md) | Multi-currency RWA conversion is read-side, not stored (`?in=`) | Accepted |
 
 ## Related
 

@@ -27,6 +27,10 @@ type AppDeps struct {
 	TokenPriceQuery apiprices.QueryService
 	RWAPriceQuery   apiprices.QueryService
 	TokenPriceRepo  *repositories.TokenPriceRepository
+	// Optional, enables `?in=` multi-currency conversions on RWA endpoints.
+	// When either field is nil the handler rejects `?in=` with 400.
+	FXConverter apiprices.PriceConverter
+	Lookup      *repositories.LookupRepository
 }
 
 type App struct {
@@ -92,10 +96,13 @@ func NewApp(deps AppDeps) *App {
 		DefaultLimit:  100,
 	}
 	rwaDeps := handlers.RWAPriceDeps{
-		Service:       deps.RWAPriceQuery,
-		DefaultSource: prices.SourceEquiteez,
-		MaxLimit:      cfg.Server.MaxQueryLimit,
-		DefaultLimit:  100,
+		Service:         deps.RWAPriceQuery,
+		Converter:       deps.FXConverter,
+		Lookup:          deps.Lookup,
+		DefaultSource:   prices.SourceEquiteez,
+		MaxLimit:        cfg.Server.MaxQueryLimit,
+		DefaultLimit:    100,
+		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
 	SetupRoutes(router, RouterDeps{
 		DB:            deps.DB,

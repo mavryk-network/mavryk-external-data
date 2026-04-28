@@ -248,6 +248,55 @@
       "targets": [{ "refId": "A",
         "expr": "rate(db_pool_wait_duration_seconds{namespace=\"$namespace\"}[$__rate_interval])",
         "legendFormat": "wait/s" }]
+    },
+
+    { "type": "row", "id": 50, "title": "FX conversions (RWA `?in=`)",
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 87 }, "panels": [] },
+
+    {
+      "type": "timeseries", "id": 51, "title": "FX conversion p95 by (source_token, target)",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 88 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "description": "p95 wall-time of one Convert() call (cache hit + miss combined)."
+        }
+      },
+      "targets": [{ "refId": "A",
+        "expr": "histogram_quantile(0.95, sum by (source_token, target, le) (rate(fx_conversion_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+        "legendFormat": "{{source_token}} → {{target}}" }]
+    },
+    {
+      "type": "timeseries", "id": 52, "title": "FX conversion outcomes (rate by result)",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 88 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "description": "Conversions per second labelled by result. `success`/`identity` are healthy; `no_rate`/`unregistered_source`/`query_error` indicate a problem."
+        }
+      },
+      "options": {
+        "legend": { "calcs": ["mean"], "displayMode": "table", "placement": "bottom", "showLegend": true }
+      },
+      "targets": [{ "refId": "A",
+        "expr": "sum by (result) (rate(fx_conversions_total{namespace=\"$namespace\"}[$__rate_interval]))",
+        "legendFormat": "{{result}}" }]
+    },
+    {
+      "type": "timeseries", "id": 53, "title": "FX stale-rate per target (alertable)",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 96 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "description": "Conversions returned with `fx.stale=true` (FX older than `server.fx_max_staleness_seconds`). A growing rate means the CoinGecko live job is behind. Alert on `> 1%` of total."
+        }
+      },
+      "targets": [{ "refId": "A",
+        "expr": "sum by (target) (rate(fx_stale_responses_total{namespace=\"$namespace\"}[$__rate_interval]))",
+        "legendFormat": "{{target}}" }]
     }
   ],
   "preload": false,

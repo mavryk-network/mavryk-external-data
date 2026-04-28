@@ -51,6 +51,12 @@ func (c *Config) validateServer() error {
 	if c.Server.MaxQueryLimit < 0 {
 		return fmt.Errorf("server.max_query_limit must be >= 0, got %d", c.Server.MaxQueryLimit)
 	}
+	if c.Server.FXMaxStalenessSeconds < 0 {
+		return fmt.Errorf("server.fx_max_staleness_seconds must be >= 0, got %d", c.Server.FXMaxStalenessSeconds)
+	}
+	if c.Server.MaxInCurrencies < 0 {
+		return fmt.Errorf("server.max_in_currencies must be >= 0, got %d", c.Server.MaxInCurrencies)
+	}
 	if err := validatePositiveDuration("server.read_timeout", c.Server.ReadTimeout); err != nil {
 		return err
 	}

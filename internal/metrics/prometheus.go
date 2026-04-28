@@ -145,6 +145,39 @@ var (
 			Help: "Cumulative seconds blocked waiting for a free connection.",
 		},
 	)
+
+	// FXConversionDurationSeconds — wall time of one PriceConverter.Convert
+	// call (cache hit or miss). Histogram per (source_token, target).
+	FXConversionDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "fx_conversion_duration_seconds",
+			Help:    "Wall time of one FX conversion (cache hit + miss combined).",
+			Buckets: rateLimitBuckets,
+		},
+		[]string{"source_token", "target"},
+	)
+
+	// FXConversionsTotal — counter labeled by outcome:
+	// `success`, `identity`, `no_rate`, `unsupported_target`, `unregistered_source`, `query_error`.
+	FXConversionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "fx_conversions_total",
+			Help: "Outcome of FX conversions exposed at API edges.",
+		},
+		[]string{"source_token", "target", "result"},
+	)
+
+	// FXStaleResponsesTotal — counter of `?in=` responses that were served
+	// with `fx.stale=true`. A growing rate means CoinGecko live-job is
+	// behind or down — alert on `rate(...) > 1% of total`.
+	FXStaleResponsesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "fx_stale_responses_total",
+			Help: "Conversions returned with stale FX (older than configured budget).",
+		},
+		[]string{"target"},
+	)
+
 )
 
 // StatusClass returns 2xx, 4xx, or 5xx for HTTPResponsesTotal labelling.

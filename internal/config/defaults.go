@@ -30,6 +30,12 @@ func setDefaults(config *Config) {
 	if config.Server.MaxQueryLimit == 0 {
 		config.Server.MaxQueryLimit = 10000
 	}
+	if config.Server.FXMaxStalenessSeconds == 0 {
+		config.Server.FXMaxStalenessSeconds = 300
+	}
+	if config.Server.MaxInCurrencies == 0 {
+		config.Server.MaxInCurrencies = 10
+	}
 	if len(config.Server.CORS.AllowedOrigins) == 0 {
 		config.Server.CORS.AllowedOrigins = []string{
 			"http://localhost:3000",
@@ -102,7 +108,11 @@ func setDefaults(config *Config) {
 	}
 
 	if config.RWA.IntervalSeconds == 0 && config.RWA.Enabled {
-		config.RWA.IntervalSeconds = 60
+		// 10s matches Mavryk block time — orderbook prices on Equiteez change
+		// at most once per block, so polling faster doesn't surface fresher
+		// data. Operators can lower further on chains with sub-second blocks
+		// (rare) or raise to reduce storage pressure on idle markets.
+		config.RWA.IntervalSeconds = 10
 	}
 	if config.RWA.Concurrency == 0 && config.RWA.Enabled {
 		config.RWA.Concurrency = 4
