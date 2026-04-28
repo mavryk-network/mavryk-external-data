@@ -23,16 +23,3 @@ func TestFlexibleFloat_UnmarshalJSON(t *testing.T) {
 		}
 	}
 }
-
-func TestNormalizedUSDPerTokenFromOrderbook(t *testing.T) {
-	ob := &EquiteezOrderbook{
-		LastMatchedPrice: FlexibleFloat(1_500_000),
-		Currencies: []OrderbookCurrency{
-			{CurrencyName: "USDT"},
-		},
-	}
-	usd, ok := NormalizedUSDPerTokenFromOrderbook(ob)
-	if !ok || usd != 1.5 {
-		t.Fatalf("got %v %v", usd, ok)
-	}
-}

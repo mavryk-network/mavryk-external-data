@@ -14,6 +14,12 @@ Two upstream sources, three jobs, one API:
   populate `token_prices` from a configured `start_from` to "now."
 - **Equiteez RWA collector** — polls Equiteez orderbooks for known
   `rwa_pairs` and writes bid/ask/last to `rwa_quote_prices`.
+  Pair discovery is **automatic**: on startup the service syncs
+  `rwa_pairs` against Equiteez `in_allowlist=true` tokens/orderbooks —
+  no manual seed required. Prices are normalized by the quote
+  currency's decimals from the `tokens` registry (so micro-USDT
+  `56_250_000` is stored as `56.25`). See
+  [ADR-0012](docs/adr/0012-rwa-pair-discovery-and-normalization.md).
 
 Consumers read everything through one HTTP API.
 

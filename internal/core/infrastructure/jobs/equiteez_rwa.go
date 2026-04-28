@@ -111,7 +111,7 @@ func (j *EquiteezRWAJob) Stop() {
 // We query by `token_addr` (the existing GetTokensWithOrderbooks shape) and
 // then resolve the right orderbook by `orderbook_addr` — a single token may
 // own multiple orderbooks (different quote currencies / regulatory tranches),
-// so we MUST NOT just take FirstOrderbook anymore.
+// so we match each pair against its specific orderbook contract.
 func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair) {
 	start := time.Now()
 	defer func() {
@@ -127,6 +127,19 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 		return
 	}
 
+	// Resolve quote-currency decimals once per pair. Equiteez orderbooks
+	// report prices in the smallest unit of the quote currency (micro-USDT
+	// = 10^-6 USDT, etc.) normalized to "1 whole base token" — to get
+	// human-readable prices we shift the decimal by `-quote.decimals`.
+	// Pairs whose quote currency is not in the `tokens` registry are skipped
+	// entirely: writing un-normalized data would store values 10^N too
+	// large with no way for the consumer to know.
+	pairDecimals := j.resolveQuoteDecimals(pairs)
+	if len(pairDecimals) == 0 {
+		j.logger.Warn().Msg("rwa_no_pairs_with_known_quote_decimals")
+		return
+	}
+
 	tokens, err := j.client.GetTokensWithOrderbooks(ctx, tokenAddresses)
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "fetch").Inc()
@@ -135,7 +148,7 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 	}
 
 	now := time.Now().UTC()
-	points := buildPointsFromOrderbooks(tokens, byTokenAddr, now)
+	points := buildPointsFromOrderbooks(tokens, byTokenAddr, pairDecimals, now)
 	if len(points) == 0 {
 		j.logger.Debug().Msg("rwa_no_points_collected")
 		return
@@ -173,13 +186,50 @@ func groupPairsByToken(pairs []prices.RWAPair) (map[string][]prices.RWAPair, []s
 	return byAddr, addrs
 }
 
+// resolveQuoteDecimals builds (pair_id → quote.decimals) using the token
+// registry that was loaded from `tokens` at startup. Pairs whose quote symbol
+// is not registered are excluded — `collectOnce` then skips them rather than
+// writing raw smallest-unit prices into `rwa_quote_prices`.
+func (j *EquiteezRWAJob) resolveQuoteDecimals(pairs []prices.RWAPair) map[int64]int {
+	out := make(map[int64]int, len(pairs))
+	for _, p := range pairs {
+		d, ok := lookupQuoteDecimals(p.QuoteSymbol)
+		if !ok {
+			j.logger.Warn().
+				Int64("pair_id", p.ID).
+				Str("quote_symbol", p.QuoteSymbol).
+				Msg("rwa_unknown_quote_decimals_skipping_pair")
+			continue
+		}
+		out[p.ID] = d
+	}
+	return out
+}
+
+// lookupQuoteDecimals consults the in-process token registry. Returns
+// (decimals, true) only when the symbol is registered; (0, false) means
+// "don't normalize because we don't know the scale".
+func lookupQuoteDecimals(symbol string) (int, bool) {
+	t, err := prices.NewToken(symbol)
+	if err != nil {
+		return 0, false
+	}
+	info, ok := prices.LookupToken(t)
+	if !ok {
+		return 0, false
+	}
+	return info.Decimals, true
+}
+
 // buildPointsFromOrderbooks walks the GraphQL response and emits one slice of
 // PricePoints. The lookup `byTokenAddr` is consulted by token contract; the
 // right orderbook is then matched on `OrderbookAddr` (a token may own multiple
-// orderbooks, see refactoring_v2 §2.5).
+// orderbooks, see refactoring_v2 §2.5). `pairDecimals` carries the per-pair
+// quote-currency exponent for raw→human normalization.
 func buildPointsFromOrderbooks(
 	tokens []equiteez.TokenWithOrderbooks,
 	byTokenAddr map[string][]prices.RWAPair,
+	pairDecimals map[int64]int,
 	now time.Time,
 ) []prices.PricePoint {
 	var points []prices.PricePoint
@@ -194,7 +244,11 @@ func buildPointsFromOrderbooks(
 			if !ok {
 				continue
 			}
-			points = append(points, orderbookToPoints(pair, &ob, now)...)
+			decimals, ok := pairDecimals[pair.ID]
+			if !ok {
+				continue // already warned in resolveQuoteDecimals
+			}
+			points = append(points, orderbookToPoints(pair, &ob, decimals, now)...)
 		}
 	}
 	return points
@@ -219,22 +273,34 @@ func filterEnabledPairs(in []prices.RWAPair, source prices.Source) []prices.RWAP
 	return out
 }
 
-// orderbookToPoints renders one Equiteez orderbook into bid/ask/last PricePoints
-// for one rwa_pair.
-func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, now time.Time) []prices.PricePoint {
+// orderbookToPoints renders one Equiteez orderbook into bid/ask/last
+// PricePoints for one rwa_pair. `quoteDecimals` is the smallest-unit exponent
+// of the orderbook's quote currency (e.g. 6 for USDT) — raw prices are
+// shifted right by that many positions to produce human values:
+//
+//	raw 56_250_000 (micro-USDT)  →  56.25 USDT  with quoteDecimals=6
+//
+// Shift on decimal.Decimal is exact; no float rounding error.
+func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, quoteDecimals int, now time.Time) []prices.PricePoint {
 	entityKey := strconv.FormatInt(pair.ID, 10)
 	out := make([]prices.PricePoint, 0, 3)
+
+	shift := -int32(quoteDecimals) //nolint:gosec // decimals is small (typically 6); int→int32 cannot overflow
 
 	add := func(side string, raw float64) {
 		if raw <= 0 {
 			return
+		}
+		price := decimal.NewFromFloat(raw)
+		if shift != 0 {
+			price = price.Shift(shift)
 		}
 		out = append(out, prices.PricePoint{
 			Source:    pair.Source,
 			EntityKey: entityKey,
 			Timestamp: now,
 			Metric:    side,
-			Price:     decimal.NewFromFloat(raw),
+			Price:     price,
 		})
 	}
 	add(string(prices.SideBid), ob.HighestBuyPrice.Float64())

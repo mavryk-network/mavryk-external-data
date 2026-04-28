@@ -78,48 +78,6 @@ func (c *Client) headersForURL(url string) map[string]string {
 	return nil
 }
 
-// GetRWATransfers queries RWA transfer history from the Equiteez indexer (GraphQL).
-func (c *Client) GetRWATransfers(ctx context.Context, walletAddress, assetAddress string, limit, offset int) ([]RWATransfer, error) {
-	query := `
-		query GetRWATransfers($wallet: String!, $asset: String!, $limit: Int!, $offset: Int!) {
-			rwaTransfers(wallet: $wallet, asset: $asset, limit: $limit, offset: $offset) {
-				id
-				hash
-				type
-				level
-				timestamp
-				sender
-				target
-				amount
-				tokenId
-				contract
-			}
-		}
-	`
-
-	variables := map[string]interface{}{
-		"wallet": walletAddress,
-		"asset":  assetAddress,
-		"limit":  limit,
-		"offset": offset,
-	}
-
-	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, variables, c.headersForURL(c.indexerURL))
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		RWATransfers []RWATransfer `json:"rwaTransfers"`
-	}
-
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal RWA transfers: %w", err)
-	}
-
-	return result.RWATransfers, nil
-}
-
 // GetAllowlistedTokensAndOrderbooks discovers active RWA pairs from the indexer:
 // returns every token where `in_allowlist=true` together with its orderbooks
 // where `in_allowlist=true`. The sync job (jobs/equiteez_rwa_sync.go) calls

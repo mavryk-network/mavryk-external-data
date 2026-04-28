@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-// FlexibleFloat unmarshals JSON numbers or quoted numeric strings (Hasura / bigint fields).
+// FlexibleFloat unmarshals JSON numbers or quoted numeric strings (Hasura /
+// bigint fields). Equiteez orderbook prices come back as JSON-quoted strings
+// for big numbers (`"56250000"`) and as bare floats for small ones — this
+// type tolerates both.
 type FlexibleFloat float64
 
 func (f *FlexibleFloat) UnmarshalJSON(b []byte) error {
@@ -49,13 +52,15 @@ type TokenQuoteToken struct {
 	TokenID int    `json:"token_id"`
 }
 
-// OrderbookCurrency is one quote currency row for an orderbook (matches Hasura orderbook_currency).
+// OrderbookCurrency is one quote currency row for an orderbook
+// (matches Hasura `orderbook_currency`).
 type OrderbookCurrency struct {
 	Token        *TokenQuoteToken `json:"token"`
 	CurrencyName string           `json:"currency_name"`
 }
 
-// EquiteezOrderbook is one orderbook row nested under token.orderbooks (matches indexer orderbook table).
+// EquiteezOrderbook is one orderbook row nested under `token.orderbooks`
+// (matches indexer `orderbook` table).
 type EquiteezOrderbook struct {
 	Address          string              `json:"address"`
 	InAllowlist      bool                `json:"in_allowlist"`
@@ -76,7 +81,8 @@ func (o *EquiteezOrderbook) QuoteSymbol() string {
 	return o.Currencies[0].CurrencyName
 }
 
-// TokenWithOrderbooks is one token row from the tokensWithOrderbooks GraphQL query.
+// TokenWithOrderbooks is one token row from the GraphQL queries
+// (`GetTokensWithOrderbooks` / `GetAllowlistedTokensAndOrderbooks`).
 type TokenWithOrderbooks struct {
 	Address       string              `json:"address"`
 	TokenID       int                 `json:"token_id"`
@@ -85,62 +91,4 @@ type TokenWithOrderbooks struct {
 	TokenStandard *int                `json:"token_standard,omitempty"`
 	Metadata      json.RawMessage     `json:"metadata,omitempty"`
 	Orderbooks    []EquiteezOrderbook `json:"orderbooks"`
-}
-
-// FirstOrderbook returns the first orderbook if any (same selection as previous []interface{}[0]).
-func (t *TokenWithOrderbooks) FirstOrderbook() *EquiteezOrderbook {
-	if t == nil || len(t.Orderbooks) == 0 {
-		return nil
-	}
-	return &t.Orderbooks[0]
-}
-
-// FlexInt64 unmarshals JSON int, float, or string for bigint-ish GraphQL scalars.
-type FlexInt64 int64
-
-func (f *FlexInt64) UnmarshalJSON(b []byte) error {
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
-		*f = 0
-		return nil
-	}
-	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			*f = 0
-			return nil
-		}
-		v, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			return err
-		}
-		*f = FlexInt64(v)
-		return nil
-	}
-	var v float64
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	*f = FlexInt64(v)
-	return nil
-}
-
-func (f FlexInt64) Int64() int64 { return int64(f) }
-
-// RWATransfer is one row from the GetRWATransfers GraphQL query (equiteez_user_token_transfer–style fields).
-type RWATransfer struct {
-	ID        FlexInt64 `json:"id"`
-	Hash      string    `json:"hash"`
-	Type      string    `json:"type"`
-	Level     FlexInt64 `json:"level"`
-	Timestamp string    `json:"timestamp"`
-	Sender    string    `json:"sender"`
-	Target    string    `json:"target"`
-	Amount    FlexInt64 `json:"amount"`
-	TokenID   int       `json:"tokenId"`
-	Contract  string    `json:"contract"`
 }

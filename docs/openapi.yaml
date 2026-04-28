@@ -358,6 +358,15 @@ components:
 
     RWAPricePoint:
       type: object
+      description: |
+        One RWA orderbook quote at a point in time. `price` is in **human
+        units of the orderbook's native quote currency** (e.g. 56.25 USDT —
+        not micro-USDT) — the collector normalizes the indexer's raw
+        smallest-unit value via the `tokens.decimals` registry before
+        storage. The native quote currency itself (e.g. `USDT`) is on
+        the parent `rwa_pairs.quote_symbol`; clients that need other
+        currencies will get a future `?in=usd,eur,...` parameter
+        (see `rwa_quotes_adds.md` design doc).
       required: [timestamp, side, price]
       properties:
         timestamp:
