@@ -14,10 +14,15 @@ import (
 )
 
 // BackfillState is the domain-facing view of one (source, entity_key) cursor.
+//
+// CursorID is the integer-cursor companion to OldestTs; sources whose natural
+// pagination key is a monotonic ID (Equiteez orderbook_order.id) populate it,
+// while CoinGecko backfill leaves it nil.
 type BackfillState struct {
 	Source         prices.Source
 	EntityKey      string
 	OldestTs       *time.Time
+	CursorID       *int64
 	Disabled       bool
 	DisabledReason string
 	ErrorCount     int
@@ -33,6 +38,10 @@ const (
 	BackfillDisabledReasonReachedFloor = "reached_floor"
 	BackfillDisabledReasonAutoDisabled = "auto_disabled"
 	BackfillDisabledReasonManual       = "manual"
+	// BackfillDisabledReasonCaughtUp marks a forward-walking backfill as done:
+	// no more events upstream. Distinct from auto_disabled (which signals
+	// errors) so dashboards can render "successful completion" clearly.
+	BackfillDisabledReasonCaughtUp = "caught_up"
 )
 
 type BackfillStateRepository struct {
@@ -94,6 +103,7 @@ func (r *BackfillStateRepository) Upsert(ctx context.Context, s *BackfillState) 
 		Columns: []clause.Column{{Name: "source_code"}, {Name: "entity_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"oldest_ts",
+			"cursor_id",
 			"disabled",
 			"disabled_reason",
 			"error_count",
@@ -116,6 +126,7 @@ func entityToState(e *entities.BackfillStateEntity) *BackfillState {
 		Source:         prices.Source(e.SourceCode),
 		EntityKey:      e.EntityKey,
 		OldestTs:       cloneTimePtr(e.OldestTs),
+		CursorID:       cloneInt64Ptr(e.CursorID),
 		Disabled:       e.Disabled,
 		DisabledReason: e.DisabledReason,
 		ErrorCount:     e.ErrorCount,
@@ -131,6 +142,7 @@ func stateToEntity(s *BackfillState) entities.BackfillStateEntity {
 		SourceCode:     string(s.Source),
 		EntityKey:      s.EntityKey,
 		OldestTs:       cloneTimePtr(s.OldestTs),
+		CursorID:       cloneInt64Ptr(s.CursorID),
 		Disabled:       s.Disabled,
 		DisabledReason: s.DisabledReason,
 		ErrorCount:     s.ErrorCount,
@@ -138,6 +150,14 @@ func stateToEntity(s *BackfillState) entities.BackfillStateEntity {
 		NextAttemptAt:  cloneTimePtr(s.NextAttemptAt),
 		UpdatedAt:      s.UpdatedAt,
 	}
+}
+
+func cloneInt64Ptr(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
 }
 
 func cloneTimePtr(t *time.Time) *time.Time {

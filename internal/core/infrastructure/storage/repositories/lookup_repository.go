@@ -85,6 +85,7 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 
 	tokenAddr := stringPtrOrNil(p.TokenAddr)
 	orderbookAddr := stringPtrOrNil(p.OrderbookAddr)
+	equiteezID := p.EquiteezOrderbookID
 
 	tx := r.db.WithContext(ctx)
 
@@ -93,13 +94,14 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 	switch {
 	case errors.Is(res.Error, gorm.ErrRecordNotFound):
 		row := entities.RWAPairEntity{
-			BaseSymbol:    p.BaseSymbol,
-			QuoteSymbol:   p.QuoteSymbol,
-			SourceCode:    string(p.Source),
-			TokenAddr:     tokenAddr,
-			OrderbookAddr: orderbookAddr,
-			Enabled:       true,
-			LastSyncedAt:  &syncedAt,
+			BaseSymbol:          p.BaseSymbol,
+			QuoteSymbol:         p.QuoteSymbol,
+			SourceCode:          string(p.Source),
+			TokenAddr:           tokenAddr,
+			OrderbookAddr:       orderbookAddr,
+			EquiteezOrderbookID: equiteezID,
+			Enabled:             true,
+			LastSyncedAt:        &syncedAt,
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return 0, fmt.Errorf("insert rwa_pair: %w", err)
@@ -109,14 +111,21 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 		return 0, fmt.Errorf("lookup rwa_pair: %w", res.Error)
 	default:
 		// Update metadata only — leave `enabled` for the operator to control.
+		// equiteez_orderbook_id is updated only when caller supplies a value;
+		// preserves any operator-set value if a transient sync failure returned
+		// nil for it.
+		updates := map[string]any{
+			"base_symbol":    p.BaseSymbol,
+			"quote_symbol":   p.QuoteSymbol,
+			"token_addr":     tokenAddr,
+			"last_synced_at": syncedAt,
+		}
+		if equiteezID != nil {
+			updates["equiteez_orderbook_id"] = equiteezID
+		}
 		err := tx.Model(&entities.RWAPairEntity{}).
 			Where("id = ?", existing.ID).
-			Updates(map[string]any{
-				"base_symbol":    p.BaseSymbol,
-				"quote_symbol":   p.QuoteSymbol,
-				"token_addr":     tokenAddr,
-				"last_synced_at": syncedAt,
-			}).Error
+			Updates(updates).Error
 		if err != nil {
 			return 0, fmt.Errorf("update rwa_pair: %w", err)
 		}
@@ -145,12 +154,13 @@ func (r *LookupRepository) DisableMissingRWAPairs(ctx context.Context, source pr
 
 func entityToRWAPair(e entities.RWAPairEntity) prices.RWAPair {
 	pair := prices.RWAPair{
-		ID:           e.ID,
-		BaseSymbol:   e.BaseSymbol,
-		QuoteSymbol:  e.QuoteSymbol,
-		Source:       prices.Source(e.SourceCode),
-		Enabled:      e.Enabled,
-		LastSyncedAt: e.LastSyncedAt,
+		ID:                  e.ID,
+		BaseSymbol:          e.BaseSymbol,
+		QuoteSymbol:         e.QuoteSymbol,
+		Source:              prices.Source(e.SourceCode),
+		EquiteezOrderbookID: e.EquiteezOrderbookID,
+		Enabled:             e.Enabled,
+		LastSyncedAt:        e.LastSyncedAt,
 	}
 	if e.TokenAddr != nil {
 		pair.TokenAddr = *e.TokenAddr

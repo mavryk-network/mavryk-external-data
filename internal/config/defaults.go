@@ -107,6 +107,28 @@ func setDefaults(config *Config) {
 		config.Backfill.MaxBackoffMs = 24 * 60 * 60 * 1000
 	}
 
+	if config.Equiteez.Backfill.TickSeconds == 0 {
+		config.Equiteez.Backfill.TickSeconds = 30
+	}
+	if config.Equiteez.Backfill.BatchSize == 0 {
+		config.Equiteez.Backfill.BatchSize = 200
+	}
+	if config.Equiteez.Backfill.JitterMs == 0 {
+		config.Equiteez.Backfill.JitterMs = 1000
+	}
+	if config.Equiteez.Backfill.BackfillMaxErrors == 0 {
+		config.Equiteez.Backfill.BackfillMaxErrors = 5
+	}
+	if config.Equiteez.Backfill.BackoffInitialMs == 0 {
+		config.Equiteez.Backfill.BackoffInitialMs = 2000
+	}
+	if config.Equiteez.Backfill.BackoffMaxMs == 0 {
+		config.Equiteez.Backfill.BackoffMaxMs = 60_000
+	}
+	if config.Equiteez.Backfill.MaxBackoffMs == 0 {
+		config.Equiteez.Backfill.MaxBackoffMs = 24 * 60 * 60 * 1000
+	}
+
 	if config.RWA.IntervalSeconds == 0 && config.RWA.Enabled {
 		// 10s matches Mavryk block time — orderbook prices on Equiteez change
 		// at most once per block, so polling faster doesn't surface fresher

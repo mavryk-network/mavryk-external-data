@@ -114,6 +114,7 @@ func run() int {
 	liveJob := jobs.NewCoinGeckoLiveJob(cfg, tokenAppRepo, logger)
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
+	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -148,6 +149,7 @@ func run() int {
 	syncCancel()
 
 	rwaJob.Start(ctx)
+	rwaBackfillJob.Start(ctx)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -179,6 +181,7 @@ func run() int {
 	liveJob.Stop()
 	backfillJob.Stop()
 	rwaJob.Stop()
+	rwaBackfillJob.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()

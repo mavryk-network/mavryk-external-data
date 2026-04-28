@@ -27,24 +27,32 @@ CREATE TABLE IF NOT EXISTS tokens (
 );
 
 -- rwa_pairs columns:
---   * token_addr      — owning token contract (Tezos address; populated by sync).
---   * orderbook_addr  — orderbook contract; what the collector actually polls.
---   * base_symbol     — human label for the base asset (derived during sync).
---   * quote_symbol    — quote currency label (e.g. "USDT").
---   * enabled         — local override; the sync respects it (won't re-enable
---                       an operator-disabled pair) but will set it to false
---                       when a previously-allowlisted orderbook disappears.
---   * last_synced_at  — audit trail for the discovery sync.
+--   * token_addr             — owning token contract (Tezos address; populated by sync).
+--   * orderbook_addr         — orderbook contract; what the collector actually polls.
+--   * equiteez_orderbook_id  — indexer's internal integer id for the orderbook
+--                              (Hasura `orderbook.id`). Cached so the backfill
+--                              job (jobs/equiteez_backfill.go) can join against
+--                              orderbook_order without resolving the Tezos
+--                              address every batch. Populated by SyncRWAPairs;
+--                              NULL until the next sync run.
+--   * base_symbol            — human label for the base asset (derived during sync).
+--   * quote_symbol           — quote currency label (e.g. "USDT").
+--   * enabled                — local override; the sync respects it (won't
+--                              re-enable an operator-disabled pair) but will
+--                              set it to false when a previously-allowlisted
+--                              orderbook disappears.
+--   * last_synced_at         — audit trail for the discovery sync.
 CREATE TABLE IF NOT EXISTS rwa_pairs (
-    id              bigserial PRIMARY KEY,
-    base_symbol     text NOT NULL,
-    quote_symbol    text NOT NULL,
-    source_code     text NOT NULL REFERENCES sources(code),
-    token_addr      text,
-    orderbook_addr  text,
-    enabled         boolean NOT NULL DEFAULT TRUE,
-    last_synced_at  timestamptz,
-    created_at      timestamptz NOT NULL DEFAULT NOW()
+    id                     bigserial PRIMARY KEY,
+    base_symbol            text NOT NULL,
+    quote_symbol           text NOT NULL,
+    source_code            text NOT NULL REFERENCES sources(code),
+    token_addr             text,
+    orderbook_addr         text,
+    equiteez_orderbook_id  integer,
+    enabled                boolean NOT NULL DEFAULT TRUE,
+    last_synced_at         timestamptz,
+    created_at             timestamptz NOT NULL DEFAULT NOW()
 );
 
 -- Natural key: orderbook contracts are unique within a source.
@@ -54,3 +62,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS rwa_pairs_source_orderbook_uq
 
 CREATE INDEX IF NOT EXISTS idx_rwa_pairs_enabled
     ON rwa_pairs (source_code, enabled);
+
+-- Backfill lookup: pair_id → equiteez_orderbook_id is hot during each
+-- backfill tick; partial index keeps it small (only allowlisted pairs).
+CREATE INDEX IF NOT EXISTS idx_rwa_pairs_equiteez_orderbook_id
+    ON rwa_pairs (equiteez_orderbook_id)
+    WHERE equiteez_orderbook_id IS NOT NULL;

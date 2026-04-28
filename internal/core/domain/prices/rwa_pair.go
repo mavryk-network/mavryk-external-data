@@ -12,24 +12,28 @@ import (
 // indexer and refreshed by the discovery sync.
 //
 // Fields:
-//   - ID:             BIGSERIAL — stable across restarts and deploys.
-//   - Source:         registry source (`equiteez` today).
-//   - TokenAddr:      Tezos token contract that owns the orderbook.
-//   - OrderbookAddr:  Tezos orderbook contract — what the collector polls.
-//   - BaseSymbol:     human label for the base asset (token).
-//   - QuoteSymbol:    human label for the quote currency (e.g. "USDT").
-//   - Enabled:        local override; the sync respects this flag (won't
+//   - ID:                  BIGSERIAL — stable across restarts and deploys.
+//   - Source:               registry source (`equiteez` today).
+//   - TokenAddr:             Tezos token contract that owns the orderbook.
+//   - OrderbookAddr:         Tezos orderbook contract — what the collector polls.
+//   - EquiteezOrderbookID:   indexer's internal integer ID for the orderbook
+//     (Hasura `orderbook.id`). Required by the Equiteez backfill job to query
+//     `orderbook_order` events efficiently; nil until SyncRWAPairs runs.
+//   - BaseSymbol:           human label for the base asset (token).
+//   - QuoteSymbol:          human label for the quote currency (e.g. "USDT").
+//   - Enabled:              local override; the sync respects this flag (won't
 //     re-enable an operator-disabled pair).
-//   - LastSyncedAt:   audit trail.
+//   - LastSyncedAt:         audit trail.
 type RWAPair struct {
-	ID            int64
-	Source        Source
-	TokenAddr     string
-	OrderbookAddr string
-	BaseSymbol    string
-	QuoteSymbol   string
-	Enabled       bool
-	LastSyncedAt  *time.Time
+	ID                  int64
+	Source              Source
+	TokenAddr           string
+	OrderbookAddr       string
+	EquiteezOrderbookID *int32
+	BaseSymbol          string
+	QuoteSymbol         string
+	Enabled             bool
+	LastSyncedAt        *time.Time
 }
 
 // EntityKey is the canonical PricePoint.EntityKey for this pair (decimal

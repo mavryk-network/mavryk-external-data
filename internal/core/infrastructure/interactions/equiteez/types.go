@@ -61,7 +61,12 @@ type OrderbookCurrency struct {
 
 // EquiteezOrderbook is one orderbook row nested under `token.orderbooks`
 // (matches indexer `orderbook` table).
+//
+// ID is the indexer's internal integer identifier (Hasura `orderbook.id`).
+// Cached on `rwa_pairs.equiteez_orderbook_id` so the backfill job can join
+// against `orderbook_order` without resolving the address every batch.
 type EquiteezOrderbook struct {
+	ID               int                 `json:"id"`
 	Address          string              `json:"address"`
 	InAllowlist      bool                `json:"in_allowlist"`
 	LastMatchedPrice FlexibleFloat       `json:"last_matched_price"`
@@ -91,4 +96,20 @@ type TokenWithOrderbooks struct {
 	TokenStandard *int                `json:"token_standard,omitempty"`
 	Metadata      json.RawMessage     `json:"metadata,omitempty"`
 	Orderbooks    []EquiteezOrderbook `json:"orderbooks"`
+}
+
+// OrderbookOrder is one row from `orderbook_order` — the indexer's per-order
+// event log. Used by the Equiteez backfill job to reconstruct historical
+// `last`-side prices from filled orders.
+//
+// Numeric fields come back as JSON-quoted strings for bigint columns and as
+// bare numbers for ints; FlexibleFloat normalizes both. Timestamps are RFC3339
+// (Hasura default).
+type OrderbookOrder struct {
+	ID               int64         `json:"id"`
+	OrderType        int           `json:"order_type"`
+	PricePerRWAToken FlexibleFloat `json:"price_per_rwa_token"`
+	FulfilledAmount  FlexibleFloat `json:"fulfilled_amount"`
+	EndedAt          string        `json:"ended_at"`
+	OperationHash    string        `json:"operation_hash"`
 }

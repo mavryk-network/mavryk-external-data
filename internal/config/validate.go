@@ -24,6 +24,7 @@ func (c *Config) Validate() error {
 		c.validateAPI,
 		c.validateCoinGecko,
 		c.validateBackfill,
+		c.validateEquiteezBackfill,
 		c.validateTokens,
 		c.validateRWA,
 		c.validateProductionSafety,
@@ -176,6 +177,46 @@ func (c *Config) validateTokens() error {
 		if err := validateOneToken(name, tc); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateEquiteezBackfill() error {
+	b := c.Equiteez.Backfill
+	if !b.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Equiteez.IndexerURL) == "" {
+		return fmt.Errorf("equiteez.backfill.enabled=true requires equiteez.indexer_url to be set")
+	}
+	if b.TickSeconds <= 0 {
+		return fmt.Errorf("equiteez.backfill.tick_seconds must be > 0 when enabled")
+	}
+	if b.BatchSize <= 0 {
+		return fmt.Errorf("equiteez.backfill.batch_size must be > 0 when enabled")
+	}
+	if b.BatchSize > 5000 {
+		// Hasura's default node limit + our outbound max-bytes guard sit far below this;
+		// pulling 5k orders in one shot is asking for OOM/timeout pain.
+		return fmt.Errorf("equiteez.backfill.batch_size must be <= 5000, got %d", b.BatchSize)
+	}
+	if b.JitterMs < 0 {
+		return fmt.Errorf("equiteez.backfill.jitter_ms must be >= 0")
+	}
+	if b.BackfillMaxErrors < 0 {
+		return fmt.Errorf("equiteez.backfill.backfill_max_errors must be >= 0")
+	}
+	if b.BackoffInitialMs < 0 {
+		return fmt.Errorf("equiteez.backfill.backoff_initial_ms must be >= 0")
+	}
+	if b.BackoffMaxMs < 0 {
+		return fmt.Errorf("equiteez.backfill.backoff_max_ms must be >= 0")
+	}
+	if b.MaxBackoffMs > 0 && b.MaxBackoffMs < b.BackoffMaxMs {
+		return fmt.Errorf("equiteez.backfill.max_backoff_ms (hard cap) must be >= backoff_max_ms")
+	}
+	if err := validateBackfillStartFrom(b.StartFrom); err != nil {
+		return fmt.Errorf("equiteez.backfill.start_from: %w", err)
 	}
 	return nil
 }

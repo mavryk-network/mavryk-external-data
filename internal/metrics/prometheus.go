@@ -177,7 +177,6 @@ var (
 		},
 		[]string{"target"},
 	)
-
 )
 
 // StatusClass returns 2xx, 4xx, or 5xx for HTTPResponsesTotal labelling.

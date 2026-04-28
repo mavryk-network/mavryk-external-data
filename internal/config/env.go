@@ -235,6 +235,37 @@ func overrideWithEnv(config *Config) error {
 		}
 	}
 
+	if v := os.Getenv("EQUITEEZ_BACKFILL_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("EQUITEEZ_BACKFILL_ENABLED: invalid bool %q: %w", v, err)
+		}
+		config.Equiteez.Backfill.Enabled = val
+	}
+	if v := os.Getenv("EQUITEEZ_BACKFILL_START_FROM"); v != "" {
+		config.Equiteez.Backfill.StartFrom = v
+	}
+	for _, e := range []struct {
+		env string
+		dst *int
+	}{
+		{"EQUITEEZ_BACKFILL_TICK_SECONDS", &config.Equiteez.Backfill.TickSeconds},
+		{"EQUITEEZ_BACKFILL_BATCH_SIZE", &config.Equiteez.Backfill.BatchSize},
+		{"EQUITEEZ_BACKFILL_JITTER_MS", &config.Equiteez.Backfill.JitterMs},
+		{"EQUITEEZ_BACKFILL_MAX_ERRORS", &config.Equiteez.Backfill.BackfillMaxErrors},
+		{"EQUITEEZ_BACKFILL_BACKOFF_INITIAL_MS", &config.Equiteez.Backfill.BackoffInitialMs},
+		{"EQUITEEZ_BACKFILL_BACKOFF_MAX_MS", &config.Equiteez.Backfill.BackoffMaxMs},
+		{"EQUITEEZ_BACKFILL_MAX_BACKOFF_MS", &config.Equiteez.Backfill.MaxBackoffMs},
+	} {
+		if v := os.Getenv(e.env); v != "" {
+			val, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("%s: invalid int %q: %w", e.env, v, err)
+			}
+			*e.dst = val
+		}
+	}
+
 	if v := os.Getenv("RWA_ENABLED"); v != "" {
 		val, err := strconv.ParseBool(v)
 		if err != nil {

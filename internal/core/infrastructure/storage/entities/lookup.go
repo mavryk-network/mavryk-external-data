@@ -29,16 +29,22 @@ func (TokenEntity) TableName() string { return "tokens" }
 // The natural key is `(source_code, orderbook_addr)` — orderbook contracts are
 // unique per source. Tokens may own multiple orderbooks (different quote
 // currencies), so `token_addr` is not unique on its own.
+//
+// EquiteezOrderbookID caches the indexer's internal integer ID for the
+// orderbook (`orderbook.id` in Hasura). Required by the backfill job to query
+// `orderbook_order` events; populated by SyncRWAPairs and may be NULL until
+// the next sync runs.
 type RWAPairEntity struct {
-	ID            int64      `gorm:"primaryKey;column:id"`
-	BaseSymbol    string     `gorm:"column:base_symbol;not null"`
-	QuoteSymbol   string     `gorm:"column:quote_symbol;not null"`
-	SourceCode    string     `gorm:"column:source_code;not null"`
-	TokenAddr     *string    `gorm:"column:token_addr"`
-	OrderbookAddr *string    `gorm:"column:orderbook_addr"`
-	Enabled       bool       `gorm:"column:enabled;not null"`
-	LastSyncedAt  *time.Time `gorm:"column:last_synced_at"`
-	CreatedAt     time.Time  `gorm:"column:created_at;<-:false"`
+	ID                  int64      `gorm:"primaryKey;column:id"`
+	BaseSymbol          string     `gorm:"column:base_symbol;not null"`
+	QuoteSymbol         string     `gorm:"column:quote_symbol;not null"`
+	SourceCode          string     `gorm:"column:source_code;not null"`
+	TokenAddr           *string    `gorm:"column:token_addr"`
+	OrderbookAddr       *string    `gorm:"column:orderbook_addr"`
+	EquiteezOrderbookID *int32     `gorm:"column:equiteez_orderbook_id"`
+	Enabled             bool       `gorm:"column:enabled;not null"`
+	LastSyncedAt        *time.Time `gorm:"column:last_synced_at"`
+	CreatedAt           time.Time  `gorm:"column:created_at;<-:false"`
 }
 
 func (RWAPairEntity) TableName() string { return "rwa_pairs" }

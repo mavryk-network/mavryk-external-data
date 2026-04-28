@@ -84,6 +84,10 @@ func SyncRWAPairs(
 				BaseSymbol:    baseSymbol,
 				QuoteSymbol:   ob.QuoteSymbol(),
 			}
+			if ob.ID > 0 {
+				id := int32(ob.ID) //nolint:gosec // orderbook.id fits comfortably in int32
+				pair.EquiteezOrderbookID = &id
+			}
 			id, err := lookup.UpsertRWAPair(ctx, pair, now)
 			if err != nil {
 				log.Error().
