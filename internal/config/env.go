@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-//nolint:gocyclo // Many independent env key bindings; a single function keeps config wiring in one file.
+//nolint:gocyclo // Many independent env key bindings; one place keeps wiring obvious.
 func overrideWithEnv(config *Config) error {
 	if port := os.Getenv("SERVER_PORT"); port != "" {
 		config.Server.Port = port
@@ -18,6 +18,20 @@ func overrideWithEnv(config *Config) error {
 	}
 	if v := os.Getenv("SERVER_GIN_MODE"); v != "" {
 		config.Server.GinMode = v
+	}
+	if v := os.Getenv("SERVER_PPROF_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("SERVER_PPROF_ENABLED: invalid bool %q: %w", v, err)
+		}
+		config.Server.PprofEnabled = val
+	}
+	if v := os.Getenv("SERVER_MAX_QUERY_LIMIT"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("SERVER_MAX_QUERY_LIMIT: invalid int %q: %w", v, err)
+		}
+		config.Server.MaxQueryLimit = val
 	}
 	for _, e := range []struct {
 		env string
@@ -68,67 +82,74 @@ func overrideWithEnv(config *Config) error {
 	if sslMode := os.Getenv("POSTGRES_SSL"); sslMode != "" {
 		config.Database.SSLMode = sslMode
 	}
-
-	if logging := os.Getenv("POSTGRES_LOGGING"); logging != "" {
-		if val, err := strconv.ParseBool(logging); err == nil {
-			config.Database.Logging = val
+	if v := os.Getenv("POSTGRES_LOGGING"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("POSTGRES_LOGGING: invalid bool %q: %w", v, err)
 		}
+		config.Database.Logging = val
 	}
 
-	if interval := os.Getenv("JOB_INTERVAL_SECONDS"); interval != "" {
-		if val, err := strconv.Atoi(interval); err == nil {
-			config.Job.IntervalSeconds = val
+	if v := os.Getenv("JOB_INTERVAL_SECONDS"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("JOB_INTERVAL_SECONDS: invalid int %q: %w", v, err)
 		}
+		config.Job.IntervalSeconds = val
 	}
-	if enabled := os.Getenv("JOB_ENABLED"); enabled != "" {
-		if val, err := strconv.ParseBool(enabled); err == nil {
-			config.Job.Enabled = val
+	if v := os.Getenv("JOB_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("JOB_ENABLED: invalid bool %q: %w", v, err)
 		}
+		config.Job.Enabled = val
 	}
 
-	if timeout := os.Getenv("API_TIMEOUT_SECONDS"); timeout != "" {
-		if val, err := strconv.Atoi(timeout); err == nil {
-			config.API.TimeoutSeconds = val
+	if v := os.Getenv("API_TIMEOUT_SECONDS"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("API_TIMEOUT_SECONDS: invalid int %q: %w", v, err)
 		}
+		config.API.TimeoutSeconds = val
 	}
-	if v := os.Getenv("OUTBOUND_HTTP_RETRY_MAX_ATTEMPTS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.API.OutboundHTTPRetryMaxAttempts = val
-		}
-	}
-	if v := os.Getenv("OUTBOUND_HTTP_RETRY_INITIAL_MS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.API.OutboundHTTPRetryInitialMS = val
-		}
-	}
-	if v := os.Getenv("OUTBOUND_HTTP_RETRY_MAX_MS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.API.OutboundHTTPRetryMaxMS = val
+	for _, e := range []struct {
+		env string
+		dst *int
+	}{
+		{"OUTBOUND_HTTP_RETRY_MAX_ATTEMPTS", &config.API.OutboundHTTPRetryMaxAttempts},
+		{"OUTBOUND_HTTP_RETRY_INITIAL_MS", &config.API.OutboundHTTPRetryInitialMS},
+		{"OUTBOUND_HTTP_RETRY_MAX_MS", &config.API.OutboundHTTPRetryMaxMS},
+		{"OUTBOUND_HTTP_CIRCUIT_BREAKER_INTERVAL_SECONDS", &config.API.OutboundHTTPCircuitBreakerIntervalSeconds},
+		{"OUTBOUND_HTTP_CIRCUIT_BREAKER_OPEN_SECONDS", &config.API.OutboundHTTPCircuitBreakerOpenSeconds},
+	} {
+		if v := os.Getenv(e.env); v != "" {
+			val, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("%s: invalid int %q: %w", e.env, v, err)
+			}
+			*e.dst = val
 		}
 	}
 	if v := os.Getenv("OUTBOUND_HTTP_CIRCUIT_BREAKER_DISABLED"); v != "" {
-		if val, err := strconv.ParseBool(v); err == nil {
-			config.API.OutboundHTTPCircuitBreakerDisabled = val
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("OUTBOUND_HTTP_CIRCUIT_BREAKER_DISABLED: invalid bool %q: %w", v, err)
 		}
+		config.API.OutboundHTTPCircuitBreakerDisabled = val
 	}
-	if v := os.Getenv("OUTBOUND_HTTP_CIRCUIT_BREAKER_INTERVAL_SECONDS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.API.OutboundHTTPCircuitBreakerIntervalSeconds = val
-		}
-	}
-	if v := os.Getenv("OUTBOUND_HTTP_CIRCUIT_BREAKER_OPEN_SECONDS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.API.OutboundHTTPCircuitBreakerOpenSeconds = val
-		}
-	}
-	if v := os.Getenv("OUTBOUND_HTTP_CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS"); v != "" {
-		if val, err := strconv.ParseUint(v, 10, 32); err == nil {
-			config.API.OutboundHTTPCircuitBreakerHalfOpenMaxRequests = uint32(val)
-		}
-	}
-	if v := os.Getenv("OUTBOUND_HTTP_CIRCUIT_BREAKER_TRIP_AFTER_FAILURES"); v != "" {
-		if val, err := strconv.ParseUint(v, 10, 32); err == nil {
-			config.API.OutboundHTTPCircuitBreakerTripAfterFailures = uint32(val)
+	for _, e := range []struct {
+		env string
+		dst *uint32
+	}{
+		{"OUTBOUND_HTTP_CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS", &config.API.OutboundHTTPCircuitBreakerHalfOpenMaxRequests},
+		{"OUTBOUND_HTTP_CIRCUIT_BREAKER_TRIP_AFTER_FAILURES", &config.API.OutboundHTTPCircuitBreakerTripAfterFailures},
+	} {
+		if v := os.Getenv(e.env); v != "" {
+			val, err := strconv.ParseUint(v, 10, 32)
+			if err != nil {
+				return fmt.Errorf("%s: invalid uint %q: %w", e.env, v, err)
+			}
+			*e.dst = uint32(val)
 		}
 	}
 
@@ -138,18 +159,19 @@ func overrideWithEnv(config *Config) error {
 	if baseURL := os.Getenv("COINGECKO_BASE_URL"); baseURL != "" {
 		config.CoinGecko.BaseURL = baseURL
 	}
-	// Per-service outbound throttle (shared registry key "coingecko"). Float
-	// accepted (e.g. 0.5 = one req / 2s). An explicit post-defaults 0 disables
-	// the limiter — that escape hatch lives in load.go.
 	if v := os.Getenv("COINGECKO_RATE_LIMIT_RPS"); v != "" {
-		if val, err := strconv.ParseFloat(v, 64); err == nil {
-			config.CoinGecko.RateLimit.RPS = val
+		val, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("COINGECKO_RATE_LIMIT_RPS: invalid float %q: %w", v, err)
 		}
+		config.CoinGecko.RateLimit.RPS = val
 	}
 	if v := os.Getenv("COINGECKO_RATE_LIMIT_BURST"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.CoinGecko.RateLimit.Burst = val
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("COINGECKO_RATE_LIMIT_BURST: invalid int %q: %w", v, err)
 		}
+		config.CoinGecko.RateLimit.Burst = val
 	}
 
 	if v := os.Getenv("EQUITEEZ_INDEXER_URL"); v != "" {
@@ -164,61 +186,106 @@ func overrideWithEnv(config *Config) error {
 	if v := os.Getenv("EQUITEEZ_TOKEN_INDEXER_PASSWORD"); v != "" {
 		config.Equiteez.TokenIndexerPassword = v
 	}
-	// Equiteez outbound throttle (shared registry key "equiteez"). Default 0
-	// (disabled); Hasura admin-secret endpoints usually have no per-IP quota.
 	if v := os.Getenv("EQUITEEZ_RATE_LIMIT_RPS"); v != "" {
-		if val, err := strconv.ParseFloat(v, 64); err == nil {
-			config.Equiteez.RateLimit.RPS = val
+		val, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("EQUITEEZ_RATE_LIMIT_RPS: invalid float %q: %w", v, err)
 		}
+		config.Equiteez.RateLimit.RPS = val
 	}
 	if v := os.Getenv("EQUITEEZ_RATE_LIMIT_BURST"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.Equiteez.RateLimit.Burst = val
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("EQUITEEZ_RATE_LIMIT_BURST: invalid int %q: %w", v, err)
 		}
+		config.Equiteez.RateLimit.Burst = val
 	}
 
-	if enabled := os.Getenv("BACKFILL_ENABLED"); enabled != "" {
-		if val, err := strconv.ParseBool(enabled); err == nil {
-			config.Backfill.Enabled = val
+	if v := os.Getenv("BACKFILL_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("BACKFILL_ENABLED: invalid bool %q: %w", v, err)
 		}
+		config.Backfill.Enabled = val
 	}
-	if startFrom := os.Getenv("BACKFILL_START_FROM"); startFrom != "" {
-		config.Backfill.StartFrom = startFrom
+	if v := os.Getenv("BACKFILL_START_FROM"); v != "" {
+		config.Backfill.StartFrom = v
 	}
 	if v := os.Getenv("BACKFILL_MIN_START_FROM"); v != "" {
 		config.Backfill.MinStartFrom = v
 	}
-	if v := os.Getenv("BACKFILL_TICK_SECONDS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.Backfill.TickSeconds = val
+	for _, e := range []struct {
+		env string
+		dst *int
+	}{
+		{"BACKFILL_TICK_SECONDS", &config.Backfill.TickSeconds},
+		{"BACKFILL_JITTER_MS", &config.Backfill.JitterMs},
+		{"BACKFILL_CHUNK_MINUTES", &config.Backfill.ChunkMinutes},
+		{"BACKFILL_MAX_ERRORS", &config.Backfill.BackfillMaxErrors},
+		{"BACKFILL_BACKOFF_INITIAL_MS", &config.Backfill.BackoffInitialMs},
+		{"BACKFILL_BACKOFF_MAX_MS", &config.Backfill.BackoffMaxMs},
+		{"BACKFILL_MAX_BACKOFF_MS", &config.Backfill.MaxBackoffMs},
+	} {
+		if v := os.Getenv(e.env); v != "" {
+			val, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("%s: invalid int %q: %w", e.env, v, err)
+			}
+			*e.dst = val
 		}
 	}
-	// BACKFILL_SLEEP_MS is deprecated: cadence is set by BACKFILL_TICK_SECONDS. We still
-	// parse the value so old .env files do not break; it is ignored at runtime.
-	if sleep := os.Getenv("BACKFILL_SLEEP_MS"); sleep != "" {
-		if val, err := strconv.Atoi(sleep); err == nil {
-			config.Backfill.SleepMs = val
+
+	if v := os.Getenv("EQUITEEZ_BACKFILL_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("EQUITEEZ_BACKFILL_ENABLED: invalid bool %q: %w", v, err)
+		}
+		config.Equiteez.Backfill.Enabled = val
+	}
+	if v := os.Getenv("EQUITEEZ_BACKFILL_START_FROM"); v != "" {
+		config.Equiteez.Backfill.StartFrom = v
+	}
+	for _, e := range []struct {
+		env string
+		dst *int
+	}{
+		{"EQUITEEZ_BACKFILL_TICK_SECONDS", &config.Equiteez.Backfill.TickSeconds},
+		{"EQUITEEZ_BACKFILL_BATCH_SIZE", &config.Equiteez.Backfill.BatchSize},
+		{"EQUITEEZ_BACKFILL_JITTER_MS", &config.Equiteez.Backfill.JitterMs},
+		{"EQUITEEZ_BACKFILL_MAX_ERRORS", &config.Equiteez.Backfill.BackfillMaxErrors},
+		{"EQUITEEZ_BACKFILL_BACKOFF_INITIAL_MS", &config.Equiteez.Backfill.BackoffInitialMs},
+		{"EQUITEEZ_BACKFILL_BACKOFF_MAX_MS", &config.Equiteez.Backfill.BackoffMaxMs},
+		{"EQUITEEZ_BACKFILL_MAX_BACKOFF_MS", &config.Equiteez.Backfill.MaxBackoffMs},
+	} {
+		if v := os.Getenv(e.env); v != "" {
+			val, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("%s: invalid int %q: %w", e.env, v, err)
+			}
+			*e.dst = val
 		}
 	}
-	if chunk := os.Getenv("BACKFILL_CHUNK_MINUTES"); chunk != "" {
-		if val, err := strconv.Atoi(chunk); err == nil {
-			config.Backfill.ChunkMinutes = val
+
+	if v := os.Getenv("RWA_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("RWA_ENABLED: invalid bool %q: %w", v, err)
 		}
+		config.RWA.Enabled = val
 	}
-	if v := os.Getenv("BACKFILL_MAX_ERRORS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.Backfill.BackfillMaxErrors = val
+	if v := os.Getenv("RWA_INTERVAL_SECONDS"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("RWA_INTERVAL_SECONDS: invalid int %q: %w", v, err)
 		}
+		config.RWA.IntervalSeconds = val
 	}
-	if v := os.Getenv("BACKFILL_BACKOFF_INITIAL_MS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.Backfill.BackoffInitialMs = val
+	if v := os.Getenv("RWA_CONCURRENCY"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("RWA_CONCURRENCY: invalid int %q: %w", v, err)
 		}
-	}
-	if v := os.Getenv("BACKFILL_BACKOFF_MAX_MS"); v != "" {
-		if val, err := strconv.Atoi(v); err == nil {
-			config.Backfill.BackoffMaxMs = val
-		}
+		config.RWA.Concurrency = val
 	}
 	return nil
 }

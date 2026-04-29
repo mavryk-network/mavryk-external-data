@@ -1,131 +1,57 @@
 package coingecko
 
 import (
-	"quotes/internal/core/domain/quotes"
-	"slices"
+	"sort"
 	"time"
+
+	"quotes/internal/core/domain/prices"
+
+	"github.com/shopspring/decimal"
 )
 
-type PriceData struct {
-	Timestamp time.Time
-	Price     float64
-}
-
-// MapToQuotes converts CoinGecko API response to domain quotes
-// It normalizes data to seconds using forward-fill strategy
-func MapToQuotes(currencyData map[quotes.Currency]*MarketChartRangeResponse) ([]quotes.Quote, error) {
+// MapToPricePoints converts the CoinGecko market_chart/range response (one per
+// currency) into long-format []PricePoint rows for token_prices. The forward-fill
+// behaviour from the old wide-table mapper is gone — long-format records sparse
+// data accurately. Forward-fill, if needed, becomes a query-time concern.
+//
+// The returned slice is sorted by (ts, currency) for stable test output and
+// deterministic upsert order.
+func MapToPricePoints(
+	source prices.Source,
+	tokenSymbol string,
+	currencyData map[prices.Currency]*MarketChartRangeResponse,
+) []prices.PricePoint {
 	if len(currencyData) == 0 {
-		return nil, nil
+		return nil
 	}
 
-	// Get all unique timestamps and sort them
-	timestampMap := make(map[int64]bool)
-	for _, data := range currencyData {
-		for _, price := range data.Prices {
-			if len(price) >= 2 {
-				timestampMap[int64(price[0]/1000)] = true // Convert from milliseconds to seconds
+	var out []prices.PricePoint
+	for cur, data := range currencyData {
+		if data == nil {
+			continue
+		}
+		for _, point := range data.Prices {
+			if len(point) < 2 {
+				continue
 			}
+			ts := time.UnixMilli(int64(point[0])).UTC()
+			price := decimal.NewFromFloat(point[1])
+			out = append(out, prices.PricePoint{
+				Source:    source,
+				EntityKey: tokenSymbol,
+				Timestamp: ts,
+				Metric:    string(cur),
+				Price:     price,
+			})
 		}
 	}
 
-	// Convert to sorted slice
-	var timestamps []int64
-	for ts := range timestampMap {
-		timestamps = append(timestamps, ts)
-	}
-	slices.Sort(timestamps)
-
-	// Create price maps for each currency
-	priceMaps := make(map[quotes.Currency]map[int64]float64)
-	for currency, data := range currencyData {
-		priceMap := make(map[int64]float64)
-		for _, price := range data.Prices {
-			if len(price) >= 2 {
-				timestamp := int64(price[0] / 1000) // Convert to seconds
-				priceMap[timestamp] = price[1]
-			}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Timestamp.Equal(out[j].Timestamp) {
+			return out[i].Timestamp.Before(out[j].Timestamp)
 		}
-		priceMaps[currency] = priceMap
-	}
+		return out[i].Metric < out[j].Metric
+	})
 
-	// Create quotes with forward-fill
-	var result []quotes.Quote
-	var lastQuote *quotes.Quote
-
-	for _, timestamp := range timestamps {
-		quote := quotes.Quote{
-			Timestamp: time.Unix(timestamp, 0).UTC(),
-		}
-
-		// Fill prices for each currency using forward-fill
-		for _, currency := range quotes.GetSupportedCurrencies() {
-			if priceMap, exists := priceMaps[currency]; exists {
-				if price, exists := priceMap[timestamp]; exists {
-					// Use actual price
-					setQuotePrice(&quote, currency, price)
-				} else if lastQuote != nil {
-					// Forward-fill from last quote
-					setQuotePrice(&quote, currency, getQuotePrice(*lastQuote, currency))
-				}
-			}
-		}
-
-		// Only add quote if it has at least one price
-		if hasAnyPrice(quote) {
-			result = append(result, quote)
-			lastQuote = &quote
-		}
-	}
-
-	return result, nil
-}
-
-func setQuotePrice(quote *quotes.Quote, currency quotes.Currency, price float64) {
-	switch currency {
-	case quotes.CurrencyBTC:
-		quote.BTC = price
-	case quotes.CurrencyUSD:
-		quote.USD = price
-	case quotes.CurrencyEUR:
-		quote.EUR = price
-	case quotes.CurrencyCNY:
-		quote.CNY = price
-	case quotes.CurrencyJPY:
-		quote.JPY = price
-	case quotes.CurrencyKRW:
-		quote.KRW = price
-	case quotes.CurrencyETH:
-		quote.ETH = price
-	case quotes.CurrencyGBP:
-		quote.GBP = price
-	}
-}
-
-func getQuotePrice(quote quotes.Quote, currency quotes.Currency) float64 {
-	switch currency {
-	case quotes.CurrencyBTC:
-		return quote.BTC
-	case quotes.CurrencyUSD:
-		return quote.USD
-	case quotes.CurrencyEUR:
-		return quote.EUR
-	case quotes.CurrencyCNY:
-		return quote.CNY
-	case quotes.CurrencyJPY:
-		return quote.JPY
-	case quotes.CurrencyKRW:
-		return quote.KRW
-	case quotes.CurrencyETH:
-		return quote.ETH
-	case quotes.CurrencyGBP:
-		return quote.GBP
-	default:
-		return 0
-	}
-}
-
-func hasAnyPrice(quote quotes.Quote) bool {
-	return quote.BTC != 0 || quote.USD != 0 || quote.EUR != 0 ||
-		quote.CNY != 0 || quote.JPY != 0 || quote.KRW != 0 ||
-		quote.ETH != 0 || quote.GBP != 0
+	return out
 }

@@ -5,17 +5,38 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"quotes/internal/core/domain/quotes"
 )
 
-// Validate checks required fields and formats after defaults and env overrides are applied.
-// Call from Load (or explicitly after constructing a Config) for fail-fast startup.
+// Validate checks required fields and formats after defaults and env overrides
+// are applied. Token-existence checks happen later, after the runtime token
+// registry is loaded from DB.
+//
+// Implementation note: each section delegates to a focused validator so that
+// (a) gocyclo stays sane and (b) tests can drive sections in isolation.
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	for _, fn := range []func() error{
+		c.validateServer,
+		c.validateDatabase,
+		c.validateJob,
+		c.validateAPI,
+		c.validateCoinGecko,
+		c.validateBackfill,
+		c.validateEquiteezBackfill,
+		c.validateTokens,
+		c.validateRWA,
+		c.validateProductionSafety,
+	} {
+		if err := fn(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+func (c *Config) validateServer() error {
 	if strings.TrimSpace(c.Server.Host) == "" {
 		return fmt.Errorf("server.host is required")
 	}
@@ -28,41 +49,43 @@ func (c *Config) Validate() error {
 	if c.Server.LatestQuoteCacheTTLSeconds < 0 {
 		return fmt.Errorf("server.latest_quote_cache_ttl_seconds must be >= 0, got %d", c.Server.LatestQuoteCacheTTLSeconds)
 	}
-	if c.Server.ReadTimeout <= 0 {
-		return fmt.Errorf("server.read_timeout must be > 0, got %s", time.Duration(c.Server.ReadTimeout))
+	if c.Server.MaxQueryLimit < 0 {
+		return fmt.Errorf("server.max_query_limit must be >= 0, got %d", c.Server.MaxQueryLimit)
 	}
-	if c.Server.WriteTimeout <= 0 {
-		return fmt.Errorf("server.write_timeout must be > 0, got %s", time.Duration(c.Server.WriteTimeout))
+	if c.Server.FXMaxStalenessSeconds < 0 {
+		return fmt.Errorf("server.fx_max_staleness_seconds must be >= 0, got %d", c.Server.FXMaxStalenessSeconds)
 	}
-	if c.Server.ReadHeaderTimeout <= 0 {
-		return fmt.Errorf("server.read_header_timeout must be > 0, got %s", time.Duration(c.Server.ReadHeaderTimeout))
+	if c.Server.MaxInCurrencies < 0 {
+		return fmt.Errorf("server.max_in_currencies must be >= 0, got %d", c.Server.MaxInCurrencies)
 	}
-	if c.Server.IdleTimeout <= 0 {
-		return fmt.Errorf("server.idle_timeout must be > 0, got %s", time.Duration(c.Server.IdleTimeout))
+	if err := validatePositiveDuration("server.read_timeout", c.Server.ReadTimeout); err != nil {
+		return err
 	}
-	if gm := strings.ToLower(strings.TrimSpace(c.Server.GinMode)); gm != "" {
-		switch gm {
-		case "debug", "release", "test":
-		default:
-			return fmt.Errorf("server.gin_mode must be one of debug, release, test, or empty, got %q", c.Server.GinMode)
-		}
+	if err := validatePositiveDuration("server.write_timeout", c.Server.WriteTimeout); err != nil {
+		return err
 	}
-	if len(c.Server.CORS.AllowedOrigins) == 0 {
-		return fmt.Errorf("server.cors.allowed_origins must contain at least one origin")
+	if err := validatePositiveDuration("server.read_header_timeout", c.Server.ReadHeaderTimeout); err != nil {
+		return err
 	}
-	for _, o := range c.Server.CORS.AllowedOrigins {
-		o = strings.TrimSpace(o)
-		if o == "" {
-			return fmt.Errorf("server.cors.allowed_origins: empty entry is not allowed")
-		}
-		if o == "*" {
-			return fmt.Errorf("server.cors.allowed_origins: wildcard '*' is not allowed; list explicit http(s) origins")
-		}
-		if !strings.HasPrefix(o, "http://") && !strings.HasPrefix(o, "https://") {
-			return fmt.Errorf("server.cors.allowed_origins: origin %q must start with http:// or https://", o)
-		}
+	if err := validatePositiveDuration("server.idle_timeout", c.Server.IdleTimeout); err != nil {
+		return err
 	}
+	if err := validateGinMode(c.Server.GinMode); err != nil {
+		return err
+	}
+	if err := validateCORSOrigins(c.Server.CORS.AllowedOrigins); err != nil {
+		return err
+	}
+	if c.Server.RateLimit.RPS < 0 {
+		return fmt.Errorf("server.rate_limit.rps must be >= 0")
+	}
+	if c.Server.RateLimit.Burst < 0 {
+		return fmt.Errorf("server.rate_limit.burst must be >= 0")
+	}
+	return nil
+}
 
+func (c *Config) validateDatabase() error {
 	if strings.TrimSpace(c.Database.Host) == "" {
 		return fmt.Errorf("database.host is required")
 	}
@@ -78,98 +101,223 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Database.Name) == "" {
 		return fmt.Errorf("database.name is required")
 	}
+	if c.Database.MaxOpenConns < 0 {
+		return fmt.Errorf("database.max_open_conns must be >= 0")
+	}
+	if c.Database.MaxIdleConns < 0 {
+		return fmt.Errorf("database.max_idle_conns must be >= 0")
+	}
+	if c.Database.MaxOpenConns > 0 && c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+		return fmt.Errorf("database.max_idle_conns (%d) must be <= max_open_conns (%d)",
+			c.Database.MaxIdleConns, c.Database.MaxOpenConns)
+	}
+	return nil
+}
 
+func (c *Config) validateJob() error {
 	if c.Job.Enabled && c.Job.IntervalSeconds <= 0 {
 		return fmt.Errorf("job.interval_seconds must be > 0 when job.enabled is true")
 	}
+	return nil
+}
 
+func (c *Config) validateAPI() error {
 	if c.API.TimeoutSeconds <= 0 {
 		return fmt.Errorf("api.timeout_seconds must be > 0")
 	}
+	return nil
+}
 
+func (c *Config) validateCoinGecko() error {
 	if strings.TrimSpace(c.CoinGecko.BaseURL) == "" {
 		return fmt.Errorf("coingecko.base_url is required")
 	}
 	if err := validateRateLimit("coingecko", c.CoinGecko.RateLimit); err != nil {
 		return err
 	}
-	if err := validateRateLimit("equiteez", c.Equiteez.RateLimit); err != nil {
-		return err
-	}
+	return validateRateLimit("equiteez", c.Equiteez.RateLimit)
+}
 
-	if c.Backfill.TickSeconds < 0 {
+func (c *Config) validateBackfill() error {
+	b := c.Backfill
+	if b.TickSeconds < 0 {
 		return fmt.Errorf("backfill.tick_seconds must be >= 0")
 	}
-	if c.Backfill.ChunkMinutes < 0 {
+	if b.ChunkMinutes < 0 {
 		return fmt.Errorf("backfill.chunk_minutes must be >= 0")
 	}
 	// CoinGecko market_chart/range granularity drops to 1h once the window exceeds
 	// ~1 day; we keep chunks <= 24h to preserve 5-min points for the backfill pass.
-	if c.Backfill.ChunkMinutes > 1440 {
-		return fmt.Errorf("backfill.chunk_minutes must be <= 1440 (24h) to keep CoinGecko 5-min granularity, got %d", c.Backfill.ChunkMinutes)
+	if b.ChunkMinutes > 1440 {
+		return fmt.Errorf("backfill.chunk_minutes must be <= 1440 (24h) to keep CoinGecko 5-min granularity, got %d", b.ChunkMinutes)
 	}
-	if c.Backfill.BackfillMaxErrors < 0 {
+	if b.BackfillMaxErrors < 0 {
 		return fmt.Errorf("backfill.backfill_max_errors must be >= 0")
 	}
-	if c.Backfill.BackoffInitialMs < 0 {
+	if b.BackoffInitialMs < 0 {
 		return fmt.Errorf("backfill.backoff_initial_ms must be >= 0")
 	}
-	if c.Backfill.BackoffMaxMs < 0 {
+	if b.BackoffMaxMs < 0 {
 		return fmt.Errorf("backfill.backoff_max_ms must be >= 0")
 	}
-	if err := validateBackfillStartFrom(c.Backfill.StartFrom); err != nil {
+	if b.MaxBackoffMs > 0 && b.MaxBackoffMs < b.BackoffMaxMs {
+		return fmt.Errorf("backfill.max_backoff_ms (hard cap) must be >= backoff_max_ms")
+	}
+	if err := validateBackfillStartFrom(b.StartFrom); err != nil {
 		return fmt.Errorf("backfill.start_from: %w", err)
 	}
-	if err := validateBackfillStartFrom(c.Backfill.MinStartFrom); err != nil {
+	if err := validateBackfillStartFrom(b.MinStartFrom); err != nil {
 		return fmt.Errorf("backfill.min_start_from: %w", err)
 	}
+	return nil
+}
 
-	for name := range c.Tokens {
-		key := strings.ToLower(strings.TrimSpace(name))
-		if !quotes.IsTokenSupported(key) {
-			return fmt.Errorf("tokens: unknown or unsupported token key %q (supported: %v)", name, quotes.GetSupportedTokenNames())
-		}
-		tc := c.Tokens[name]
-		if err := validateBackfillStartFrom(tc.Backfill.StartFrom); err != nil {
-			return fmt.Errorf("tokens[%s].backfill.start_from: %w", name, err)
-		}
-		if tc.Backfill.ChunkMinutes < 0 {
-			return fmt.Errorf("tokens[%s].backfill.chunk_minutes must be >= 0", name)
-		}
-		if tc.Backfill.ChunkMinutes > 1440 {
-			return fmt.Errorf("tokens[%s].backfill.chunk_minutes must be <= 1440 (24h), got %d", name, tc.Backfill.ChunkMinutes)
-		}
-		if tc.LiveLookbackSeconds < 0 {
-			return fmt.Errorf("tokens[%s].live_lookback_seconds must be >= 0", name)
+func (c *Config) validateTokens() error {
+	for name, tc := range c.Tokens {
+		if err := validateOneToken(name, tc); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	for _, tok := range quotes.GetSupportedTokens() {
-		tokenName := string(tok)
-		if !c.IsTokenBackfillEnabled(tokenName) {
-			continue
+func (c *Config) validateEquiteezBackfill() error {
+	b := c.Equiteez.Backfill
+	if !b.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Equiteez.IndexerURL) == "" {
+		return fmt.Errorf("equiteez.backfill.enabled=true requires equiteez.indexer_url to be set")
+	}
+	if b.TickSeconds <= 0 {
+		return fmt.Errorf("equiteez.backfill.tick_seconds must be > 0 when enabled")
+	}
+	if b.BatchSize <= 0 {
+		return fmt.Errorf("equiteez.backfill.batch_size must be > 0 when enabled")
+	}
+	if b.BatchSize > 5000 {
+		// Hasura's default node limit + our outbound max-bytes guard sit far below this;
+		// pulling 5k orders in one shot is asking for OOM/timeout pain.
+		return fmt.Errorf("equiteez.backfill.batch_size must be <= 5000, got %d", b.BatchSize)
+	}
+	if b.JitterMs < 0 {
+		return fmt.Errorf("equiteez.backfill.jitter_ms must be >= 0")
+	}
+	if b.BackfillMaxErrors < 0 {
+		return fmt.Errorf("equiteez.backfill.backfill_max_errors must be >= 0")
+	}
+	if b.BackoffInitialMs < 0 {
+		return fmt.Errorf("equiteez.backfill.backoff_initial_ms must be >= 0")
+	}
+	if b.BackoffMaxMs < 0 {
+		return fmt.Errorf("equiteez.backfill.backoff_max_ms must be >= 0")
+	}
+	if b.MaxBackoffMs > 0 && b.MaxBackoffMs < b.BackoffMaxMs {
+		return fmt.Errorf("equiteez.backfill.max_backoff_ms (hard cap) must be >= backoff_max_ms")
+	}
+	if err := validateBackfillStartFrom(b.StartFrom); err != nil {
+		return fmt.Errorf("equiteez.backfill.start_from: %w", err)
+	}
+	return nil
+}
+
+func (c *Config) validateRWA() error {
+	if c.RWA.IntervalSeconds < 0 {
+		return fmt.Errorf("rwa.interval_seconds must be >= 0")
+	}
+	if c.RWA.Enabled && c.RWA.IntervalSeconds <= 0 {
+		return fmt.Errorf("rwa.interval_seconds must be > 0 when rwa.enabled is true")
+	}
+	if c.RWA.Enabled && strings.TrimSpace(c.Equiteez.IndexerURL) == "" {
+		return fmt.Errorf("rwa.enabled=true requires equiteez.indexer_url to be set")
+	}
+	return nil
+}
+
+// validateProductionSafety refuses to start in release mode with well-known
+// default credentials. Caught at config-load so the operator sees a clear
+// error instead of a deploy that silently leaks behind a default password.
+func (c *Config) validateProductionSafety() error {
+	if !strings.EqualFold(strings.TrimSpace(c.Server.GinMode), "release") {
+		return nil
+	}
+	insecure := map[string]bool{
+		"postgres": true,
+		"admin":    true,
+		"password": true,
+		"changeme": true,
+	}
+	if insecure[strings.ToLower(strings.TrimSpace(c.Database.Password))] {
+		return fmt.Errorf("database.password is a well-known default (%q); refusing to start in release mode",
+			c.Database.Password)
+	}
+	return nil
+}
+
+// --- helpers (each kept under cyclomatic complexity budget) ---
+
+func validatePositiveDuration(name string, d DurationYAML) error {
+	if d <= 0 {
+		return fmt.Errorf("%s must be > 0, got %s", name, time.Duration(d))
+	}
+	return nil
+}
+
+func validateGinMode(mode string) error {
+	gm := strings.ToLower(strings.TrimSpace(mode))
+	if gm == "" {
+		return nil
+	}
+	switch gm {
+	case "debug", "release", "test":
+		return nil
+	default:
+		return fmt.Errorf("server.gin_mode must be one of debug, release, test, or empty, got %q", mode)
+	}
+}
+
+func validateCORSOrigins(origins []string) error {
+	if len(origins) == 0 {
+		return fmt.Errorf("server.cors.allowed_origins must contain at least one origin")
+	}
+	for _, raw := range origins {
+		o := strings.TrimSpace(raw)
+		if o == "" {
+			return fmt.Errorf("server.cors.allowed_origins: empty entry is not allowed")
 		}
-		start := strings.TrimSpace(c.GetTokenBackfillStartFrom(tokenName))
-		if start == "" {
-			return fmt.Errorf("backfill is enabled for token %q but start_from is empty (set globally or under tokens.%s.backfill)", tokenName, tokenName)
+		if o == "*" {
+			return fmt.Errorf("server.cors.allowed_origins: wildcard '*' is not allowed; list explicit http(s) origins")
 		}
-		if err := validateBackfillStartFrom(start); err != nil {
-			return fmt.Errorf("resolved backfill start_from for token %q: %w", tokenName, err)
+		if !strings.HasPrefix(o, "http://") && !strings.HasPrefix(o, "https://") {
+			return fmt.Errorf("server.cors.allowed_origins: origin %q must start with http:// or https://", o)
 		}
 	}
+	return nil
+}
 
-	if c.Job.Enabled {
-		for _, tok := range quotes.GetSupportedTokens() {
-			tokenName := string(tok)
-			if !c.IsTokenEnabled(tokenName) {
-				continue
-			}
-			if c.GetTokenInterval(tokenName) <= 0 {
-				return fmt.Errorf("tokens[%s]: interval must resolve to > 0 when job is enabled", tokenName)
-			}
-		}
+func validateOneToken(name string, tc TokenConfig) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("tokens: empty token key is not allowed")
 	}
-
+	if err := validateBackfillStartFrom(tc.Backfill.StartFrom); err != nil {
+		return fmt.Errorf("tokens[%s].backfill.start_from: %w", name, err)
+	}
+	if tc.Backfill.ChunkMinutes < 0 {
+		return fmt.Errorf("tokens[%s].backfill.chunk_minutes must be >= 0", name)
+	}
+	if tc.Backfill.ChunkMinutes > 1440 {
+		return fmt.Errorf("tokens[%s].backfill.chunk_minutes must be <= 1440 (24h), got %d", name, tc.Backfill.ChunkMinutes)
+	}
+	if tc.LiveLookbackSeconds < 0 {
+		return fmt.Errorf("tokens[%s].live_lookback_seconds must be >= 0", name)
+	}
+	if tc.IntervalSeconds < 0 {
+		return fmt.Errorf("tokens[%s].interval_seconds must be >= 0", name)
+	}
+	if tc.MaxChunkMinutes > 0 && tc.Backfill.ChunkMinutes > tc.MaxChunkMinutes {
+		return fmt.Errorf("tokens[%s]: backfill.chunk_minutes (%d) must be <= max_chunk_minutes (%d)",
+			name, tc.Backfill.ChunkMinutes, tc.MaxChunkMinutes)
+	}
 	return nil
 }
 

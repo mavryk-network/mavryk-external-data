@@ -8,19 +8,21 @@ import (
 	"time"
 
 	"quotes/internal/config"
-	"quotes/internal/core/domain/quotes"
+	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/httpclient"
 	"quotes/internal/logging"
 
 	"github.com/rs/zerolog"
 )
 
+// MarketChartRangeResponse mirrors the CoinGecko /coins/{id}/market_chart/range payload.
 type MarketChartRangeResponse struct {
 	Prices      [][]float64 `json:"prices"`
 	MarketCaps  [][]float64 `json:"market_caps"`
 	TotalVolume [][]float64 `json:"total_volumes"`
 }
 
+// Client is a thin REST client over CoinGecko market_chart/range.
 type Client struct {
 	baseURL string
 	apiKey  string
@@ -28,10 +30,8 @@ type Client struct {
 	log     *zerolog.Logger
 }
 
-// NewClient builds a CoinGecko HTTP client. Per-service rate limit comes from
-// cg.RateLimit (shared across every CoinGecko client in-process via the
-// "coingecko" registry key). Retry + circuit breaker come from the shared api
-// section.
+// NewClient builds a CoinGecko HTTP client. Per-service rate limit is shared via
+// the "coingecko" registry key; retry + circuit breaker come from the API config.
 func NewClient(cg config.CoinGeckoConfig, api *config.APIConfig, timeout time.Duration, log *zerolog.Logger) *Client {
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -45,48 +45,49 @@ func NewClient(cg config.CoinGeckoConfig, api *config.APIConfig, timeout time.Du
 		baseURL: cg.BaseURL,
 		apiKey:  cg.APIKey,
 		log:     lg,
-		http:    newCoingeckoHTTPClient(timeout, cg, api, lg),
+		http:    newHTTPClient(timeout, cg, api, lg),
 	}
 }
 
-// newCoingeckoHTTPClient builds Client.Timeout + Transport stack:
-// rate limit → (circuit breaker → retry → pooled transport).
-func newCoingeckoHTTPClient(timeout time.Duration, cg config.CoinGeckoConfig, api *config.APIConfig, log *zerolog.Logger) *http.Client {
+// newHTTPClient constructs the resilient transport stack. Refactoring v2 §3.4
+// — the rate-limiter sits OUTSIDE the logging transport so log latency reflects
+// only network time, not throttling wait. Order (outermost first):
+//
+//	rate-limit → logging → retry/CB → response-size guard → pooled transport.
+func newHTTPClient(timeout time.Duration, cg config.CoinGeckoConfig, api *config.APIConfig, log *zerolog.Logger) *http.Client {
 	res := api.OutboundResilience("coingecko")
 	rl := cg.RateLimit.Settings("coingecko")
-	rt := httpclient.WrapResilientTransport(httpclient.SharedTransport(), res)
+	rt := httpclient.MaxBytesReader(httpclient.SharedTransport(), maxBytes(api))
+	rt = httpclient.WrapResilientTransport(rt, res)
+	rt = &logging.HTTPTransport{Base: rt, Logger: log, Component: "coingecko"}
 	rt = httpclient.WrapRateLimited(rt, rl)
-	rt = &logging.HTTPTransport{
-		Base:      rt,
-		Logger:    log,
-		Component: "coingecko",
-	}
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: rt,
-	}
+	return &http.Client{Timeout: timeout, Transport: rt}
 }
 
-func (c *Client) GetMarketChartRange(ctx context.Context, coinID, currency string, from, to int64) (*MarketChartRangeResponse, error) {
-	url := fmt.Sprintf("%s/coins/%s/market_chart/range?vs_currency=%s&from=%d&to=%d",
-		c.baseURL, coinID, currency, from, to)
+func maxBytes(api *config.APIConfig) int64 {
+	if api == nil {
+		return 0
+	}
+	return api.OutboundMaxResponseBytes
+}
 
-	c.log.Debug().Str("url", url).Msg("coingecko_request")
+// GetMarketChartRange fetches one (coin, vs_currency) pair window.
+func (c *Client) GetMarketChartRange(ctx context.Context, coinID, vsCurrency string, from, to int64) (*MarketChartRangeResponse, error) {
+	url := fmt.Sprintf("%s/coins/%s/market_chart/range?vs_currency=%s&from=%d&to=%d",
+		c.baseURL, coinID, vsCurrency, from, to)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
-
-	req.Header.Set("User-Agent", "quotes-service/1.0")
-
+	req.Header.Set("User-Agent", "mavryk-external-data/1.0")
 	if c.apiKey != "" {
 		req.Header.Set("x-cg-pro-api-key", c.apiKey)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to make request: %w", err)
+		return nil, fmt.Errorf("execute request: %w", err)
 	}
 	defer func() {
 		if cerr := resp.Body.Close(); cerr != nil {
@@ -94,31 +95,27 @@ func (c *Client) GetMarketChartRange(ctx context.Context, coinID, currency strin
 		}
 	}()
 
-	c.log.Info().Int("status", resp.StatusCode).Msg("coingecko_response")
-
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("coingecko returned status %d", resp.StatusCode)
 	}
 
 	var result MarketChartRangeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
-
 	return &result, nil
 }
 
-func (c *Client) GetMultipleCurrencies(ctx context.Context, coinID string, currencies []quotes.Currency, from, to int64) (map[quotes.Currency]*MarketChartRangeResponse, error) {
-	results := make(map[quotes.Currency]*MarketChartRangeResponse)
-
-	for _, currency := range currencies {
-		vs := string(currency)
-		data, err := c.GetMarketChartRange(ctx, coinID, vs, from, to)
+// GetMultipleCurrencies fetches one window for many vs_currencies. Returns the
+// first error and stops; partial results are dropped (caller logs and retries).
+func (c *Client) GetMultipleCurrencies(ctx context.Context, coinID string, currencies []prices.Currency, from, to int64) (map[prices.Currency]*MarketChartRangeResponse, error) {
+	results := make(map[prices.Currency]*MarketChartRangeResponse, len(currencies))
+	for _, cur := range currencies {
+		data, err := c.GetMarketChartRange(ctx, coinID, string(cur), from, to)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get data for currency %s: %w", vs, err)
+			return nil, fmt.Errorf("currency %s: %w", cur, err)
 		}
-		results[currency] = data
+		results[cur] = data
 	}
-
 	return results, nil
 }

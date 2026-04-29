@@ -1,4 +1,4 @@
-// Package metrics registers Prometheus collectors for the quotes service.
+// Package metrics registers Prometheus collectors for the service.
 package metrics
 
 import (
@@ -6,7 +6,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+var (
+	durationBuckets  = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+	jobBuckets       = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300}
+	rateLimitBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
+)
 
 var (
 	HTTPRequestsTotal = promauto.NewCounterVec(
@@ -50,17 +54,132 @@ var (
 		[]string{"component", "from_state", "to_state"},
 	)
 
+	// OutboundHTTPCircuitBreakerState is the current CB state per component.
+	// 0 = closed, 1 = open, 2 = half-open. Updated by the CB layer on transitions.
+	OutboundHTTPCircuitBreakerState = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "outbound_http_circuit_breaker_state",
+			Help: "Current circuit breaker state (0=closed, 1=open, 2=half-open).",
+		},
+		[]string{"component"},
+	)
+
 	OutboundHTTPRateLimitWaitSeconds = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "outbound_http_rate_limit_wait_seconds",
 			Help:    "Time spent waiting for an outbound HTTP rate-limit token.",
-			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+			Buckets: rateLimitBuckets,
 		},
 		[]string{"component"},
 	)
+
+	// JobTickDurationSeconds — time taken for one tick of a background job.
+	JobTickDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "job_tick_duration_seconds",
+			Help:    "Time spent in one tick of a background job.",
+			Buckets: jobBuckets,
+		},
+		[]string{"job", "source", "entity"},
+	)
+
+	// JobErrorsTotal — counter of tick-level errors per (job, source, reason).
+	JobErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "job_errors_total",
+			Help: "Errors per background-job tick by reason.",
+		},
+		[]string{"job", "source", "entity", "reason"},
+	)
+
+	// JobRowsAffectedTotal — total rows written by a job (Save() return).
+	JobRowsAffectedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "job_rows_affected_total",
+			Help: "Cumulative rows affected by a background job's Save calls.",
+		},
+		[]string{"job", "source", "entity"},
+	)
+
+	// BackfillOldestTsSeconds — Unix timestamp of the current oldest_ts cursor.
+	BackfillOldestTsSeconds = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "backfill_oldest_ts_seconds",
+			Help: "Current oldest_ts cursor (Unix seconds) for a backfill entity. Updated after each successful step.",
+		},
+		[]string{"source", "entity"},
+	)
+
+	// BackfillAutoDisabledTotal — counter of times an entity has been auto-disabled.
+	BackfillAutoDisabledTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "backfill_auto_disabled_total",
+			Help: "Backfill auto-disable events by entity.",
+		},
+		[]string{"source", "entity", "reason"},
+	)
+
+	// DBOpenConnections / DBInUseConnections — sql.DB pool stats. Exported via a
+	// background goroutine (or pull collector) that reads db.Stats() periodically.
+	DBOpenConnections = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "db_pool_open_connections",
+			Help: "Current open connections to the database pool.",
+		},
+	)
+	DBInUseConnections = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "db_pool_in_use_connections",
+			Help: "Connections currently in use.",
+		},
+	)
+	DBIdleConnections = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "db_pool_idle_connections",
+			Help: "Idle connections.",
+		},
+	)
+	DBWaitDurationSeconds = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "db_pool_wait_duration_seconds",
+			Help: "Cumulative seconds blocked waiting for a free connection.",
+		},
+	)
+
+	// FXConversionDurationSeconds — wall time of one PriceConverter.Convert
+	// call (cache hit or miss). Histogram per (source_token, target).
+	FXConversionDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "fx_conversion_duration_seconds",
+			Help:    "Wall time of one FX conversion (cache hit + miss combined).",
+			Buckets: rateLimitBuckets,
+		},
+		[]string{"source_token", "target"},
+	)
+
+	// FXConversionsTotal — counter labeled by outcome:
+	// `success`, `identity`, `no_rate`, `unsupported_target`, `unregistered_source`, `query_error`.
+	FXConversionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "fx_conversions_total",
+			Help: "Outcome of FX conversions exposed at API edges.",
+		},
+		[]string{"source_token", "target", "result"},
+	)
+
+	// FXStaleResponsesTotal — counter of `?in=` responses that were served
+	// with `fx.stale=true`. A growing rate means CoinGecko live-job is
+	// behind or down — alert on `rate(...) > 1% of total`.
+	FXStaleResponsesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "fx_stale_responses_total",
+			Help: "Conversions returned with stale FX (older than configured budget).",
+		},
+		[]string{"target"},
+	)
 )
 
-// StatusClass returns 2xx, 4xx, or 5xx for HTTPResponsesTotal.
+// StatusClass returns 2xx, 4xx, or 5xx for HTTPResponsesTotal labelling.
 func StatusClass(code int) string {
 	switch {
 	case code >= 500:

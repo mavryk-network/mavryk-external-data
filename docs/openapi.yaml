@@ -1,0 +1,503 @@
+openapi: 3.0.3
+
+info:
+  title: Mavryk External Data API
+  version: "2.0.0"
+  description: |
+    Long-format price service.
+
+      * **FT prices** — CoinGecko-sourced quotes per (token, currency).
+      * **RWA prices** — Equiteez orderbook prices per (pair, side).
+
+    All prices are returned as **decimal strings** (`numeric(38,18)` precision)
+    to avoid float round-trip loss. Timestamps are RFC3339 in UTC.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  contact:
+    name: API Support
+    url: https://github.com/0xVoronov/mavryk-external-data
+
+servers:
+  - url: http://localhost:3010
+    description: Local dev
+  - url: https://{host}
+    description: Production / staging
+    variables:
+      host:
+        default: api.example.com
+
+tags:
+  - name: health
+    description: Liveness, readiness, metrics
+  - name: prices-ft
+    description: Fungible-token quotes (CoinGecko)
+  - name: prices-rwa
+    description: RWA orderbook prices (Equiteez)
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      description: Returns 200 as long as the process is running. Does **not** depend on the database — use `/readyz` for readiness.
+      operationId: liveness
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LivenessResponse" }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      description: |
+        Returns 200 when the service can serve traffic, 503 otherwise.
+        Currently checks (a) the readiness gate (flipped during graceful
+        shutdown) and (b) database connectivity (`Ping` with 2s timeout).
+      operationId: readiness
+      responses:
+        "200":
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessResponse" }
+        "503":
+          description: Not ready (draining or DB unreachable).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessResponse" }
+
+  /metrics:
+    get:
+      tags: [health]
+      summary: Prometheus metrics
+      description: |
+        Prometheus exposition format. See `internal/metrics/prometheus.go`
+        for the registered collectors:
+
+          * `http_*` — request counts, latencies, response classes.
+          * `outbound_http_*` — retries, CB transitions, CB current state, RL wait.
+          * `job_*` — tick duration, error counters, rows written.
+          * `backfill_*` — oldest_ts cursor, auto-disable counter.
+          * `db_pool_*` — connection pool stats.
+      operationId: metrics
+      responses:
+        "200":
+          description: Plaintext Prometheus metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/prices/{token}:
+    get:
+      tags: [prices-ft]
+      summary: List FT price points
+      description: |
+        Returns price points for `token` from `coingecko`.
+
+          * No `from`/`to` → "latest" mode: freshest price per currency.
+          * Either `from` or `to` set → window mode; missing side defaults
+            to `now-24h` / `now`.
+          * `currency` filters the returned metrics; comma-separated.
+
+        `limit` is capped by `server.max_query_limit`; exceeding returns 400.
+      operationId: listTokenPrices
+      parameters:
+        - $ref: "#/components/parameters/Token"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/CurrencyFilter"
+      responses:
+        "200":
+          description: Array of price points.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TokenPricePoint" }
+              example:
+                - { timestamp: "2026-04-27T12:00:00Z", currency: usd, price: 0.071541 }
+                - { timestamp: "2026-04-27T12:00:00Z", currency: eur, price: 0.060941 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/prices/{token}/latest:
+    get:
+      tags: [prices-ft]
+      summary: Latest snapshot for a token
+      description: |
+        Returns the freshest price for each currency, transposed into a
+        single Snapshot object — the spiritual replacement for the legacy
+        `/quotes/last` endpoint.
+      operationId: latestTokenSnapshot
+      parameters:
+        - $ref: "#/components/parameters/Token"
+      responses:
+        "200":
+          description: Snapshot of latest prices, one per currency.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Snapshot" }
+              example:
+                timestamp: "2026-04-27T12:00:00Z"
+                values: { usd: "0.0715412", eur: "0.06094094" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/prices/{token}/count:
+    get:
+      tags: [prices-ft]
+      summary: Total row count for a token
+      description: |
+        Total raw row count in `token_prices` for `(token, source=coingecko)`.
+        Useful for capacity planning and monitoring; not paginated.
+      operationId: countTokenPrices
+      parameters:
+        - $ref: "#/components/parameters/Token"
+      responses:
+        "200":
+          description: Row count.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CountResponse" }
+              example: { token: mvrk, count: 524160 }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/rwa/{symbol}:
+    get:
+      tags: [prices-rwa]
+      summary: List RWA last prices
+      description: |
+        Returns `last` price points for the pair identified by `{symbol}`
+        (`{base}-{quote}`, case-insensitive, e.g. `mars1-usdt`) from
+        `equiteez`. Window/latest semantics match `/v1/prices/{token}`.
+
+        `?in=usd,eur,...` adds converted prices as flat top-level numeric
+        keys per row. Targets that fail conversion are silently omitted;
+        the row is still returned with the native `price`.
+      operationId: listRWAPrices
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/InFilter"
+      responses:
+        "200":
+          description: Array of RWAPrice objects (one per timestamp).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RWAPrice" }
+              example:
+                - { timestamp: "2026-04-27T12:00:00Z", native_quote: usdt, price: 100.42, usd: 100.4300, eur: 85.62 }
+                - { timestamp: "2026-04-27T11:00:00Z", native_quote: usdt, price: 99.80 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/rwa/{symbol}/latest:
+    get:
+      tags: [prices-rwa]
+      summary: Latest RWA price
+      description: |
+        Freshest `last` price for the pair identified by `{symbol}`.
+        Returns 404 when no `last` row exists yet.
+
+        Optional `?in=usd,eur,...` adds converted prices as flat top-level
+        numeric keys. Targets that fail conversion (no FX rate, unregistered
+        quote currency, etc.) are silently omitted; the response stays 200.
+      operationId: latestRWASnapshot
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+        - $ref: "#/components/parameters/InFilter"
+      responses:
+        "200":
+          description: Latest RWAPrice object.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RWAPrice" }
+              example:
+                timestamp: "2026-04-27T12:00:00Z"
+                native_quote: usdt
+                price: 100.45
+                usd: 100.46
+                eur: 85.63
+                aed: 368.72
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+components:
+  parameters:
+    Token:
+      name: token
+      in: path
+      required: true
+      description: Lowercase token symbol from the registered set (e.g. `mvrk`, `usdt`).
+      schema:
+        type: string
+        pattern: "^[a-z0-9]{1,16}$"
+        example: mvrk
+
+    Symbol:
+      name: symbol
+      in: path
+      required: true
+      description: |
+        Pair symbol in `{base}-{quote}` form (case-insensitive),
+        e.g. `mars1-usdt`. The split is on the LAST hyphen so future
+        bases containing a dash (e.g. `x-at-usdt`) keep parsing.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9-]{3,64}$"
+        example: mars1-usdt
+
+    From:
+      name: from
+      in: query
+      required: false
+      description: Window start (RFC3339, UTC). When set without `to`, `to` defaults to now.
+      schema:
+        type: string
+        format: date-time
+        example: "2026-04-01T00:00:00Z"
+
+    To:
+      name: to
+      in: query
+      required: false
+      description: Window end (RFC3339, UTC). When set without `from`, `from` defaults to `now-24h`.
+      schema:
+        type: string
+        format: date-time
+        example: "2026-04-02T00:00:00Z"
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Cap on returned rows. Capped server-side by `server.max_query_limit` (default 10000).
+      schema:
+        type: integer
+        minimum: 1
+        example: 100
+
+    CurrencyFilter:
+      name: currency
+      in: query
+      required: false
+      description: Comma-separated quote currency filter — `usd`, `usd,eur`, etc. Validated against the supported registry.
+      schema:
+        type: string
+        example: usd,eur
+
+    InFilter:
+      name: in
+      in: query
+      required: false
+      description: |
+        Comma-separated list of target currencies for read-side conversion
+        (e.g. `usd`, `usd,eur,aed`). Each must be a registered quote
+        currency in `prices.AllSupportedCurrencies` — unknown values
+        return 400. The server caps the list length via
+        `server.max_in_currencies` (default 10).
+
+        Conversion uses the FT-side `token_prices` series as the FX
+        source: for a pair quoted in `USDT`, `?in=usd` looks up the
+        latest `USDT/USD` rate from CoinGecko and multiplies. Per-target
+        failures are silently omitted from the response (the key is absent);
+        the request stays 200 as long as the native price was found.
+      schema:
+        type: string
+        example: "usd,eur,aed"
+
+  responses:
+    BadRequest:
+      description: "Invalid request parameters (`code: INVALID_ARGUMENT`)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: INVALID_ARGUMENT, message: "Invalid 'limit' parameter: exceeds maximum" }
+    NotFound:
+      description: "Token, pair, or row not found (`code: NOT_FOUND`)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: NOT_FOUND, message: "Token not found" }
+    Conflict:
+      description: |
+        Resource state cannot be uniquely resolved (`code: CONFLICT`).
+        For RWA: 2+ enabled `rwa_pairs` rows match the requested
+        `{base}-{quote}` symbol. The `details.pair_ids` field lists the
+        conflicting IDs; resolution is operator-side (e.g. disable one row).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            code: CONFLICT
+            message: "rwa pair ambiguous for mars1-usdt: 2 enabled rows"
+            details: { pair_ids: [42, 77] }
+    RateLimited:
+      description: "Inbound rate-limit exceeded (`code: RATE_LIMITED`)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: RATE_LIMITED, message: "Too many requests" }
+    Internal:
+      description: "Unexpected server error (`code: INTERNAL`)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  schemas:
+    DecimalString:
+      type: string
+      description: |
+        High-precision decimal serialised as a string (`numeric(38,18)`).
+        Clients should parse with a fixed-point library; using `parseFloat`
+        loses precision past 15 significant digits.
+      pattern: "^-?\\d+(\\.\\d+)?$"
+      example: "0.0715412"
+
+    TokenPricePoint:
+      type: object
+      required: [timestamp, currency, price]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-04-27T12:00:00Z"
+        currency:
+          type: string
+          description: Quote currency (lowercase ISO/crypto code).
+          example: usd
+        price:
+          type: number
+          description: Price rounded to 6 decimal places, serialised as a JSON number.
+          example: 0.071541
+
+    RWAPrice:
+      type: object
+      description: |
+        One RWA price observation. `price` is the `last` trade price in
+        the orderbook's native quote currency (e.g. 56.25 USDT), rounded
+        to 6 decimal places and serialised as a JSON number.
+
+        When `?in=usd,eur,...` is requested, each successfully converted
+        currency appears as an additional top-level numeric key (lowercase
+        ISO-4217 code). Targets that fail conversion are silently absent —
+        the response stays 200 as long as the native price was found.
+
+        Top-level reserved keys: `timestamp`, `native_quote`, `price`.
+        All other top-level keys are converted currencies (3-letter codes
+        that can never collide with the reserved names).
+      required: [timestamp, native_quote, price]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: RFC3339 UTC, second precision.
+          example: "2026-04-27T12:00:00Z"
+        native_quote:
+          type: string
+          description: |
+            Lowercase ticker of the orderbook's settlement currency
+            (`rwa_pairs.quote_symbol`).
+          example: usdt
+        price:
+          type: number
+          description: |
+            Last price in `native_quote`, rounded to 6 decimal places.
+            Serialised as a JSON number (not a quoted string).
+          example: 100.45
+      additionalProperties:
+        type: number
+        description: |
+          Converted price for a target currency from `?in=`.
+          Key is the lowercase ISO-4217 code (`usd`, `eur`, `aed`, …).
+          Rounded to 6 decimal places.
+
+    Snapshot:
+      type: object
+      description: Transposed view — all metrics for one token at one timestamp.
+      required: [timestamp, values]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: RFC3339 UTC, second precision.
+        values:
+          type: object
+          description: |
+            Map of currency → price, rounded to 6 decimal places and
+            serialised as a JSON number (not a quoted string).
+          additionalProperties:
+            type: number
+          example:
+            usd: 0.071541
+            eur: 0.060941
+
+    CountResponse:
+      type: object
+      required: [token, count]
+      properties:
+        token:
+          type: string
+        count:
+          type: integer
+          format: int64
+          minimum: 0
+
+    LivenessResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          enum: [alive]
+        service:
+          type: string
+
+    ReadinessResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready, unready, draining]
+        reason:
+          type: string
+          description: Present only on non-ready responses.
+          enum: [shutting_down, db_handle_unavailable, db_unreachable]
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, UNAVAILABLE, INTERNAL, RATE_LIMITED]
+        message:
+          type: string
+          description: Client-safe message. Internal causes are NOT included; check server logs by `request_id` for the underlying error.
+        details:
+          type: object
+          additionalProperties: true
+          description: |
+            Optional machine-readable disambiguation. Currently set only on
+            `CONFLICT` responses for RWA symbol lookup, where it contains
+            `pair_ids: int64[]` of the conflicting rows.

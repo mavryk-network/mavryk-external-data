@@ -2,20 +2,25 @@ package entities
 
 import "time"
 
-// BackfillStateEntity tracks per-token state for the reverse-backfill job.
-// Inserted lazily on first step; upserted after every step (success or error).
+// BackfillStateEntity tracks per-(source, entity_key) cursor + error/backoff state
+// for the reverse-backfill jobs. PK is composite: same row holds state for an FT
+// token under coingecko OR for an RWA pair under a future indexer.
+//
+// CursorID is a generic integer cursor used by sources whose natural pagination
+// key is a monotonic ID rather than a timestamp (Equiteez orderbook_order.id).
+// CoinGecko backfill leaves it NULL.
 type BackfillStateEntity struct {
-	Token          string     `gorm:"primaryKey;type:text;not null;column:token" json:"token"`
-	OldestTs       *time.Time `gorm:"column:oldest_ts" json:"oldest_ts,omitempty"`
-	Disabled       bool       `gorm:"column:disabled;not null;default:false" json:"disabled"`
-	DisabledReason string     `gorm:"column:disabled_reason;not null;default:''" json:"disabled_reason"`
-	ErrorCount     int        `gorm:"column:error_count;not null;default:0" json:"error_count"`
-	LastError      string     `gorm:"column:last_error;not null;default:''" json:"last_error"`
-	NextAttemptAt  *time.Time `gorm:"column:next_attempt_at" json:"next_attempt_at,omitempty"`
-	UpdatedAt      time.Time  `gorm:"column:updated_at;not null" json:"updated_at"`
+	SourceCode     string     `gorm:"primaryKey;column:source_code;not null"`
+	EntityKey      string     `gorm:"primaryKey;column:entity_key;not null"`
+	OldestTs       *time.Time `gorm:"column:oldest_ts"`
+	CursorID       *int64     `gorm:"column:cursor_id"`
+	Disabled       bool       `gorm:"column:disabled;not null;default:false"`
+	DisabledReason string     `gorm:"column:disabled_reason;not null;default:''"`
+	ErrorCount     int        `gorm:"column:error_count;not null;default:0"`
+	LastError      string     `gorm:"column:last_error;not null;default:''"`
+	NextAttemptAt  *time.Time `gorm:"column:next_attempt_at"`
+	CreatedAt      time.Time  `gorm:"column:created_at;<-:false"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at;not null"`
 }
 
-// TableName maps the GORM model to the migrations-managed table.
-func (BackfillStateEntity) TableName() string {
-	return "backfill_state"
-}
+func (BackfillStateEntity) TableName() string { return "backfill_state" }

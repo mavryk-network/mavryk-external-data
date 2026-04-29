@@ -18,6 +18,9 @@ type contextKey string
 
 const requestIDKey contextKey = "request_id"
 
+// NewLogger builds the root logger from LOG_LEVEL env (default: info) and
+// emits one info line at startup recording the active level + caller
+// annotation status — see refactoring_v2 §6.2.
 func NewLogger() *zerolog.Logger {
 	level := zerolog.InfoLevel
 	if val := os.Getenv("LOG_LEVEL"); val != "" {
@@ -26,11 +29,21 @@ func NewLogger() *zerolog.Logger {
 		}
 	}
 
-	z := zerolog.New(os.Stdout).
+	withCaller := os.Getenv("LOG_CALLER") != "false"
+
+	ctx := zerolog.New(os.Stdout).
 		Level(level).
 		With().
-		Timestamp().
-		Logger()
+		Timestamp()
+	if withCaller {
+		ctx = ctx.Caller()
+	}
+	z := ctx.Logger()
+
+	z.Info().
+		Str("level", level.String()).
+		Bool("caller_annotated", withCaller).
+		Msg("logging_initialized")
 
 	return &z
 }
@@ -155,24 +168,31 @@ func (t *HTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	logger := LoggerFromContext(req.Context(), WithComponent(t.Logger, t.Component))
 	start := time.Now()
+	rid := RequestIDFromContext(req.Context())
 
 	resp, err := base.RoundTrip(req)
 	if err != nil {
-		logger.Error().
+		ev := logger.Error().
 			Err(err).
 			Str("method", req.Method).
 			Str("url", req.URL.String()).
-			Dur("latency", time.Since(start)).
-			Msg("http_request_failed")
+			Dur("latency", time.Since(start))
+		if rid != "" {
+			ev = ev.Str("request_id", rid)
+		}
+		ev.Msg("http_request_failed")
 		return nil, err
 	}
 
-	logger.Info().
+	ev := logger.Info().
 		Int("status", resp.StatusCode).
 		Str("method", req.Method).
 		Str("url", req.URL.String()).
-		Dur("latency", time.Since(start)).
-		Msg("http_request_sent")
+		Dur("latency", time.Since(start))
+	if rid != "" {
+		ev = ev.Str("request_id", rid)
+	}
+	ev.Msg("http_request_sent")
 
 	return resp, nil
 }

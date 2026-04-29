@@ -6,11 +6,24 @@ import (
 	"quotes/internal/core/infrastructure/httpclient"
 )
 
-// APIConfig holds shared outbound HTTP settings (timeout, retry, circuit breaker)
-// applied to every third-party client. Per-service rate limits live in the
-// service configs (see CoinGeckoConfig.RateLimit, EquiteezConfig.RateLimit).
+// APIConfig holds shared outbound HTTP settings (timeout, retry, circuit breaker,
+// transport pooling) applied to every third-party client. Per-service rate limits
+// live in the service configs (see CoinGeckoConfig.RateLimit, EquiteezConfig.RateLimit).
 type APIConfig struct {
 	TimeoutSeconds int `yaml:"timeout_seconds"`
+
+	// Transport pooling. 0 keeps the in-code defaults
+	// (max_idle_conns=100, max_idle_conns_per_host=10, max_conns_per_host=100,
+	// idle_conn_timeout=90s, tls_handshake_timeout=10s).
+	TransportMaxIdleConns        int          `yaml:"transport_max_idle_conns"`
+	TransportMaxIdleConnsPerHost int          `yaml:"transport_max_idle_conns_per_host"`
+	TransportMaxConnsPerHost     int          `yaml:"transport_max_conns_per_host"`
+	TransportIdleConnTimeout     DurationYAML `yaml:"transport_idle_conn_timeout"`
+	TransportTLSHandshakeTimeout DurationYAML `yaml:"transport_tls_handshake_timeout"`
+
+	// Max bytes accepted from any single outbound HTTP response (post-decompress).
+	// 0 disables the cap. Recommended production: 16 << 20 (16 MiB).
+	OutboundMaxResponseBytes int64 `yaml:"outbound_max_response_bytes"`
 
 	OutboundHTTPRetryMaxAttempts int `yaml:"outbound_http_retry_max_attempts"`
 	OutboundHTTPRetryInitialMS   int `yaml:"outbound_http_retry_initial_ms"`

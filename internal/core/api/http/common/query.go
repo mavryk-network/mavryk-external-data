@@ -10,108 +10,59 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// QuotesQueryMode selects how optional from/to/limit query params are interpreted.
-type QuotesQueryMode int
-
-const (
-	// QuotesQueryModeGetAll is for GET /quotes: always a time window; missing from/to default to last 24h and now.
-	QuotesQueryModeGetAll QuotesQueryMode = iota
-	// QuotesQueryModeByToken is for GET /:token: if neither from nor to is set, From/To stay zero (latest list);
-	// if either is set, the other defaults to now-24h / now; when no time range and no limit query param, Limit defaults to DefaultLatestLimit.
-	QuotesQueryModeByToken
-)
-
-// QuotesQueryOptions configures BindQuotesQuery.
-type QuotesQueryOptions struct {
-	Mode               QuotesQueryMode
-	DefaultLatestLimit int // only QuotesQueryModeByToken; e.g. 100 when from/to omitted
+// PriceQuery is the parsed shape of a list-query (range or latest), shared by the
+// FT and RWA endpoints.
+type PriceQuery struct {
+	From    time.Time
+	To      time.Time
+	Limit   int
+	Metrics []string // optional metric filter (currencies for FT, sides for RWA)
 }
 
-// QuotesQuery holds parsed from/to/limit for quote list handlers (matches repository semantics:
-// From and To both zero means "latest quotes" with Limit as max rows).
-type QuotesQuery struct {
-	From  time.Time
-	To    time.Time
-	Limit int
+// QueryOptions configures BindPriceQuery.
+type QueryOptions struct {
+	// DefaultLatestLimit is used when no time window AND no explicit ?limit are present.
+	DefaultLatestLimit int
+	// MaxLimit caps ?limit; rejected with 400 when exceeded. 0 disables the cap (not recommended).
+	MaxLimit int
+	// MetricParam is the query-string key for the metric filter, e.g. "currency" or "side".
+	// Empty disables metric filtering on this endpoint.
+	MetricParam string
 }
 
-// TimeRange is an alias for QuotesQuery (see refactoring doc 2.4).
-type TimeRange = QuotesQuery
-
-// BindQuotesQuery parses from, to (RFC3339) and limit from the request query string.
-func BindQuotesQuery(c *gin.Context, opts QuotesQueryOptions) (QuotesQuery, error) {
+// BindPriceQuery parses from, to (RFC3339), limit, and metric query params.
+//
+// Semantics:
+//   - both from and to absent → latest mode (window stays zero/zero, Limit defaults to DefaultLatestLimit)
+//   - either from or to set   → window mode; the missing side defaults to "now-24h" / "now"
+//   - limit must be > 0; capped by MaxLimit (returns 400 on overflow)
+//   - metric is comma-separated; empty entries are dropped
+func BindPriceQuery(c *gin.Context, opts QueryOptions) (PriceQuery, error) {
+	now := time.Now()
 	fromStr := strings.TrimSpace(c.Query("from"))
 	toStr := strings.TrimSpace(c.Query("to"))
 	limitStr := strings.TrimSpace(c.Query("limit"))
-	now := time.Now()
 
-	switch opts.Mode {
-	case QuotesQueryModeGetAll:
-		return bindGetAllQuotesQuery(now, fromStr, toStr, limitStr)
-	case QuotesQueryModeByToken:
-		def := opts.DefaultLatestLimit
-		if def <= 0 {
-			def = 100
-		}
-		return bindByTokenQuotesQuery(now, fromStr, toStr, limitStr, def)
-	default:
-		return QuotesQuery{}, coreerrors.Internal("invalid quotes query bind mode", nil)
-	}
-}
-
-func bindGetAllQuotesQuery(now time.Time, fromStr, toStr, limitStr string) (QuotesQuery, error) {
-	q := QuotesQuery{
-		From: now.Add(-24 * time.Hour),
-		To:   now,
-	}
-	if fromStr != "" {
-		t, err := time.Parse(time.RFC3339, fromStr)
-		if err != nil {
-			return QuotesQuery{}, coreerrors.InvalidArgument("Invalid 'from' parameter: use RFC3339 (e.g. 2023-01-01T00:00:00Z)")
-		}
-		q.From = t
-	}
-	if toStr != "" {
-		t, err := time.Parse(time.RFC3339, toStr)
-		if err != nil {
-			return QuotesQuery{}, coreerrors.InvalidArgument("Invalid 'to' parameter: use RFC3339 (e.g. 2023-01-01T00:00:00Z)")
-		}
-		q.To = t
-	}
-	if limitStr != "" {
-		lim, err := parsePositiveLimitQuery(limitStr)
-		if err != nil {
-			return QuotesQuery{}, err
-		}
-		q.Limit = lim
-	}
-	if q.From.After(q.To) {
-		return QuotesQuery{}, coreerrors.InvalidArgument("Invalid time range: 'from' must be before 'to'")
-	}
-	return q, nil
-}
-
-func bindByTokenQuotesQuery(now time.Time, fromStr, toStr, limitStr string, defaultLatestLimit int) (QuotesQuery, error) {
-	var q QuotesQuery
-	useTimeRange := false
+	var q PriceQuery
+	useWindow := false
 
 	if fromStr != "" {
-		t, err := time.Parse(time.RFC3339, fromStr)
+		t, err := parseRFC3339(fromStr, "from")
 		if err != nil {
-			return QuotesQuery{}, coreerrors.InvalidArgument("Invalid 'from' parameter: use RFC3339 (e.g. 2023-01-01T00:00:00Z)")
+			return PriceQuery{}, err
 		}
 		q.From = t
-		useTimeRange = true
+		useWindow = true
 	}
 	if toStr != "" {
-		t, err := time.Parse(time.RFC3339, toStr)
+		t, err := parseRFC3339(toStr, "to")
 		if err != nil {
-			return QuotesQuery{}, coreerrors.InvalidArgument("Invalid 'to' parameter: use RFC3339 (e.g. 2023-01-01T00:00:00Z)")
+			return PriceQuery{}, err
 		}
 		q.To = t
-		useTimeRange = true
+		useWindow = true
 	}
-	if useTimeRange {
+	if useWindow {
 		if fromStr == "" {
 			q.From = now.Add(-24 * time.Hour)
 		}
@@ -119,27 +70,44 @@ func bindByTokenQuotesQuery(now time.Time, fromStr, toStr, limitStr string, defa
 			q.To = now
 		}
 		if q.From.After(q.To) {
-			return QuotesQuery{}, coreerrors.InvalidArgument("Invalid time range: 'from' must be before 'to'")
+			return PriceQuery{}, coreerrors.InvalidArgument("Invalid time range: 'from' must be before 'to'")
 		}
 	}
 
 	if limitStr != "" {
-		lim, err := parsePositiveLimitQuery(limitStr)
-		if err != nil {
-			return QuotesQuery{}, err
+		lim, err := strconv.Atoi(limitStr)
+		if err != nil || lim <= 0 {
+			return PriceQuery{}, coreerrors.InvalidArgument("Invalid 'limit' parameter: must be a positive integer")
+		}
+		if opts.MaxLimit > 0 && lim > opts.MaxLimit {
+			return PriceQuery{}, coreerrors.InvalidArgument("Invalid 'limit' parameter: exceeds maximum")
 		}
 		q.Limit = lim
 	}
-	if !useTimeRange && q.Limit == 0 {
-		q.Limit = defaultLatestLimit
+	if !useWindow && q.Limit == 0 && opts.DefaultLatestLimit > 0 {
+		q.Limit = opts.DefaultLatestLimit
+	}
+
+	if opts.MetricParam != "" {
+		if raw := strings.TrimSpace(c.Query(opts.MetricParam)); raw != "" {
+			parts := strings.Split(raw, ",")
+			for _, p := range parts {
+				p = strings.TrimSpace(strings.ToLower(p))
+				if p != "" {
+					q.Metrics = append(q.Metrics, p)
+				}
+			}
+		}
 	}
 	return q, nil
 }
 
-func parsePositiveLimitQuery(limitStr string) (int, error) {
-	lim, err := strconv.Atoi(limitStr)
-	if err != nil || lim <= 0 {
-		return 0, coreerrors.InvalidArgument("Invalid 'limit' parameter: must be a positive integer")
+func parseRFC3339(value, paramName string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, coreerrors.InvalidArgument(
+			"Invalid '" + paramName + "' parameter: use RFC3339 (e.g. 2025-01-01T00:00:00Z)",
+		)
 	}
-	return lim, nil
+	return t, nil
 }

@@ -1,21 +1,30 @@
 server:
   port: "3010"
   host: "0.0.0.0"
-  # Optional: debug | release | test. Omit to use localhost/127.0.0.1 → debug, else release.
+  # gin_mode: debug | release | test. Empty → derive from host (localhost → debug).
   # gin_mode: "release"
   read_timeout: "30s"
   write_timeout: "30s"
   read_header_timeout: "10s"
   idle_timeout: "120s"
-  # In-process TTL cache (seconds) for GET /quotes/last and GET /:token without from/to. Omit or 0 → default 5; env SERVER_LATEST_QUOTE_CACHE_TTL_SECONDS=0 disables.
+  # In-process snapshot cache TTL (seconds). 0 disables.
   latest_quote_cache_ttl_seconds: 5
-  # CORS: explicit http(s) origins only (no '*'). Omit allowed_origins to use dev defaults; override with SERVER_CORS_ALLOWED_ORIGINS (comma-separated).
+  # Hard cap on the ?limit= query param. 0 = use compiled default (10000).
+  max_query_limit: 10000
+  pprof_enabled: false
+  # Per-handler ctx timeout (request budget). 0 disables.
+  handler_timeout: "10s"
+  # During shutdown /readyz returns 503 for this many seconds before HTTP shutdown.
+  shutdown_drain_seconds: 5
+  # Inbound rate limit. RPS=0 disables.
+  rate_limit:
+    rps: 0
+    burst: 0
+    per_ip: true
   cors:
     allowed_origins:
       - "http://localhost:3000"
       - "http://127.0.0.1:3000"
-      - "http://localhost:8080"
-      - "http://127.0.0.1:8080"
       - "http://localhost:5173"
       - "http://127.0.0.1:5173"
 
@@ -26,16 +35,29 @@ database:
   password: "postgres"
   name: "quotes"
   ssl_mode: "disable"
+  # Pool tuning. 0 = driver default; production should set explicit values.
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: "30m"
+  # Batch size for CreateInBatches across all repositories. 0 = compiled default (500).
+  batch_size: 500
 
 job:
   interval_seconds: 60
   enabled: true
+  # Bound parallel CoinGecko collections per tick. 0 = unlimited.
+  concurrency: 4
 
 api:
-  # Shared outbound defaults (timeout + retry + circuit breaker) applied to every
-  # third-party client. Per-service rate limits live in the service section (see
-  # coingecko.rate_limit and equiteez.rate_limit below).
   timeout_seconds: 30
+  # Transport pool tuning. 0 keeps in-code defaults.
+  transport_max_idle_conns: 100
+  transport_max_idle_conns_per_host: 10
+  transport_max_conns_per_host: 100
+  transport_idle_conn_timeout: "90s"
+  transport_tls_handshake_timeout: "10s"
+  # Cap response body bytes from any outbound HTTP call (16 MiB).
+  outbound_max_response_bytes: 16777216
   outbound_http_retry_max_attempts: 3
   outbound_http_retry_initial_ms: 200
   outbound_http_retry_max_ms: 5000
@@ -48,23 +70,11 @@ api:
 coingecko:
   api_key: ""
   base_url: "https://api.coingecko.com/api/v3"
-  # Proactive outbound throttle (token bucket, shared across every CoinGecko client
-  # and backfill worker in-process via the "coingecko" registry key). Tier guide:
-  #   Demo (free):  ~30 req/min  → 0.5 rps
-  #   Pro Analyst: 500 req/min   → 8   rps  <-- default when unset
-  #   Pro Lite:   1000 req/min   → 16  rps
-  #   Pro:        4000 req/min   → 60  rps
-  # Env override: COINGECKO_RATE_LIMIT_RPS / COINGECKO_RATE_LIMIT_BURST.
-  # Set rps: 0 via env (post-defaults hatch) to disable.
   rate_limit:
     rps: 8
-    burst: 16    # 0 = auto (2× rps)
+    burst: 16
 
 equiteez:
-  # GraphQL/Hasura indexer credentials. Independent rate limit from CoinGecko —
-  # the two services share no quota and use separate token buckets.
-  # Hasura admin-secret endpoints typically have no per-IP limit; default 0 = disabled.
-  # Env override: EQUITEEZ_RATE_LIMIT_RPS / EQUITEEZ_RATE_LIMIT_BURST.
   indexer_url: ""
   indexer_password: ""
   token_indexer_url: ""
@@ -73,28 +83,44 @@ equiteez:
     rps: 0
     burst: 0
 
-# Token-specific settings
-# If not specified, tokens will use global job and api settings
+# Backfill — reverse fetch into token_prices.
+backfill:
+  enabled: false
+  start_from: ""
+  min_start_from: ""
+  tick_seconds: 5
+  jitter_ms: 1000
+  chunk_minutes: 360
+  backfill_max_errors: 5
+  backoff_initial_ms: 2000
+  backoff_max_ms: 60000
+  max_backoff_ms: 86400000
+
+# RWA orderbook collector. Enable once rwa_pairs has at least one row.
+rwa:
+  enabled: false
+  interval_seconds: 60
+  concurrency: 4
+
+# Per-token live/backfill overrides.
 tokens:
   mvrk:
-    interval_seconds: 60        # Collection interval (0 = use global job.interval_seconds)
-    enabled: true              # Enable/disable collection for this token
-    timeout_seconds: 30         # HTTP timeout (0 = use global api.timeout_seconds)
-    min_time_range_seconds: 60  # Minimum time range to collect (0 = default 60)
-    max_chunk_minutes: 240      # Max chunk size for catch-up (0 = use backfill.chunk_minutes or default 240)
+    interval_seconds: 60
+    enabled: true
+    timeout_seconds: 30
+    min_time_range_seconds: 60
+    max_chunk_minutes: 720
     backfill:
-      enabled: true                      # Enable/disable backfill for this token (default: false, uses global if not set)
-      start_from: "2025-09-18T14:00:00Z"  # Backfill start date for this token (ISO date or RFC3339, overrides global if set)
-      sleep_ms: 5000                      # Delay between backfill chunks in ms (0 = use global backfill.sleep_ms)
-      chunk_minutes: 360                  # Size of each backfill window in minutes (0 = use global backfill.chunk_minutes)
+      enabled: true
+      start_from: "2025-09-18T14:00:00Z"
+      chunk_minutes: 360
   usdt:
     interval_seconds: 240
     enabled: true
     timeout_seconds: 45
     min_time_range_seconds: 60
-    max_chunk_minutes: 240
+    max_chunk_minutes: 720
     backfill:
-      enabled: true 
+      enabled: true
       start_from: "2025-12-18T00:00:00Z"
-      sleep_ms: 5000
       chunk_minutes: 360

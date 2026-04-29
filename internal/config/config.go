@@ -9,5 +9,6 @@ type Config struct {
 	CoinGecko CoinGeckoConfig        `yaml:"coingecko"`
 	Equiteez  EquiteezConfig         `yaml:"equiteez"`
 	Backfill  BackfillConfig         `yaml:"backfill"`
+	RWA       RWAConfig              `yaml:"rwa"`
 	Tokens    map[string]TokenConfig `yaml:"tokens"`
 }

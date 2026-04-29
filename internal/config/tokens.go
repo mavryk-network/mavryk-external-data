@@ -4,27 +4,23 @@ import "time"
 
 // TokenConfig holds per-token collector and backfill overrides.
 //
-// LiveLookbackSeconds is the maximum window the live job fetches per tick (the "safety
-// overlap" after a missed tick). The live job never backfills history — that is the
-// job of BackfillConfig. 0 means "use 2× interval_seconds" at resolution time.
+// Token names (map keys) are validated against the runtime token registry
+// (loaded from the `tokens` table) at job-start time, not at config-load time.
 type TokenConfig struct {
-	IntervalSeconds     int                 `yaml:"interval_seconds"`       // Collection interval in seconds (0 = use global job.interval_seconds)
-	Enabled             bool                `yaml:"enabled"`                // Enable/disable collection for this token (default: true)
-	TimeoutSeconds      int                 `yaml:"timeout_seconds"`        // HTTP timeout in seconds (0 = use global api.timeout_seconds)
-	MinTimeRangeSeconds int                 `yaml:"min_time_range_seconds"` // Minimum time range to collect (0 = use default 60)
-	LiveLookbackSeconds int                 `yaml:"live_lookback_seconds"`  // Max window the live tick fetches; caps a stale last_ts. 0 = 2× interval.
-	MaxChunkMinutes     int                 `yaml:"max_chunk_minutes"`      // Maximum chunk size for catch-up (0 = use backfill.chunk_minutes or default 60)
-	Backfill            TokenBackfillConfig `yaml:"backfill"`               // Token-specific backfill settings
+	IntervalSeconds     int                 `yaml:"interval_seconds"`
+	Enabled             bool                `yaml:"enabled"`
+	TimeoutSeconds      int                 `yaml:"timeout_seconds"`
+	MinTimeRangeSeconds int                 `yaml:"min_time_range_seconds"`
+	LiveLookbackSeconds int                 `yaml:"live_lookback_seconds"`
+	MaxChunkMinutes     int                 `yaml:"max_chunk_minutes"`
+	Backfill            TokenBackfillConfig `yaml:"backfill"`
 }
 
 // TokenBackfillConfig holds per-token backfill overrides.
-//
-// SleepMs is deprecated — cadence is controlled globally by backfill.tick_seconds.
 type TokenBackfillConfig struct {
-	Enabled      bool   `yaml:"enabled"`       // Enable/disable backfill for this token (default: false, uses global backfill.enabled if not set)
-	StartFrom    string `yaml:"start_from"`    // Backfill start date for this token (ISO date or RFC3339, overrides global if set)
-	SleepMs      int    `yaml:"sleep_ms"`      // deprecated: replaced by backfill.tick_seconds; ignored at runtime
-	ChunkMinutes int    `yaml:"chunk_minutes"` // Size of each backfill window in minutes (0 = use global backfill.chunk_minutes)
+	Enabled      bool   `yaml:"enabled"`
+	StartFrom    string `yaml:"start_from"`
+	ChunkMinutes int    `yaml:"chunk_minutes"`
 }
 
 // GetJobInterval returns the global job interval as a duration.
@@ -33,6 +29,7 @@ func (c *Config) GetJobInterval() time.Duration {
 }
 
 // GetTokenConfig returns resolved token configuration (merging token-specific and global defaults).
+// Defaults are applied in-place (return is by-value so the receiver is not mutated).
 func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
 	if c.Tokens == nil {
 		c.Tokens = make(map[string]TokenConfig)
@@ -40,12 +37,8 @@ func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
 
 	tokenCfg, exists := c.Tokens[tokenName]
 	if !exists {
-		return TokenConfig{
-			IntervalSeconds:     0, // 0 means use global
-			Enabled:             true,
-			TimeoutSeconds:      0, // 0 means use global
-			MinTimeRangeSeconds: 0, // 0 means use default 60
-		}
+		// Token not explicitly configured. Default to "enabled with global cadences."
+		tokenCfg = TokenConfig{Enabled: true}
 	}
 
 	if tokenCfg.IntervalSeconds == 0 {
@@ -55,36 +48,34 @@ func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
 		tokenCfg.TimeoutSeconds = c.API.TimeoutSeconds
 	}
 	if tokenCfg.MinTimeRangeSeconds == 0 {
-		tokenCfg.MinTimeRangeSeconds = 60 // default 60 seconds
+		tokenCfg.MinTimeRangeSeconds = 60
 	}
 	if tokenCfg.LiveLookbackSeconds == 0 {
-		// Cap the live window at 2× interval so a stale last_ts after a DB wipe
-		// doesn't force the live tick to pull hours of history in one request.
+		// 2× interval covers a missed tick — but CoinGecko's market_chart/range
+		// has 5-minute granularity for windows ≤ 1 day, so a 120s window for an
+		// interval=60s token systematically misses bucket boundaries on
+		// low-liquidity coins (returns `prices: []`). Floor the default at 600s
+		// (10 min = 2 CG buckets) so the live tick always overlaps at least one
+		// data point. Operators can still override per-token to lower this when
+		// dealing with high-frequency upstreams.
+		const minLookback = 600
 		tokenCfg.LiveLookbackSeconds = tokenCfg.IntervalSeconds * 2
-		if tokenCfg.LiveLookbackSeconds == 0 {
-			tokenCfg.LiveLookbackSeconds = 120 // belt-and-suspenders default
+		if tokenCfg.LiveLookbackSeconds < minLookback {
+			tokenCfg.LiveLookbackSeconds = minLookback
 		}
 	}
 	if tokenCfg.MaxChunkMinutes == 0 {
-		// Use backfill chunk size or default to 60 minutes
 		if c.Backfill.ChunkMinutes > 0 {
 			tokenCfg.MaxChunkMinutes = c.Backfill.ChunkMinutes
 		} else {
-			tokenCfg.MaxChunkMinutes = 60 // default 60 minutes
+			tokenCfg.MaxChunkMinutes = 60
 		}
 	}
 
-	// Fill in backfill defaults
-	if tokenCfg.Backfill.SleepMs == 0 {
-		tokenCfg.Backfill.SleepMs = c.Backfill.SleepMs
-		if tokenCfg.Backfill.SleepMs == 0 {
-			tokenCfg.Backfill.SleepMs = 3000 // default 3 seconds
-		}
-	}
 	if tokenCfg.Backfill.ChunkMinutes == 0 {
 		tokenCfg.Backfill.ChunkMinutes = c.Backfill.ChunkMinutes
 		if tokenCfg.Backfill.ChunkMinutes == 0 {
-			tokenCfg.Backfill.ChunkMinutes = 5 // default 5 minutes
+			tokenCfg.Backfill.ChunkMinutes = 5
 		}
 	}
 	if tokenCfg.Backfill.StartFrom == "" {
@@ -94,63 +85,69 @@ func (c *Config) GetTokenConfig(tokenName string) TokenConfig {
 	return tokenCfg
 }
 
-// IsTokenBackfillEnabled checks if backfill is enabled for a specific token.
+// IsTokenBackfillEnabled reports whether backfill should run for a token.
+//
+// Semantics (refactoring follow-up — refactoring_v2 §2.2 spirit):
+//   - global `backfill.enabled: false` is a kill-switch — when off, no token
+//     runs backfill, regardless of per-token overrides. This matches the
+//     operator-friendly intent of `BACKFILL_ENABLED=false` as an emergency
+//     stop. Switching on per-token semantics would surprise ops.
+//   - global `job.enabled: false` (or per-token `enabled: false`) also
+//     disables backfill: backfill needs the live anchor to seed `oldest_ts`.
+//   - per-token `backfill.enabled: false` opts that token out even when
+//     global is on.
+//   - per-token `start_from` is required for backfill to do anything; missing
+//     start_from falls back to global, missing-both = no-op.
 func (c *Config) IsTokenBackfillEnabled(tokenName string) bool {
-	// First check if token collection is enabled
-	if !c.IsTokenEnabled(tokenName) {
-		return false // If token is disabled, backfill is also disabled
+	if !c.Backfill.Enabled {
+		return false
 	}
-
-	tokenCfg := c.GetTokenConfig(tokenName)
-
-	// If backfill.enabled is explicitly false, disable backfill
+	if !c.IsTokenEnabled(tokenName) {
+		return false
+	}
+	tokenCfg, exists := c.Tokens[tokenName]
+	if !exists {
+		return c.Backfill.StartFrom != ""
+	}
 	if !tokenCfg.Backfill.Enabled {
 		return false
 	}
-
-	// If start_from is set, enable backfill (unless explicitly disabled above)
 	if tokenCfg.Backfill.StartFrom != "" {
 		return true
 	}
-
-	// If token-specific backfill.enabled is true, enable it
-	if tokenCfg.Backfill.Enabled {
-		return true
-	}
-
-	// Otherwise use global backfill setting
-	return c.Backfill.Enabled
+	return c.Backfill.StartFrom != ""
 }
 
-// GetTokenBackfillStartFrom returns the start date for token backfill.
+// GetTokenBackfillStartFrom returns the resolved start date for token backfill.
 func (c *Config) GetTokenBackfillStartFrom(tokenName string) string {
-	tokenCfg := c.GetTokenConfig(tokenName)
-	if tokenCfg.Backfill.StartFrom != "" {
-		return tokenCfg.Backfill.StartFrom
+	tc := c.GetTokenConfig(tokenName)
+	if tc.Backfill.StartFrom != "" {
+		return tc.Backfill.StartFrom
 	}
 	return c.Backfill.StartFrom
 }
 
-// GetTokenInterval returns the collection interval for a token.
+// GetTokenInterval returns the collection interval for a token as a duration.
 func (c *Config) GetTokenInterval(tokenName string) time.Duration {
-	tokenCfg := c.GetTokenConfig(tokenName)
-	return time.Duration(tokenCfg.IntervalSeconds) * time.Second
+	return time.Duration(c.GetTokenConfig(tokenName).IntervalSeconds) * time.Second
 }
 
 // GetTokenTimeout returns the HTTP client timeout for a token.
 func (c *Config) GetTokenTimeout(tokenName string) time.Duration {
-	tokenCfg := c.GetTokenConfig(tokenName)
-	return time.Duration(tokenCfg.TimeoutSeconds) * time.Second
+	return time.Duration(c.GetTokenConfig(tokenName).TimeoutSeconds) * time.Second
 }
 
 // GetTokenLiveLookback returns the live-job lookback window for a token.
 func (c *Config) GetTokenLiveLookback(tokenName string) time.Duration {
-	tokenCfg := c.GetTokenConfig(tokenName)
-	return time.Duration(tokenCfg.LiveLookbackSeconds) * time.Second
+	return time.Duration(c.GetTokenConfig(tokenName).LiveLookbackSeconds) * time.Second
 }
 
 // IsTokenEnabled reports whether collection is enabled for the token.
+// A token absent from c.Tokens defaults to enabled when the live job runs.
 func (c *Config) IsTokenEnabled(tokenName string) bool {
-	tokenCfg := c.GetTokenConfig(tokenName)
+	tokenCfg, exists := c.Tokens[tokenName]
+	if !exists {
+		return true
+	}
 	return tokenCfg.Enabled
 }

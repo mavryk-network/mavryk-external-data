@@ -11,8 +11,9 @@ import (
 
 // ErrorResponse is the standard JSON envelope for handler failures.
 type ErrorResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 // HTTPStatus returns the status code for a core error code.
@@ -22,6 +23,8 @@ func HTTPStatus(code coreerrors.Code) int {
 		return http.StatusBadRequest
 	case coreerrors.CodeNotFound:
 		return http.StatusNotFound
+	case coreerrors.CodeConflict:
+		return http.StatusConflict
 	case coreerrors.CodeUnavailable:
 		return http.StatusServiceUnavailable
 	case coreerrors.CodeInternal:
@@ -40,7 +43,7 @@ func RespondError(c *gin.Context, err error) {
 	var ce *coreerrors.Error
 	if stderrors.As(err, &ce) {
 		status := HTTPStatus(ce.Code)
-		c.JSON(status, ErrorResponse{Code: string(ce.Code), Message: ce.Message})
+		c.JSON(status, ErrorResponse{Code: string(ce.Code), Message: ce.Message, Details: ce.Details})
 		return
 	}
 	c.JSON(http.StatusInternalServerError, ErrorResponse{
@@ -52,9 +55,4 @@ func RespondError(c *gin.Context, err error) {
 // RespondErrorWithStatus writes code/message with an explicit HTTP status (e.g. 503 + UNAVAILABLE).
 func RespondErrorWithStatus(c *gin.Context, status int, code coreerrors.Code, message string) {
 	c.JSON(status, ErrorResponse{Code: string(code), Message: message})
-}
-
-// RespondBindingError maps binding / parse failures to INVALID_ARGUMENT without echoing raw parser internals.
-func RespondBindingError(c *gin.Context, _ error) {
-	RespondError(c, coreerrors.InvalidArgument("Invalid request parameters"))
 }

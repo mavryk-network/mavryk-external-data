@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Official Timescale image: TimescaleDB + PostgreSQL. Extension is preinstalled;
   # `migrations/001_init.sql` still runs `CREATE EXTENSION IF NOT EXISTS timescaledb` (safe).
