@@ -19,8 +19,8 @@ rules:
   # `security` block lands on the spec.
   security-defined: warn
 
-  # localhost in `servers:` is intentional for the dev URL; production is a
-  # separate {host} variable on the same list.
+  # `servers: [{url: /}]` is intentional — relative root resolves to the host
+  # serving the spec, so the same binary works for local dev and production.
   no-server-example.com: 'off'
   no-server-trailing-slash: warn
 

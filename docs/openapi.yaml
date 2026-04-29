@@ -1,5 +1,9 @@
 openapi: 3.0.3
 
+servers:
+  - url: /
+    description: Current host (works for both local dev and production)
+
 info:
   title: Mavryk External Data API
   version: "2.0.0"
@@ -139,7 +143,7 @@ paths:
               schema: { $ref: "#/components/schemas/Snapshot" }
               example:
                 timestamp: "2026-04-27T12:00:00Z"
-                values: { usd: "0.0715412", eur: "0.06094094" }
+                values: { usd: 0.071541, eur: 0.060941 }
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
@@ -356,15 +360,6 @@ components:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   schemas:
-    DecimalString:
-      type: string
-      description: |
-        High-precision decimal serialised as a string (`numeric(38,18)`).
-        Clients should parse with a fixed-point library; using `parseFloat`
-        loses precision past 15 significant digits.
-      pattern: "^-?\\d+(\\.\\d+)?$"
-      example: "0.0715412"
-
     TokenPricePoint:
       type: object
       required: [timestamp, currency, price]
