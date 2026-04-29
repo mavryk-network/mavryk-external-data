@@ -18,9 +18,6 @@ info:
     name: API Support
     url: https://github.com/0xVoronov/mavryk-external-data
 
-servers:
-  - url: http://localhost:3010
-    description: Local dev
 
 tags:
   - name: health
