@@ -38,6 +38,8 @@ func setDefaults(config *Config) {
 	}
 	if len(config.Server.CORS.AllowedOrigins) == 0 {
 		config.Server.CORS.AllowedOrigins = []string{
+			"http://localhost:3010",
+			"http://127.0.0.1:3010",
 			"http://localhost:3000",
 			"http://127.0.0.1:3000",
 			"http://localhost:8080",

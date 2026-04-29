@@ -9,8 +9,8 @@ info:
       * **FT prices** — CoinGecko-sourced quotes per (token, currency).
       * **RWA prices** — Equiteez orderbook prices per (pair, side).
 
-    All prices are returned as **decimal strings** (`numeric(38,18)` precision)
-    to avoid float round-trip loss. Timestamps are RFC3339 in UTC.
+    All prices are returned as **JSON numbers** rounded to 6 decimal places.
+    Timestamps are RFC3339 in UTC.
   license:
     name: Apache 2.0
     url: http://www.apache.org/licenses/LICENSE-2.0.html
@@ -21,11 +21,6 @@ info:
 servers:
   - url: http://localhost:3010
     description: Local dev
-  - url: https://{host}
-    description: Production / staging
-    variables:
-      host:
-        default: api.example.com
 
 tags:
   - name: health
