@@ -204,18 +204,24 @@ func rawArgs(q prices.Query) []any {
 	return args
 }
 
-// QueryCandles serves Stage 1 chart reads for FA tokens. Source for each
-// interval is a continuous aggregate; raw `token_prices` is never scanned
+// QueryCandles serves chart reads for FA tokens. Every supported interval
+// resolves to a continuous aggregate; raw `token_prices` is never scanned
 // on the hot path.
 //
 // AuxKey contract: "<source>|<currency>" (e.g. "coingecko|usd"). The source
 // component is required because `token_prices_*` aggregates are keyed by
 // (token_symbol, source_code, quote_currency).
 //
-// Supported intervals (Stage 1): 1m, 1h, 1d. The plan parks 5m / 15m / 4h
-// for Stage 3 (re-bucket SQL on top of `_1m` / `_1h`); calling with one
-// of those returns INVALID_ARGUMENT. ChartService.preflight rejects raw
-// before it gets here.
+// Source mapping per interval:
+//   - 1m / 1h / 1d → direct CA SELECT (token_prices_1m / _1h / _1d).
+//   - 5m / 15m     → re-bucket from token_prices_1m at query time.
+//   - 4h           → re-bucket from token_prices_1h at query time.
+//
+// Re-bucket preserves OHLC semantics via TimescaleDB's first()/last() over
+// the inner CA's bucket column; max(max_price)/min(min_price) over the
+// per-bucket aggregates are exact (associative aggregations).
+//
+// ChartService.preflight rejects raw before it gets here.
 func (r *TokenPriceRepository) QueryCandles(
 	ctx context.Context,
 	q apiprices.CandleQuery,
@@ -224,15 +230,14 @@ func (r *TokenPriceRepository) QueryCandles(
 	if err != nil {
 		return nil, err
 	}
-	view, ok := tokenCandleView(q.Interval)
+	src, ok := tokenCandleSource(q.Interval)
 	if !ok {
 		return nil, coreerrors.InvalidArgument(
-			"Interval '" + string(q.Interval) +
-				"' is not yet supported for FA charts (Stage 3 of charts.md adds 5m/15m/4h)")
+			"Interval '" + string(q.Interval) + "' is not supported for FA charts")
 	}
 
-	// view is one of three hardcoded constants — safe to interpolate. Raw
-	// columns are also fixed; only filters and order/limit ride placeholders.
+	// view + rebucket spec are from a closed enum — safe to interpolate.
+	// Filters and limits remain placeholder-bound.
 	where := "token_symbol = ? AND source_code = ? AND quote_currency = ?"
 	args := []any{q.EntityKey, source, currency}
 	if !q.From.IsZero() {
@@ -244,25 +249,14 @@ func (r *TokenPriceRepository) QueryCandles(
 		args = append(args, q.To.UTC())
 	}
 
-	// Existing CAs (0006/0011) name the OHLC columns open_price / max_price /
-	// min_price / close_price — TimescaleDB convention for FT-price views.
-	// Aliased to high/low here to match the application-layer Candle field names.
-	sql := fmt.Sprintf(`SELECT bucket,
-		            open_price,
-		            max_price  AS high_price,
-		            min_price  AS low_price,
-		            close_price,
-		            samples
-		 FROM %s
-		WHERE %s
-		ORDER BY bucket ASC`, view, where)
+	sql := buildCandleSQL(src, where)
 	if q.Limit > 0 {
 		sql += fmt.Sprintf(" LIMIT %d", q.Limit)
 	}
 
 	var rows []tokenCandleRow
 	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
-		return nil, fmt.Errorf("query %s: %w", view, err)
+		return nil, fmt.Errorf("query %s: %w", src.view, err)
 	}
 
 	out := make([]apiprices.Candle, len(rows))
@@ -284,18 +278,26 @@ func (r *TokenPriceRepository) QueryCandles(
 // Compile-time check: TokenPriceRepository satisfies the chart contract.
 var _ apiprices.CandleRepository = (*TokenPriceRepository)(nil)
 
-// tokenCandleView maps an interval to its backing CA name. Stage 1 supports
-// the three stored CAs only; 5m/15m/4h get a "not yet" 400 from the caller.
-func tokenCandleView(iv apiprices.Interval) (string, bool) {
+// tokenCandleSource maps an interval to its backing CA + optional re-bucket
+// width. Direct intervals (1m / 1h / 1d) leave Rebucket empty; derived
+// intervals (5m / 15m / 4h) carry the time_bucket() spec for the outer
+// SELECT (charts.md §2.3).
+func tokenCandleSource(iv apiprices.Interval) (candleSource, bool) {
 	switch iv {
 	case apiprices.Interval1m:
-		return "token_prices_1m", true
+		return candleSource{view: "token_prices_1m"}, true
+	case apiprices.Interval5m:
+		return candleSource{view: "token_prices_1m", rebucket: "5 minutes"}, true
+	case apiprices.Interval15m:
+		return candleSource{view: "token_prices_1m", rebucket: "15 minutes"}, true
 	case apiprices.Interval1h:
-		return "token_prices_1h", true
+		return candleSource{view: "token_prices_1h"}, true
+	case apiprices.Interval4h:
+		return candleSource{view: "token_prices_1h", rebucket: "4 hours"}, true
 	case apiprices.Interval1d:
-		return "token_prices_1d", true
+		return candleSource{view: "token_prices_1d"}, true
 	default:
-		return "", false
+		return candleSource{}, false
 	}
 }
 

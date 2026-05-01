@@ -136,20 +136,23 @@ func (r *RWAPriceRepository) latestPerSide(ctx context.Context, pairID int64, q 
 	return out, nil
 }
 
-// QueryCandles serves Stage 2 chart reads for RWA pairs. Source for each
-// interval is a continuous aggregate (`rwa_quote_prices_{1m,1h,1d}`); raw
+// QueryCandles serves chart reads for RWA pairs. Every supported interval
+// resolves to a continuous aggregate (`rwa_quote_prices_{1m,1h,1d}`); raw
 // `rwa_quote_prices` is never scanned on the hot path.
 //
-// AuxKey contract: orderbook side. Stage 2 hardcodes `last` at the handler
-// layer; the field stays on the wire so a future spread-analysis endpoint
-// can use bid/ask without a repo refactor. Empty AuxKey is rejected.
+// AuxKey contract: orderbook side. The chart handler hardcodes `last`; the
+// field stays on the wire so a future spread-analysis endpoint can use
+// bid/ask without a repo refactor. Empty AuxKey is rejected.
 //
 // EntityKey is the decimal pair_id (matching `Save`/`Query`). Anything else
 // is INVALID_ARGUMENT.
 //
-// Supported intervals (Stage 2): 1m, 1h, 1d. The plan parks 5m / 15m / 4h
-// for Stage 3 (re-bucket SQL). ChartService.preflight rejects raw before
-// it gets here.
+// Source mapping per interval:
+//   - 1m / 1h / 1d → direct CA SELECT.
+//   - 5m / 15m     → re-bucket from rwa_quote_prices_1m at query time.
+//   - 4h           → re-bucket from rwa_quote_prices_1h at query time.
+//
+// ChartService.preflight rejects raw before it gets here.
 func (r *RWAPriceRepository) QueryCandles(
 	ctx context.Context,
 	q apiprices.CandleQuery,
@@ -164,14 +167,13 @@ func (r *RWAPriceRepository) QueryCandles(
 		return nil, coreerrors.InvalidArgument(`AuxKey (side) is required, e.g. "last"`)
 	}
 
-	view, ok := rwaCandleView(q.Interval)
+	src, ok := rwaCandleSource(q.Interval)
 	if !ok {
 		return nil, coreerrors.InvalidArgument(
-			"Interval '" + string(q.Interval) +
-				"' is not yet supported for RWA charts (Stage 3 of charts.md adds 5m/15m/4h)")
+			"Interval '" + string(q.Interval) + "' is not supported for RWA charts")
 	}
 
-	// view is one of three hardcoded constants — safe to interpolate.
+	// view + rebucket spec are from a closed enum — safe to interpolate.
 	where := "pair_id = ? AND side = ?"
 	args := []any{pid, side}
 	if !q.From.IsZero() {
@@ -183,25 +185,14 @@ func (r *RWAPriceRepository) QueryCandles(
 		args = append(args, q.To.UTC())
 	}
 
-	// Existing CAs (0007/0010) name the OHLC columns open_price / max_price /
-	// min_price / close_price — TimescaleDB convention shared with FT prices.
-	// Aliased to high/low here to match the application-layer Candle field names.
-	sql := fmt.Sprintf(`SELECT bucket,
-		            open_price,
-		            max_price  AS high_price,
-		            min_price  AS low_price,
-		            close_price,
-		            samples
-		 FROM %s
-		WHERE %s
-		ORDER BY bucket ASC`, view, where)
+	sql := buildCandleSQL(src, where)
 	if q.Limit > 0 {
 		sql += fmt.Sprintf(" LIMIT %d", q.Limit)
 	}
 
 	var rows []rwaCandleRow
 	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
-		return nil, fmt.Errorf("query %s: %w", view, err)
+		return nil, fmt.Errorf("query %s: %w", src.view, err)
 	}
 
 	out := make([]apiprices.Candle, len(rows))
@@ -224,19 +215,26 @@ func (r *RWAPriceRepository) QueryCandles(
 // Compile-time check: RWAPriceRepository satisfies the chart contract.
 var _ apiprices.CandleRepository = (*RWAPriceRepository)(nil)
 
-// rwaCandleView maps an interval to its backing CA name. Stage 2 supports
-// the three stored CAs only; 5m/15m/4h are Stage 3 (re-bucket on top of
-// _1m / _1h).
-func rwaCandleView(iv apiprices.Interval) (string, bool) {
+// rwaCandleSource maps an interval to its backing CA + optional re-bucket
+// width. Direct intervals (1m / 1h / 1d) leave Rebucket empty; derived
+// intervals (5m / 15m / 4h) carry the time_bucket() spec for the outer
+// SELECT (charts.md §2.3). Mirror of tokenCandleSource for the FA side.
+func rwaCandleSource(iv apiprices.Interval) (candleSource, bool) {
 	switch iv {
 	case apiprices.Interval1m:
-		return "rwa_quote_prices_1m", true
+		return candleSource{view: "rwa_quote_prices_1m"}, true
+	case apiprices.Interval5m:
+		return candleSource{view: "rwa_quote_prices_1m", rebucket: "5 minutes"}, true
+	case apiprices.Interval15m:
+		return candleSource{view: "rwa_quote_prices_1m", rebucket: "15 minutes"}, true
 	case apiprices.Interval1h:
-		return "rwa_quote_prices_1h", true
+		return candleSource{view: "rwa_quote_prices_1h"}, true
+	case apiprices.Interval4h:
+		return candleSource{view: "rwa_quote_prices_1h", rebucket: "4 hours"}, true
 	case apiprices.Interval1d:
-		return "rwa_quote_prices_1d", true
+		return candleSource{view: "rwa_quote_prices_1d"}, true
 	default:
-		return "", false
+		return candleSource{}, false
 	}
 }
 

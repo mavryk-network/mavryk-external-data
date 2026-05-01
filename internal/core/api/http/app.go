@@ -105,6 +105,7 @@ func NewApp(deps AppDeps) *App {
 			Repo:     deps.TokenPriceRepo,
 			Caps:     apiprices.DefaultCaps(),
 			MaxLimit: cfg.Server.MaxQueryLimit,
+			Kind:     "fa",
 		},
 		DefaultSource: prices.SourceCoinGecko,
 		MaxLimit:      cfg.Server.MaxQueryLimit,
@@ -119,15 +120,17 @@ func NewApp(deps AppDeps) *App {
 		DefaultLimit:    100,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
-	// RWA chart service runs over RWAPriceRepository (which satisfies
-	// CandleRepository in Stage 2). Converter is left nil — Stage 3 wires
-	// the close-of-bucket FX path; until then `?in=` returns 400 from
-	// ChartService.preflight (defensive, not yet exposed by the handler).
+	// RWA chart service runs over RWAPriceRepository. Converter enables
+	// Stage 3 `?in=<currency>` close-of-bucket FX (charts.md §6); when
+	// FXConverter is nil at the AppDeps level (e.g. CoinGecko key absent
+	// in dev) the chart handler 400s on `?in=` cleanly via preflight.
 	rwaChartsDeps := handlers.RWAChartDeps{
 		Charts: &apiprices.ChartService{
-			Repo:     deps.RWAPriceRepo,
-			Caps:     apiprices.DefaultCaps(),
-			MaxLimit: cfg.Server.MaxQueryLimit,
+			Repo:      deps.RWAPriceRepo,
+			Converter: deps.FXConverter,
+			Caps:      apiprices.DefaultCaps(),
+			MaxLimit:  cfg.Server.MaxQueryLimit,
+			Kind:      "rwa",
 		},
 		Lookup:        deps.Lookup,
 		DefaultSource: prices.SourceEquiteez,

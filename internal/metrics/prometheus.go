@@ -177,6 +177,41 @@ var (
 		},
 		[]string{"target"},
 	)
+
+	// ChartQueryDurationSeconds — wall time of one chart query (Series/OHLC
+	// over CandleRepository). Per (kind=fa|rwa, interval).
+	ChartQueryDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "chart_query_duration_seconds",
+			Help:    "Wall time of one chart query, per kind+interval.",
+			Buckets: durationBuckets,
+		},
+		[]string{"kind", "interval"},
+	)
+
+	// ChartQueryRows — number of candles/points returned per chart query.
+	// High values combined with cap-hits suggest a client over-pulling.
+	ChartQueryRows = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "chart_query_rows",
+			Help:    "Rows returned per chart query, per kind+interval.",
+			Buckets: []float64{1, 10, 100, 500, 1000, 2500, 5000, 8000, 10000},
+		},
+		[]string{"kind", "interval"},
+	)
+
+	// ChartQueryCapHitsTotal — counter of requests rejected by the
+	// per-interval window cap (charts.md §2.2). reason=range_exceeded means
+	// (to-from) > cap[interval]; reason=limit means ?limit > MaxLimit.
+	// A growing rate is a UX signal — clients are asking for more than the
+	// caps allow and need pagination.
+	ChartQueryCapHitsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "chart_query_cap_hits_total",
+			Help: "Chart requests rejected because they exceeded server-side caps.",
+		},
+		[]string{"kind", "interval", "reason"},
+	)
 )
 
 // StatusClass returns 2xx, 4xx, or 5xx for HTTPResponsesTotal labelling.

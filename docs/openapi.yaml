@@ -6,7 +6,7 @@ servers:
 
 info:
   title: Mavryk External Data API
-  version: "2.1.0"
+  version: "2.2.0"
   description: |
     Long-format price service.
 
@@ -189,8 +189,8 @@ paths:
       description: |
         Returns one `(t, p)` point per bucket — `p` is the bucket's
         close price. Backed by the matching continuous aggregate
-        (`token_prices_1m` / `_1h` / `_1d`); 5m/15m/4h are reserved
-        for Stage 3 of charts.md and currently 400.
+        (`token_prices_1m` / `_1h` / `_1d`); 5m/15m/4h re-bucket on top
+        of `_1m` and `_1h` at query time.
 
         Either `from`+`to` define a window or both are absent for
         latest mode. Range caps per interval (charts.md §2.2):
@@ -221,6 +221,7 @@ paths:
                   - { t: "2026-04-27T13:00:00Z", p: 0.072104 }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
@@ -257,6 +258,7 @@ paths:
                   - { t: "2026-04-27T12:00:00Z", o: 0.071, h: 0.073, l: 0.070, c: 0.0721, n: 60 }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
@@ -327,13 +329,16 @@ paths:
         Returns one `(t, p)` point per bucket — `p` is the bucket's `last`
         close price in the pair's native quote currency (`pair.QuoteSymbol`).
         Backed by the corresponding continuous aggregate
-        (`rwa_quote_prices_{1m,1h,1d}`); 5m/15m/4h are reserved for Stage 3.
+        (`rwa_quote_prices_{1m,1h,1d}`); 5m/15m/4h re-bucket on top of `_1m`
+        and `_1h` at query time.
 
         History before service deploy depends on `equiteez_backfill.go`
         having been enabled (charts.md §3.1).
 
-        Multi-currency `?in=` is **not** wired in Stage 2 — it lands in
-        Stage 3 with close-of-bucket FX (charts.md §6).
+        Optional `?in=<currency>` adds a flat top-level numeric key per
+        point with the close price converted at the close-of-bucket FX
+        rate (charts.md §6). Cap = 1 — multiple comma-separated values
+        return 400.
       operationId: rwaSeries
       parameters:
         - $ref: "#/components/parameters/Symbol"
@@ -341,6 +346,7 @@ paths:
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ChartIn"
       responses:
         "200":
           description: Series response. `currency` is the pair's native quote.
@@ -353,11 +359,12 @@ paths:
                 kind: series
                 interval: 1h
                 points:
-                  - { t: "2026-04-27T12:00:00Z", p: 100.42 }
-                  - { t: "2026-04-27T13:00:00Z", p: 99.80 }
+                  - { t: "2026-04-27T12:00:00Z", p: 100.42, usd: 100.4300 }
+                  - { t: "2026-04-27T13:00:00Z", p: 99.80,  usd: 99.8050 }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
@@ -371,6 +378,11 @@ paths:
         not on the wire — `/ohlcv` lifts that in Stage 4.
 
         Same `interval` / range cap semantics as `/series`.
+
+        Optional `?in=<currency>` adds a nested object per candle with
+        converted `o/h/l/c` plus `rate` and `rate_ts` (close-of-bucket FX,
+        charts.md §6). One rate per candle keeps the converted candle
+        valid (`l ≤ o,c ≤ h`).
       operationId: rwaOHLC
       parameters:
         - $ref: "#/components/parameters/Symbol"
@@ -378,6 +390,7 @@ paths:
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ChartIn"
       responses:
         "200":
           description: OHLC response. `currency` is the pair's native quote.
@@ -390,10 +403,23 @@ paths:
                 kind: ohlc
                 interval: 1h
                 candles:
-                  - { t: "2026-04-27T12:00:00Z", o: 100.50, h: 101.20, l: 100.00, c: 100.80, n: 60 }
+                  - t: "2026-04-27T12:00:00Z"
+                    o: 100.50
+                    h: 101.20
+                    l: 100.00
+                    c: 100.80
+                    n: 60
+                    usd:
+                      o: 100.5503
+                      h: 101.2506
+                      l: 100.0500
+                      c: 100.8504
+                      rate: 1.0005
+                      rate_ts: "2026-04-27T12:55:00Z"
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
@@ -563,6 +589,23 @@ components:
         type: string
         example: usd
 
+    ChartIn:
+      name: in
+      in: query
+      required: false
+      description: |
+        Single target currency for close-of-bucket FX conversion (charts.md §6).
+        Each chart endpoint caps `?in=` to one value — comma-separated lists
+        return 400. Used by RWA charts to convert from the pair's native
+        quote (e.g. `usdt`) to a registered currency (`usd`, `eur`, …).
+        FA charts ignore the parameter; multi-currency lives in storage.
+
+        Per-target failures (no FX rate, unregistered source) drop the key
+        silently — the request stays 200.
+      schema:
+        type: string
+        example: usd
+
   responses:
     BadRequest:
       description: "Invalid request parameters (`code: INVALID_ARGUMENT`)."
@@ -589,6 +632,17 @@ components:
             code: CONFLICT
             message: "rwa pair ambiguous for mars1-usdt: 2 enabled rows"
             details: { pair_ids: [42, 77] }
+    RangeNotSatisfiable:
+      description: |
+        The requested `from..to` window exceeds the per-interval cap
+        (`code: RANGE_NOT_SATISFIABLE`, charts.md §2.2). Distinct from
+        `400 INVALID_ARGUMENT` so clients can render a "narrow your range"
+        UX without parsing the message. Caps: `1m` ≤ 7d, `5m` ≤ 30d,
+        `15m` ≤ 90d, `1h` ≤ 1y, `4h` ≤ 4y; `1d` is unlimited.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: RANGE_NOT_SATISFIABLE, message: "Time range exceeds cap for interval '1m'" }
     RateLimited:
       description: "Inbound rate-limit exceeded (`code: RATE_LIMITED`)."
       content:
@@ -740,6 +794,10 @@ components:
 
     SeriesPoint:
       type: object
+      description: |
+        One row of a `/series` response. When `?in=<currency>` is supplied
+        the converted close price appears as an additional top-level
+        numeric key (lowercase ISO-4217 code; never collides with `t`/`p`).
       required: [t, p]
       properties:
         t:
@@ -749,9 +807,16 @@ components:
         p:
           type: number
           description: Bucket close price, rounded to 6 decimal places.
+      additionalProperties:
+        type: number
+        description: Converted close price for a `?in=` target currency.
 
     ChartCandle:
       type: object
+      description: |
+        One candle without volume. When `?in=<currency>` is supplied the
+        converted o/h/l/c plus `rate`/`rate_ts` appear as a nested object
+        keyed by the target currency (charts.md §3.2 / §6).
       required: [t, o, h, l, c, n]
       properties:
         t: { type: string, format: date-time, description: Bucket start time (RFC3339 UTC). }
@@ -760,6 +825,24 @@ components:
         l: { type: number, description: Low price. }
         c: { type: number, description: Close price. }
         n: { type: integer, format: int64, description: Sample count (raw rows aggregated). }
+      additionalProperties:
+        $ref: "#/components/schemas/ConvertedCandle"
+
+    ConvertedCandle:
+      type: object
+      description: |
+        One bucket's OHLC after close-of-bucket FX conversion. Same rate
+        applies to all four price fields, keeping the candle valid
+        (`l ≤ o,c ≤ h`). `rate_ts` is the timestamp of the FX point that
+        produced the rate — fronts can show staleness without re-querying.
+      required: [o, h, l, c, rate, rate_ts]
+      properties:
+        o:       { type: number }
+        h:       { type: number }
+        l:       { type: number }
+        c:       { type: number }
+        rate:    { type: number, description: Multiplier applied to native o/h/l/c. }
+        rate_ts: { type: string, format: date-time }
 
     ChartCandleVol:
       allOf:
@@ -815,7 +898,7 @@ components:
       properties:
         code:
           type: string
-          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED]
+          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, RANGE_NOT_SATISFIABLE, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED]
         message:
           type: string
           description: Client-safe message. Internal causes are NOT included; check server logs by `request_id` for the underlying error.
