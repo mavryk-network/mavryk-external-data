@@ -107,6 +107,7 @@ func run() int {
 		TokenPriceQuery: tokenAppRepo,
 		RWAPriceQuery:   rwaAppRepo,
 		TokenPriceRepo:  tokenRepo,
+		RWAPriceRepo:    rwaRepo,
 		FXConverter:     fxConverter,
 		Lookup:          lookup,
 	})

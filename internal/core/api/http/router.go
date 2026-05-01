@@ -14,6 +14,7 @@ type RouterDeps struct {
 	TokenPrice    handlers.TokenPriceDeps
 	TokenCharts   handlers.TokenChartDeps
 	RWAPrice      handlers.RWAPriceDeps
+	RWACharts     handlers.RWAChartDeps
 }
 
 // SetupRoutes registers all routes on the given engine.
@@ -33,6 +34,9 @@ type RouterDeps struct {
 //	/v1/prices/:token/ohlcv   — 501 stub until Stage 4 (charts.md §1.1)
 //	/v1/rwa/:symbol           — list (range or latest); symbol = {base}-{quote}
 //	/v1/rwa/:symbol/latest    — transposed snapshot
+//	/v1/rwa/:symbol/series    — line chart (Stage 2, charts.md)
+//	/v1/rwa/:symbol/ohlc      — OHLC candles (Stage 2)
+//	/v1/rwa/:symbol/ohlcv     — 501 stub until Stage 4 (charts.md §1.1)
 func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 	engine.GET("/healthz", handlers.Liveness())
 	engine.GET("/readyz", handlers.Readiness(deps.DB, deps.ReadinessGate))
@@ -60,6 +64,11 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 		{
 			rwa.GET("/:symbol", deps.RWAPrice.ListBySymbol())
 			rwa.GET("/:symbol/latest", deps.RWAPrice.LatestBySymbol())
+			// Charts (Stage 2, charts.md). /ohlcv is the same 501 stub
+			// shared with the FA side — single source of truth.
+			rwa.GET("/:symbol/series", deps.RWACharts.Series())
+			rwa.GET("/:symbol/ohlc", deps.RWACharts.OHLC())
+			rwa.GET("/:symbol/ohlcv", handlers.NotImplementedOHLCV())
 		}
 	}
 }

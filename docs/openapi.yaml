@@ -37,6 +37,13 @@ tags:
       and [ADR-0015](https://github.com/0xVoronov/mavryk-external-data/blob/main/docs/adr/0015-charts-line-ohlc-ohlcv.md).
       Stage 1 ships `/series` and `/ohlc` for `1m / 1h / 1d`. `/ohlcv`
       returns 501 until Stage 4.
+  - name: charts-rwa
+    description: |
+      Time-series charts (line, OHLC, OHLCV) over `rwa_quote_prices`. Same
+      DTO shape as `charts-ft`; uses the `last` orderbook side for every
+      bucket. Pre-deploy history depends on `equiteez_backfill.go` having
+      been enabled (charts.md §3.1, "Backfill"). `/ohlcv` shares the same
+      501 stub as `charts-ft` until Stage 4.
 
 paths:
   /healthz:
@@ -311,6 +318,108 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/rwa/{symbol}/series:
+    get:
+      tags: [charts-rwa]
+      summary: Line chart (close-price series) for an RWA pair
+      description: |
+        Returns one `(t, p)` point per bucket — `p` is the bucket's `last`
+        close price in the pair's native quote currency (`pair.QuoteSymbol`).
+        Backed by the corresponding continuous aggregate
+        (`rwa_quote_prices_{1m,1h,1d}`); 5m/15m/4h are reserved for Stage 3.
+
+        History before service deploy depends on `equiteez_backfill.go`
+        having been enabled (charts.md §3.1).
+
+        Multi-currency `?in=` is **not** wired in Stage 2 — it lands in
+        Stage 3 with close-of-bucket FX (charts.md §6).
+      operationId: rwaSeries
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Series response. `currency` is the pair's native quote.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SeriesResponse" }
+              example:
+                symbol: mars1-usdt
+                currency: usdt
+                kind: series
+                interval: 1h
+                points:
+                  - { t: "2026-04-27T12:00:00Z", p: 100.42 }
+                  - { t: "2026-04-27T13:00:00Z", p: 99.80 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/rwa/{symbol}/ohlc:
+    get:
+      tags: [charts-rwa]
+      summary: OHLC candles for an RWA pair
+      description: |
+        One candle per bucket on the `last` side, with
+        `open / high / low / close` and a sample count (`n`). Volume is
+        not on the wire — `/ohlcv` lifts that in Stage 4.
+
+        Same `interval` / range cap semantics as `/series`.
+      operationId: rwaOHLC
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OHLC response. `currency` is the pair's native quote.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OHLCResponse" }
+              example:
+                symbol: mars1-usdt
+                currency: usdt
+                kind: ohlc
+                interval: 1h
+                candles:
+                  - { t: "2026-04-27T12:00:00Z", o: 100.50, h: 101.20, l: 100.00, c: 100.80, n: 60 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/rwa/{symbol}/ohlcv:
+    get:
+      tags: [charts-rwa]
+      summary: OHLCV candles for an RWA pair (Stage 4 — TODO)
+      description: |
+        Reserved URL. Returns **501** with code `OHLCV_NOT_IMPLEMENTED`
+        until Stage 4 of charts.md ships traded-volume from the
+        `orderbook_order` event log (the existing `rwa_quote_prices.size`
+        column is a top-of-book snapshot, not traded volume — using it
+        would mislead the frontend). DTO shape is fixed (`OHLCVResponse`)
+        so the frontend can build against this URL today.
+      operationId: rwaOHLCV
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+      responses:
+        "501":
+          description: OHLCV is parked until Stage 4.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                code: OHLCV_NOT_IMPLEMENTED
+                message: "OHLCV is not yet available; track Stage 4 in charts.md"
 
   /v1/rwa/{symbol}/latest:
     get:

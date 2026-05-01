@@ -27,6 +27,7 @@ type AppDeps struct {
 	TokenPriceQuery apiprices.QueryService
 	RWAPriceQuery   apiprices.QueryService
 	TokenPriceRepo  *repositories.TokenPriceRepository
+	RWAPriceRepo    *repositories.RWAPriceRepository // for chart endpoints
 	// Optional, enables `?in=` multi-currency conversions on RWA endpoints.
 	// When either field is nil the handler rejects `?in=` with 400.
 	FXConverter apiprices.PriceConverter
@@ -118,12 +119,28 @@ func NewApp(deps AppDeps) *App {
 		DefaultLimit:    100,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
+	// RWA chart service runs over RWAPriceRepository (which satisfies
+	// CandleRepository in Stage 2). Converter is left nil — Stage 3 wires
+	// the close-of-bucket FX path; until then `?in=` returns 400 from
+	// ChartService.preflight (defensive, not yet exposed by the handler).
+	rwaChartsDeps := handlers.RWAChartDeps{
+		Charts: &apiprices.ChartService{
+			Repo:     deps.RWAPriceRepo,
+			Caps:     apiprices.DefaultCaps(),
+			MaxLimit: cfg.Server.MaxQueryLimit,
+		},
+		Lookup:        deps.Lookup,
+		DefaultSource: prices.SourceEquiteez,
+		MaxLimit:      cfg.Server.MaxQueryLimit,
+		DefaultLimit:  100,
+	}
 	SetupRoutes(router, RouterDeps{
 		DB:            deps.DB,
 		ReadinessGate: gate,
 		TokenPrice:    tokenDeps,
 		TokenCharts:   tokenChartsDeps,
 		RWAPrice:      rwaDeps,
+		RWACharts:     rwaChartsDeps,
 	})
 
 	server := &http.Server{
