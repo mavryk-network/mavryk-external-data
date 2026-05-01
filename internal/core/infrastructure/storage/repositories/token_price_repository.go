@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	apiprices "quotes/internal/core/application/prices"
+	coreerrors "quotes/internal/core/common/errors"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/storage/entities"
 
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -198,6 +202,126 @@ func rawArgs(q prices.Query) []any {
 		args = append(args, m)
 	}
 	return args
+}
+
+// QueryCandles serves Stage 1 chart reads for FA tokens. Source for each
+// interval is a continuous aggregate; raw `token_prices` is never scanned
+// on the hot path.
+//
+// AuxKey contract: "<source>|<currency>" (e.g. "coingecko|usd"). The source
+// component is required because `token_prices_*` aggregates are keyed by
+// (token_symbol, source_code, quote_currency).
+//
+// Supported intervals (Stage 1): 1m, 1h, 1d. The plan parks 5m / 15m / 4h
+// for Stage 3 (re-bucket SQL on top of `_1m` / `_1h`); calling with one
+// of those returns INVALID_ARGUMENT. ChartService.preflight rejects raw
+// before it gets here.
+func (r *TokenPriceRepository) QueryCandles(
+	ctx context.Context,
+	q apiprices.CandleQuery,
+) ([]apiprices.Candle, error) {
+	source, currency, err := parseTokenCandleAuxKey(q.AuxKey)
+	if err != nil {
+		return nil, err
+	}
+	view, ok := tokenCandleView(q.Interval)
+	if !ok {
+		return nil, coreerrors.InvalidArgument(
+			"Interval '" + string(q.Interval) +
+				"' is not yet supported for FA charts (Stage 3 of charts.md adds 5m/15m/4h)")
+	}
+
+	// view is one of three hardcoded constants — safe to interpolate. Raw
+	// columns are also fixed; only filters and order/limit ride placeholders.
+	where := "token_symbol = ? AND source_code = ? AND quote_currency = ?"
+	args := []any{q.EntityKey, source, currency}
+	if !q.From.IsZero() {
+		where += " AND bucket >= ?"
+		args = append(args, q.From.UTC())
+	}
+	if !q.To.IsZero() {
+		where += " AND bucket < ?"
+		args = append(args, q.To.UTC())
+	}
+
+	// Existing CAs (0006/0011) name the OHLC columns open_price / max_price /
+	// min_price / close_price — TimescaleDB convention for FT-price views.
+	// Aliased to high/low here to match the application-layer Candle field names.
+	sql := fmt.Sprintf(`SELECT bucket,
+		            open_price,
+		            max_price  AS high_price,
+		            min_price  AS low_price,
+		            close_price,
+		            samples
+		 FROM %s
+		WHERE %s
+		ORDER BY bucket ASC`, view, where)
+	if q.Limit > 0 {
+		sql += fmt.Sprintf(" LIMIT %d", q.Limit)
+	}
+
+	var rows []tokenCandleRow
+	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query %s: %w", view, err)
+	}
+
+	out := make([]apiprices.Candle, len(rows))
+	for i, rec := range rows {
+		out[i] = apiprices.Candle{
+			Bucket:  rec.Bucket.UTC(),
+			Open:    rec.OpenPrice,
+			High:    rec.HighPrice,
+			Low:     rec.LowPrice,
+			Close:   rec.ClosePrice,
+			Samples: rec.Samples,
+			// VolumeBase / VolumeQuote: nullable, deliberately left zero —
+			// FA volume column lands in Stage 4 of charts.md (§4.3).
+		}
+	}
+	return out, nil
+}
+
+// Compile-time check: TokenPriceRepository satisfies the chart contract.
+var _ apiprices.CandleRepository = (*TokenPriceRepository)(nil)
+
+// tokenCandleView maps an interval to its backing CA name. Stage 1 supports
+// the three stored CAs only; 5m/15m/4h get a "not yet" 400 from the caller.
+func tokenCandleView(iv apiprices.Interval) (string, bool) {
+	switch iv {
+	case apiprices.Interval1m:
+		return "token_prices_1m", true
+	case apiprices.Interval1h:
+		return "token_prices_1h", true
+	case apiprices.Interval1d:
+		return "token_prices_1d", true
+	default:
+		return "", false
+	}
+}
+
+// parseTokenCandleAuxKey splits "<source>|<currency>" into its parts. Both
+// halves must be non-empty; "|" alone or one side missing is a 400 (the
+// handler builds this string, so any failure here is a programming error,
+// surfaced as an explicit message rather than a silent empty filter).
+func parseTokenCandleAuxKey(aux string) (source, currency string, err error) {
+	source, currency, ok := strings.Cut(aux, "|")
+	if !ok || strings.TrimSpace(source) == "" || strings.TrimSpace(currency) == "" {
+		return "", "", coreerrors.InvalidArgument(
+			`AuxKey must be "<source>|<currency>" (e.g. "coingecko|usd")`)
+	}
+	return source, currency, nil
+}
+
+// tokenCandleRow is the wire-compat row for the SELECT in QueryCandles. The
+// CA columns are numeric in storage and decoded into shopspring/decimal so
+// no float64 round-trips happen on the read path.
+type tokenCandleRow struct {
+	Bucket     time.Time       `gorm:"column:bucket"`
+	OpenPrice  decimal.Decimal `gorm:"column:open_price"`
+	HighPrice  decimal.Decimal `gorm:"column:high_price"`
+	LowPrice   decimal.Decimal `gorm:"column:low_price"`
+	ClosePrice decimal.Decimal `gorm:"column:close_price"`
+	Samples    int64           `gorm:"column:samples"`
 }
 
 func tokenEntitiesToPoints(rows []entities.TokenPriceEntity, fallbackSource prices.Source) []prices.PricePoint {

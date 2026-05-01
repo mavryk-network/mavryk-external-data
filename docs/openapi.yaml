@@ -6,7 +6,7 @@ servers:
 
 info:
   title: Mavryk External Data API
-  version: "2.0.0"
+  version: "2.1.0"
   description: |
     Long-format price service.
 
@@ -30,6 +30,13 @@ tags:
     description: Fungible-token quotes (CoinGecko)
   - name: prices-rwa
     description: RWA orderbook prices (Equiteez)
+  - name: charts-ft
+    description: |
+      Time-series charts (line, OHLC, OHLCV) over `token_prices`. See
+      [charts.md](https://github.com/0xVoronov/mavryk-external-data/blob/main/charts.md)
+      and [ADR-0015](https://github.com/0xVoronov/mavryk-external-data/blob/main/docs/adr/0015-charts-line-ohlc-ohlcv.md).
+      Stage 1 ships `/series` and `/ohlc` for `1m / 1h / 1d`. `/ohlcv`
+      returns 501 until Stage 4.
 
 paths:
   /healthz:
@@ -167,6 +174,107 @@ paths:
               example: { token: mvrk, count: 524160 }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/prices/{token}/series:
+    get:
+      tags: [charts-ft]
+      summary: Line chart (close-price series)
+      description: |
+        Returns one `(t, p)` point per bucket — `p` is the bucket's
+        close price. Backed by the matching continuous aggregate
+        (`token_prices_1m` / `_1h` / `_1d`); 5m/15m/4h are reserved
+        for Stage 3 of charts.md and currently 400.
+
+        Either `from`+`to` define a window or both are absent for
+        latest mode. Range caps per interval (charts.md §2.2):
+        `1m` ≤ 7 days, `1h` ≤ 1 year, `1d` unlimited.
+
+        `currency` is required (one value, no comma-list).
+      operationId: tokenSeries
+      parameters:
+        - $ref: "#/components/parameters/Token"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/ChartCurrency"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Series response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SeriesResponse" }
+              example:
+                symbol: mvrk
+                currency: usd
+                kind: series
+                interval: 1h
+                points:
+                  - { t: "2026-04-27T12:00:00Z", p: 0.071541 }
+                  - { t: "2026-04-27T13:00:00Z", p: 0.072104 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/prices/{token}/ohlc:
+    get:
+      tags: [charts-ft]
+      summary: OHLC candles
+      description: |
+        Returns one candle per bucket with `open / high / low / close`
+        and a sample count (`n`). Volume is not on the wire — use
+        `/ohlcv` once Stage 4 ships (currently 501).
+
+        Same `interval` / range cap / `currency` semantics as `/series`.
+      operationId: tokenOHLC
+      parameters:
+        - $ref: "#/components/parameters/Token"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/ChartCurrency"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OHLC response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OHLCResponse" }
+              example:
+                symbol: mvrk
+                currency: usd
+                kind: ohlc
+                interval: 1h
+                candles:
+                  - { t: "2026-04-27T12:00:00Z", o: 0.071, h: 0.073, l: 0.070, c: 0.0721, n: 60 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/prices/{token}/ohlcv:
+    get:
+      tags: [charts-ft]
+      summary: OHLCV candles (Stage 4 — TODO)
+      description: |
+        Reserved URL. Returns **501** with code `OHLCV_NOT_IMPLEMENTED`
+        until Stage 4 of charts.md ships volume ingestion (`token_prices`
+        does not yet store volume; CoinGecko `/simple/price` doesn't
+        return it). Frontend can build against this URL safely — the
+        DTO shape is fixed (see `OHLCVResponse`).
+      operationId: tokenOHLCV
+      parameters:
+        - $ref: "#/components/parameters/Token"
+      responses:
+        "501":
+          description: OHLCV is parked until Stage 4.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                code: OHLCV_NOT_IMPLEMENTED
+                message: "OHLCV is not yet available; track Stage 4 in charts.md"
 
   /v1/rwa/{symbol}:
     get:
@@ -321,6 +429,31 @@ components:
         type: string
         example: "usd,eur,aed"
 
+    Interval:
+      name: interval
+      in: query
+      required: true
+      description: |
+        Bucket size for the chart. `raw` is reserved for tick-level series
+        (rejected for `/ohlc` and `/ohlcv`, and not yet supported for FA
+        charts in Stage 1). Per-interval window caps live in charts.md §2.2.
+      schema:
+        type: string
+        enum: [raw, 1m, 5m, 15m, 1h, 4h, 1d]
+        example: 1h
+
+    ChartCurrency:
+      name: currency
+      in: query
+      required: true
+      description: |
+        Single quote currency for the series (e.g. `usd`, `eur`). FA charts
+        filter `quote_currency` directly in SQL; only one value per request,
+        no comma-list. Validated against `prices.AllSupportedCurrencies`.
+      schema:
+        type: string
+        example: usd
+
   responses:
     BadRequest:
       description: "Invalid request parameters (`code: INVALID_ARGUMENT`)."
@@ -471,13 +604,109 @@ components:
           description: Present only on non-ready responses.
           enum: [shutting_down, db_handle_unavailable, db_unreachable]
 
+    ChartEnvelope:
+      type: object
+      description: Top-level metadata block on every chart response.
+      required: [symbol, currency, kind, interval]
+      properties:
+        symbol:
+          type: string
+          description: |
+            For FA charts — the token id (e.g. `mvrk`). For RWA charts —
+            the `{base}-{quote}` pair symbol (e.g. `mars1-usdt`).
+          example: mvrk
+        currency:
+          type: string
+          description: |
+            Quote currency the series is denominated in. For FA charts —
+            the requested `?currency=`. For RWA charts (when wired) — the
+            pair's native quote, or the requested `?in=` target.
+          example: usd
+        kind:
+          type: string
+          enum: [series, ohlc, ohlcv]
+        interval:
+          type: string
+          enum: [raw, 1m, 5m, 15m, 1h, 4h, 1d]
+
+    SeriesPoint:
+      type: object
+      required: [t, p]
+      properties:
+        t:
+          type: string
+          format: date-time
+          description: Bucket start time (RFC3339 UTC).
+        p:
+          type: number
+          description: Bucket close price, rounded to 6 decimal places.
+
+    ChartCandle:
+      type: object
+      required: [t, o, h, l, c, n]
+      properties:
+        t: { type: string, format: date-time, description: Bucket start time (RFC3339 UTC). }
+        o: { type: number, description: Open price (rounded to 6 dp). }
+        h: { type: number, description: High price. }
+        l: { type: number, description: Low price. }
+        c: { type: number, description: Close price. }
+        n: { type: integer, format: int64, description: Sample count (raw rows aggregated). }
+
+    ChartCandleVol:
+      allOf:
+        - $ref: "#/components/schemas/ChartCandle"
+        - type: object
+          required: [vb, vq]
+          properties:
+            vb: { type: number, description: Volume in base token (Stage 4). }
+            vq: { type: number, description: Volume in quote token (Stage 4). }
+
+    SeriesResponse:
+      type: object
+      description: Wire shape for `/series`.
+      required: [symbol, currency, kind, interval, points]
+      allOf:
+        - $ref: "#/components/schemas/ChartEnvelope"
+        - type: object
+          properties:
+            points:
+              type: array
+              items: { $ref: "#/components/schemas/SeriesPoint" }
+
+    OHLCResponse:
+      type: object
+      description: Wire shape for `/ohlc`.
+      required: [symbol, currency, kind, interval, candles]
+      allOf:
+        - $ref: "#/components/schemas/ChartEnvelope"
+        - type: object
+          properties:
+            candles:
+              type: array
+              items: { $ref: "#/components/schemas/ChartCandle" }
+
+    OHLCVResponse:
+      type: object
+      description: |
+        Wire shape for `/ohlcv` once Stage 4 ships volume ingestion. Until
+        then `/ohlcv` returns 501 with code `OHLCV_NOT_IMPLEMENTED` and
+        this schema is informational only — frontend can build against it.
+      required: [symbol, currency, kind, interval, candles]
+      allOf:
+        - $ref: "#/components/schemas/ChartEnvelope"
+        - type: object
+          properties:
+            candles:
+              type: array
+              items: { $ref: "#/components/schemas/ChartCandleVol" }
+
     ErrorResponse:
       type: object
       required: [code, message]
       properties:
         code:
           type: string
-          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, UNAVAILABLE, INTERNAL, RATE_LIMITED]
+          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED]
         message:
           type: string
           description: Client-safe message. Internal causes are NOT included; check server logs by `request_id` for the underlying error.

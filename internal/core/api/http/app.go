@@ -95,6 +95,20 @@ func NewApp(deps AppDeps) *App {
 		MaxLimit:      cfg.Server.MaxQueryLimit,
 		DefaultLimit:  100,
 	}
+	// FA chart service runs over the existing TokenPriceRepository, which
+	// already satisfies CandleRepository (see token_price_repository.go).
+	// Converter is left nil — FA charts don't use ?in= (currency lookup
+	// happens in SQL via quote_currency).
+	tokenChartsDeps := handlers.TokenChartDeps{
+		Charts: &apiprices.ChartService{
+			Repo:     deps.TokenPriceRepo,
+			Caps:     apiprices.DefaultCaps(),
+			MaxLimit: cfg.Server.MaxQueryLimit,
+		},
+		DefaultSource: prices.SourceCoinGecko,
+		MaxLimit:      cfg.Server.MaxQueryLimit,
+		DefaultLimit:  100,
+	}
 	rwaDeps := handlers.RWAPriceDeps{
 		Service:         deps.RWAPriceQuery,
 		Converter:       deps.FXConverter,
@@ -108,6 +122,7 @@ func NewApp(deps AppDeps) *App {
 		DB:            deps.DB,
 		ReadinessGate: gate,
 		TokenPrice:    tokenDeps,
+		TokenCharts:   tokenChartsDeps,
 		RWAPrice:      rwaDeps,
 	})
 
