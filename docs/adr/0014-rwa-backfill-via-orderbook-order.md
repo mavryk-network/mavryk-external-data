@@ -3,7 +3,6 @@
 - **Status**: Accepted
 - **Date**: 2026-04-28
 - **Deciders**: backend team
-- **Closes**: [rwa_backfill.md](../../rwa_backfill.md) (Stage 1)
 - **Builds on**: [ADR-0008](0008-backfill-state-composite-key.md),
   [ADR-0012](0012-rwa-pair-discovery-and-normalization.md)
 
@@ -124,8 +123,7 @@ beyond the cursor.
   `dipdup_model_update` is empty).
 - `order_type` mapping (`1=buy`, `0=sell`) is unverified with the
   indexer team — for Stage 1 we don't write side metadata, so the worst
-  case is a future Stage 2 needing to flip the mapping. Documented in
-  [rwa_backfill.md §7.1](../../rwa_backfill.md).
+  case is a future Stage 2 needing to flip the mapping.
 
 **Operational**
 
@@ -138,6 +136,5 @@ beyond the cursor.
 
 ## References
 
-- [rwa_backfill.md](../../rwa_backfill.md) — full design (Stage 1 + Stage 2 sketch)
 - [0008](0008-backfill-state-composite-key.md) — composite-key state repo
 - [0012](0012-rwa-pair-discovery-and-normalization.md) — RWA pair discovery

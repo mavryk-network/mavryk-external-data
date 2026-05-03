@@ -27,6 +27,7 @@ type AppDeps struct {
 	TokenPriceQuery apiprices.QueryService
 	RWAPriceQuery   apiprices.QueryService
 	TokenPriceRepo  *repositories.TokenPriceRepository
+	RWAPriceRepo    *repositories.RWAPriceRepository // for chart endpoints
 	// Optional, enables `?in=` multi-currency conversions on RWA endpoints.
 	// When either field is nil the handler rejects `?in=` with 400.
 	FXConverter apiprices.PriceConverter
@@ -95,6 +96,21 @@ func NewApp(deps AppDeps) *App {
 		MaxLimit:      cfg.Server.MaxQueryLimit,
 		DefaultLimit:  100,
 	}
+	// FA chart service runs over the existing TokenPriceRepository, which
+	// already satisfies CandleRepository (see token_price_repository.go).
+	// Converter is left nil — FA charts don't use ?in= (currency lookup
+	// happens in SQL via quote_currency).
+	tokenChartsDeps := handlers.TokenChartDeps{
+		Charts: &apiprices.ChartService{
+			Repo:     deps.TokenPriceRepo,
+			Caps:     apiprices.DefaultCaps(),
+			MaxLimit: cfg.Server.MaxQueryLimit,
+			Kind:     "fa",
+		},
+		DefaultSource: prices.SourceCoinGecko,
+		MaxLimit:      cfg.Server.MaxQueryLimit,
+		DefaultLimit:  100,
+	}
 	rwaDeps := handlers.RWAPriceDeps{
 		Service:         deps.RWAPriceQuery,
 		Converter:       deps.FXConverter,
@@ -104,11 +120,30 @@ func NewApp(deps AppDeps) *App {
 		DefaultLimit:    100,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
+	// RWA chart service runs over RWAPriceRepository. Converter enables
+	// `?in=<currency>` close-of-bucket FX (see ADR-0015 / ADR-0013); when
+	// FXConverter is nil at the AppDeps level (e.g. CoinGecko key absent
+	// in dev) the chart handler 400s on `?in=` cleanly via preflight.
+	rwaChartsDeps := handlers.RWAChartDeps{
+		Charts: &apiprices.ChartService{
+			Repo:      deps.RWAPriceRepo,
+			Converter: deps.FXConverter,
+			Caps:      apiprices.DefaultCaps(),
+			MaxLimit:  cfg.Server.MaxQueryLimit,
+			Kind:      "rwa",
+		},
+		Lookup:        deps.Lookup,
+		DefaultSource: prices.SourceEquiteez,
+		MaxLimit:      cfg.Server.MaxQueryLimit,
+		DefaultLimit:  100,
+	}
 	SetupRoutes(router, RouterDeps{
 		DB:            deps.DB,
 		ReadinessGate: gate,
 		TokenPrice:    tokenDeps,
+		TokenCharts:   tokenChartsDeps,
 		RWAPrice:      rwaDeps,
+		RWACharts:     rwaChartsDeps,
 	})
 
 	server := &http.Server{

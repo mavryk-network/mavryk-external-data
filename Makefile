@@ -1,4 +1,4 @@
-.PHONY: build run test clean deps docker-build docker-run docker-stop \
+.PHONY: build run test test-integration clean deps docker-build docker-run docker-stop \
         fmt lint docs openapi-lint openapi-render \
         migrate-up migrate-down migrate-reset migrate-redo
 
@@ -34,6 +34,13 @@ run:
 test:
 	@echo "Running tests..."
 	go test -race -timeout 5m -cover ./...
+
+# Integration tests run against a real TimescaleDB container (testcontainers).
+# Docker must be available on the runner. Excluded from `make test` so the
+# default loop stays fast and Docker-free.
+test-integration:
+	@echo "Running integration tests (Docker required)..."
+	go test -race -timeout 10m -tags=integration ./tests/integration/...
 
 clean:
 	@echo "Cleaning build artifacts..."

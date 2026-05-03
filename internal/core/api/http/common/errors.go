@@ -25,6 +25,8 @@ func HTTPStatus(code coreerrors.Code) int {
 		return http.StatusNotFound
 	case coreerrors.CodeConflict:
 		return http.StatusConflict
+	case coreerrors.CodeRangeNotSatisfiable:
+		return http.StatusRequestedRangeNotSatisfiable
 	case coreerrors.CodeUnavailable:
 		return http.StatusServiceUnavailable
 	case coreerrors.CodeInternal:

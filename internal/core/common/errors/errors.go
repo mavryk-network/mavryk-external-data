@@ -6,11 +6,12 @@ import "fmt"
 type Code string
 
 const (
-	CodeInvalidArgument Code = "INVALID_ARGUMENT"
-	CodeNotFound        Code = "NOT_FOUND"
-	CodeConflict        Code = "CONFLICT"
-	CodeInternal        Code = "INTERNAL"
-	CodeUnavailable     Code = "UNAVAILABLE"
+	CodeInvalidArgument     Code = "INVALID_ARGUMENT"
+	CodeNotFound            Code = "NOT_FOUND"
+	CodeConflict            Code = "CONFLICT"
+	CodeInternal            Code = "INTERNAL"
+	CodeUnavailable         Code = "UNAVAILABLE"
+	CodeRangeNotSatisfiable Code = "RANGE_NOT_SATISFIABLE"
 )
 
 // Error is an application error safe to expose to HTTP clients (Message + Code only via responder).
@@ -63,6 +64,13 @@ func Internal(message string, cause error) *Error {
 // Unavailable marks dependency outage (HTTP 503).
 func Unavailable(message string) *Error {
 	return &Error{Code: CodeUnavailable, Message: message}
+}
+
+// RangeNotSatisfiable marks a request whose `from..to` window exceeds the
+// server-side cap for the requested interval (HTTP 416). Distinct from
+// InvalidArgument so clients can render "narrow your range" UX.
+func RangeNotSatisfiable(message string) *Error {
+	return &Error{Code: CodeRangeNotSatisfiable, Message: message}
 }
 
 // Wrap builds an error with an explicit code (use when none of the helpers fit).
