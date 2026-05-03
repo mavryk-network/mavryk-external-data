@@ -3,8 +3,8 @@ package repositories
 import "fmt"
 
 // candleSource describes which continuous aggregate a chart read targets,
-// optionally with a re-bucket width for derived intervals (5m/15m/4h —
-// charts.md §2.3). Both fields are sourced from a closed switch and are
+// optionally with a re-bucket width for derived intervals (5m/15m/4h;
+// see ADR-0015). Both fields are sourced from a closed switch and are
 // safe to fmt.Sprintf into SQL.
 type candleSource struct {
 	view     string // CA table name (e.g. "token_prices_1m")
@@ -25,8 +25,8 @@ type candleSource struct {
 // because they're associative.
 //
 // Sums of `samples` give a sample-count proxy for the wider bucket; this is
-// the simplest correct aggregation for the charts.md §3.4 use case (UI
-// "incomplete bucket" hint).
+// the simplest correct aggregation for the "incomplete bucket" hint the UI
+// surfaces (see ADR-0015).
 //
 // Caller appends ORDER BY bucket ASC and an optional LIMIT.
 func buildCandleSQL(src candleSource, where string) string {

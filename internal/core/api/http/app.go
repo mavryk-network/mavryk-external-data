@@ -121,7 +121,7 @@ func NewApp(deps AppDeps) *App {
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
 	// RWA chart service runs over RWAPriceRepository. Converter enables
-	// Stage 3 `?in=<currency>` close-of-bucket FX (charts.md §6); when
+	// `?in=<currency>` close-of-bucket FX (see ADR-0015 / ADR-0013); when
 	// FXConverter is nil at the AppDeps level (e.g. CoinGecko key absent
 	// in dev) the chart handler 400s on `?in=` cleanly via preflight.
 	rwaChartsDeps := handlers.RWAChartDeps{

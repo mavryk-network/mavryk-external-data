@@ -175,7 +175,7 @@ func TestRWASeries_BadInterval_400(t *testing.T) {
 
 func TestRWASeries_RangeOverCap_416(t *testing.T) {
 	r := newRWAChartEngine(t, &stubCandleRepo{}, &stubChartLookup{pair: samplePair()})
-	// 1m interval has a 7-day cap (charts.md §2.2). Stage 3 maps the
+	// 1m interval has a 7-day cap (see ADR-0015). The handler maps the
 	// overflow to 416 RANGE_NOT_SATISFIABLE; bad windows (`to < from`)
 	// still get 400 INVALID_ARGUMENT.
 	req := httptest.NewRequest(http.MethodGet,
@@ -279,7 +279,7 @@ func TestRWASeries_SymbolLowercasedOnWire(t *testing.T) {
 // dummy use of decimal so the import survives `goimports`.
 var _ = decimal.NewFromInt(0)
 
-// --- ?in= close-of-bucket FX (Stage 3) ---
+// --- ?in= close-of-bucket FX ---
 
 // newRWAChartEngineFX wires a converter into ChartService. Mirrors
 // newRWAChartEngine but used only by ?in= tests since most tests pass

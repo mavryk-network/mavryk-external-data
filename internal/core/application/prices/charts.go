@@ -59,7 +59,7 @@ func (i Interval) IsBucket() bool {
 }
 
 // BucketDuration returns the wall-clock width of one bucket. Used by the
-// close-of-bucket FX path (charts.md §6) to compute `bucket + interval`.
+// close-of-bucket FX path (see ADR-0015) to compute `bucket + interval`.
 // Returns ok=false for IntervalRaw and unknown values.
 func BucketDuration(iv Interval) (time.Duration, bool) {
 	switch iv {
@@ -103,11 +103,12 @@ type CandleQuery struct {
 }
 
 // Candle is the application-layer view of one bucket. Volume fields are
-// nullable because OHLCV is parked as TODO (charts.md §1.1) — Stage 4 wires
-// them; until then repositories return Valid=false.
+// nullable because OHLCV is parked as a future-stage TODO (ADR-0015) — once
+// volume ingestion lands they're populated; until then repositories return
+// Valid=false.
 //
 // Conv is populated by ChartService when `in` is non-empty (close-of-bucket
-// FX, charts.md §6). Repositories never set it.
+// FX; see ADR-0015 / ADR-0013). Repositories never set it.
 type Candle struct {
 	Bucket time.Time
 
@@ -125,8 +126,9 @@ type Candle struct {
 }
 
 // ConvertedCandle holds one bucket's OHLC after FX conversion at the
-// close-of-bucket rate (charts.md §6 / `rwa_quotes_adds.md` Variant A).
-// `Rate` and `RateTS` make the conversion auditable on the wire.
+// close-of-bucket rate (see ADR-0015 for the rationale; ADR-0013 for the
+// underlying converter contract). `Rate` and `RateTS` make the conversion
+// auditable on the wire.
 type ConvertedCandle struct {
 	Open   decimal.Decimal
 	High   decimal.Decimal
@@ -171,11 +173,11 @@ type OHLCV struct {
 }
 
 // ErrOHLCVNotImplemented is the sentinel returned by ChartService.OHLCV
-// until Stage 4 of charts.md ships volume ingestion. The HTTP layer maps
-// this to 501 with code "OHLCV_NOT_IMPLEMENTED" (see handlers.NotImplementedOHLCV).
+// until volume ingestion ships (see ADR-0015). The HTTP layer maps this to
+// 501 with code "OHLCV_NOT_IMPLEMENTED" (see handlers.NotImplementedOHLCV).
 var ErrOHLCVNotImplemented = errors.New("OHLCV is not yet implemented")
 
-// DefaultCaps returns the maximum (to-from) window per interval, per charts.md §2.2.
+// DefaultCaps returns the maximum (to-from) window per interval (see ADR-0015).
 // Intervals absent from the map are treated as unlimited (currently only 1d).
 // Caps are tuned so a single request never returns more than ~10k candles.
 func DefaultCaps() map[Interval]time.Duration {
@@ -191,7 +193,7 @@ func DefaultCaps() map[Interval]time.Duration {
 	}
 }
 
-// ValidateRange enforces the per-interval cap from charts.md §2.2.
+// ValidateRange enforces the per-interval cap (see ADR-0015).
 //
 //   - Both From and To zero → latest mode, no range to validate.
 //   - To before From         → 400 INVALID_ARGUMENT (malformed window).
@@ -234,8 +236,8 @@ type ChartService struct {
 // callers must pass a bucket interval.
 //
 // When `in` is non-empty, each point gets a Conv entry per target currency
-// using the close-of-bucket rate (same model as OHLC, with only the close
-// dimension surfaced).
+// using the close-of-bucket rate — same model as OHLC, with only the close
+// dimension surfaced (see ADR-0015).
 func (s *ChartService) Series(
 	ctx context.Context,
 	q CandleQuery,
@@ -273,7 +275,7 @@ func (s *ChartService) Series(
 
 // OHLC returns the bucket-level candles without volume. When `in` is
 // non-empty, each candle gets a Conv entry per target currency carrying the
-// converted o/h/l/c plus rate/rate_ts (charts.md §6).
+// converted o/h/l/c plus rate/rate_ts (see ADR-0015).
 func (s *ChartService) OHLC(
 	ctx context.Context,
 	q CandleQuery,
@@ -297,9 +299,10 @@ func (s *ChartService) OHLC(
 	return OHLC{Interval: q.Interval, Candles: candles}, nil
 }
 
-// OHLCV is reserved for Stage 4 (charts.md §1.1). Currently always returns
-// ErrOHLCVNotImplemented; preflight runs anyway so unit tests can still
-// distinguish "bad request → 400" from "endpoint TODO → 501".
+// OHLCV is reserved for the volume-ingestion follow-up (see ADR-0015).
+// Currently always returns ErrOHLCVNotImplemented; preflight runs anyway
+// so unit tests can still distinguish "bad request → 400" from "endpoint
+// TODO → 501".
 func (s *ChartService) OHLCV(
 	_ context.Context,
 	q CandleQuery,
@@ -347,8 +350,9 @@ func (s *ChartService) preflight(q CandleQuery, in []prices.Currency) error {
 }
 
 // applyFXToCandles fills Conv on each candle in-place using the close-of-bucket
-// rate (charts.md §6, `rwa_quotes_adds.md` Variant A). All four price fields
-// share one rate per (bucket, target) so the candle stays valid (l ≤ o,c ≤ h).
+// rate (see ADR-0015 for the chart contract; ADR-0013 for the converter).
+// All four price fields share one rate per (bucket, target) so the candle
+// stays valid (l ≤ o,c ≤ h).
 //
 // Per-request FX cache: within one chart query we touch the same
 // (bucketEnd, target) at most once. Multiple targets per candle is supported

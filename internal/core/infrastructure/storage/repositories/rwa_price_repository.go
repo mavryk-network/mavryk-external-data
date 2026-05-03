@@ -205,8 +205,8 @@ func (r *RWAPriceRepository) QueryCandles(
 			Close:   rec.ClosePrice,
 			Samples: rec.Samples,
 			// VolumeBase / VolumeQuote: nullable, deliberately left zero —
-			// RWA traded-volume column lands in Stage 4 of charts.md (§3.1)
-			// via orderbook_order ingestion.
+			// RWA traded-volume column lands in a follow-up via
+			// orderbook_order ingestion (see ADR-0015).
 		}
 	}
 	return out, nil
@@ -218,7 +218,7 @@ var _ apiprices.CandleRepository = (*RWAPriceRepository)(nil)
 // rwaCandleSource maps an interval to its backing CA + optional re-bucket
 // width. Direct intervals (1m / 1h / 1d) leave Rebucket empty; derived
 // intervals (5m / 15m / 4h) carry the time_bucket() spec for the outer
-// SELECT (charts.md §2.3). Mirror of tokenCandleSource for the FA side.
+// SELECT (see ADR-0015). Mirror of tokenCandleSource for the FA side.
 func rwaCandleSource(iv apiprices.Interval) (candleSource, bool) {
 	switch iv {
 	case apiprices.Interval1m:

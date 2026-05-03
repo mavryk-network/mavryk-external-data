@@ -269,7 +269,7 @@ func (r *TokenPriceRepository) QueryCandles(
 			Close:   rec.ClosePrice,
 			Samples: rec.Samples,
 			// VolumeBase / VolumeQuote: nullable, deliberately left zero —
-			// FA volume column lands in Stage 4 of charts.md (§4.3).
+			// FA volume column lands in a follow-up (see ADR-0015).
 		}
 	}
 	return out, nil
@@ -281,7 +281,7 @@ var _ apiprices.CandleRepository = (*TokenPriceRepository)(nil)
 // tokenCandleSource maps an interval to its backing CA + optional re-bucket
 // width. Direct intervals (1m / 1h / 1d) leave Rebucket empty; derived
 // intervals (5m / 15m / 4h) carry the time_bucket() spec for the outer
-// SELECT (charts.md §2.3).
+// SELECT (see ADR-0015).
 func tokenCandleSource(iv apiprices.Interval) (candleSource, bool) {
 	switch iv {
 	case apiprices.Interval1m:

@@ -201,7 +201,7 @@ var (
 	)
 
 	// ChartQueryCapHitsTotal — counter of requests rejected by the
-	// per-interval window cap (charts.md §2.2). reason=range_exceeded means
+	// per-interval window cap (see ADR-0015). reason=range_exceeded means
 	// (to-from) > cap[interval]; reason=limit means ?limit > MaxLimit.
 	// A growing rate is a UX signal — clients are asking for more than the
 	// caps allow and need pagination.

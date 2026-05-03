@@ -3,15 +3,13 @@
 - **Status**: Accepted
 - **Date**: 2026-04-28
 - **Deciders**: backend team
-- **Closes**: [rwa_quotes_adds.md](../../rwa_quotes_adds.md) §3 (recommendation A)
 
 ## Context
 
 RWA orderbooks on Equiteez quote prices in **one** native currency per
 pair (USDT today; USDC/EURC plausible). Clients increasingly want to read
 the same price in USD/EUR/AED/etc. for dashboards and portfolio
-aggregation. Three options were evaluated in
-[rwa_quotes_adds.md §2](../../rwa_quotes_adds.md):
+aggregation. Three options were evaluated:
 
 - **A** — compute on read using FT-side `token_prices` as FX source.
 - **B** — write derived rows into `rwa_quote_prices` at sync time.
@@ -73,7 +71,6 @@ Storage **does not change**. `rwa_quote_prices` keeps native-only.
   watch — refactoring_v2 §2 lists Approach C (CA) as the escape hatch.
 - ⚠️ Spread-in-USD ≠ spread-in-USDT × FX(close), strictly: bid and ask
   use the same FX timestamp here, so percentage spread is preserved.
-  Documented in `rwa_quotes_adds.md` §6.2.
 - 🔁 Move to Approach C if `?in=usd` becomes a de-facto default for UI
   AND p95 misses budget. API form stays.
 
@@ -81,7 +78,7 @@ Storage **does not change**. `rwa_quote_prices` keeps native-only.
 
 - **B (compute-on-write derived rows)** — rejected: ×N storage growth,
   RWA depends on FT backfill before it can write, FX-source pin baked
-  into history. Detail in `rwa_quotes_adds.md` §2.B.
+  into history.
 - **C (continuous aggregate)** — deferred. Right shape only when latency
   becomes a problem; more invasive refresh-policy / migration work today.
 - **Drop `?in=`, expect clients to do their own FX** — feasible but every
@@ -98,8 +95,7 @@ converted using **Variant A — close-of-bucket FX**: one rate per bucket
 Reason: RWA pairs are quoted in stablecoins, so within-bucket FX
 volatility is < 0.01% — the per-tick re-aggregation Variant B doesn't
 buy meaningful accuracy at the cost of new continuous-aggregate
-infrastructure. See `rwa_quotes_adds.md` §4.5 for the in-depth
-treatment.
+infrastructure.
 
 ## Notes
 
@@ -109,7 +105,7 @@ treatment.
   `ConvertedSnapshotBlock`, and `FXMeta` schemas.
   *(Path scheme later switched from `{pair_id}` to `{symbol}` —
   `{base}-{quote}`, e.g. `mars1-usdt`. Original wording kept for
-  historical accuracy; see `get_symbol.md`.)*
+  historical accuracy.)*
 - Server config: `server.fx_max_staleness_seconds` (default 300),
   `server.max_in_currencies` (default 10).
 - Metrics: `fx_conversion_duration_seconds`, `fx_conversions_total`

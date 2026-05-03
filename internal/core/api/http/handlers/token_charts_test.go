@@ -169,7 +169,7 @@ func TestSeries_RawInterval_400_Stage1(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 (raw is Stage 1 caveat)", w.Code)
+		t.Errorf("status = %d, want 400 (raw not yet wired for FA charts)", w.Code)
 	}
 }
 
@@ -209,7 +209,7 @@ func TestSeries_UnknownToken_404(t *testing.T) {
 func TestSeries_RangeOverCap_416(t *testing.T) {
 	registerTestTokens(t)
 	r := newTokenChartEngine(t, &stubCandleRepo{})
-	// 1m has a 7-day cap (charts.md §2.2). Stage 3 maps cap-exceeded
+	// 1m has a 7-day cap (see ADR-0015). The handler maps cap-exceeded
 	// to 416 RANGE_NOT_SATISFIABLE — distinct from 400 so clients can
 	// render "narrow your range" UX without parsing the error message.
 	req := httptest.NewRequest(http.MethodGet,
@@ -230,8 +230,8 @@ func TestSeries_RangeOverCap_416(t *testing.T) {
 }
 
 func TestSeries_FullGranularitiesAccepted(t *testing.T) {
-	// Stage 3 lit up 5m / 15m / 4h via re-bucket. Handler must let them
-	// through preflight; the actual bucket SQL is verified in the
+	// 5m / 15m / 4h are served via repository re-bucket — handler must let
+	// them through preflight. Actual bucket SQL is verified in the
 	// integration suite (tests/integration/token_charts_integration_test.go).
 	registerTestTokens(t)
 	r := newTokenChartEngine(t, &stubCandleRepo{})

@@ -1,15 +1,16 @@
 -- 0011_token_prices_minute.sql
 -- Minute-level continuous aggregate for FT prices: OHLC per (token, source, currency).
 -- Mirrors the `_1h` and `_1d` views from 0006; chosen so the FA chart
--- repository can serve 1m / 5m / 15m via this single CA (re-bucket for
--- 5m / 15m comes in Stage 3 of charts.md).
+-- repository can serve 1m / 5m / 15m via this single CA (5m / 15m via
+-- repository-side re-bucket).
 --
--- See ADR-0015 and charts.md §4.2 for the full rationale.
+-- See ADR-0015 for the full rationale.
 --
 -- At the current 60s polling cadence the bucket holds 1 sample on average
 -- — open=high=low=close. That's degenerate but valid; raising the cadence
--- (or switching to /coins/{id}/market_chart/range in Stage 4) starts
--- producing real intra-bucket dynamics without any schema change.
+-- (or switching to /coins/{id}/market_chart/range when volume ingestion
+-- lands) starts producing real intra-bucket dynamics without any schema
+-- change.
 --
 -- Continuous aggregates require timescaledb; gated by IF EXISTS check.
 

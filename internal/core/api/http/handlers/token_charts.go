@@ -14,8 +14,9 @@ import (
 
 // TokenChartDeps wires the FA chart handlers (Series, OHLC).
 //
-// /ohlcv is intentionally not on this struct — Stage 4 of charts.md hosts
-// it; until then the route is bound to NotImplementedOHLCV at the router.
+// /ohlcv is intentionally not on this struct — until volume ingestion
+// ships (see ADR-0015) the route is bound to NotImplementedOHLCV at the
+// router.
 type TokenChartDeps struct {
 	Charts        *apiprices.ChartService
 	DefaultSource prices.Source
@@ -68,7 +69,7 @@ func (d TokenChartDeps) Series() gin.HandlerFunc {
 // OHLC — GET /v1/prices/:token/ohlc
 //
 // Returns one candle per bucket. Volume fields (vb/vq) are not on the
-// wire — that's the OHLCV contract, parked at 501 until Stage 4.
+// wire — that's the OHLCV contract, parked at 501 (see ADR-0015).
 func (d TokenChartDeps) OHLC() gin.HandlerFunc {
 	bind := d.bindChart()
 	action := func(ctx context.Context, req chartTokenRequest) (OHLCDTO, error) {
@@ -117,7 +118,7 @@ func (d TokenChartDeps) bindChart() common.Bind[chartTokenRequest] {
 		if err != nil {
 			return chartTokenRequest{}, err
 		}
-		// Stage 1 ships line + ohlc only — interval=raw is reserved for a
+		// Line + OHLC ship for FA — interval=raw is reserved for a
 		// future stage that wires the existing PointRepository.Query path.
 		if interval == apiprices.IntervalRaw {
 			return chartTokenRequest{}, coreerrors.InvalidArgument(

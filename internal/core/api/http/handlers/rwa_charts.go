@@ -20,13 +20,13 @@ const rwaChartLastSide = string(prices.SideLast)
 
 // RWAChartDeps wires the RWA chart handlers (Series, OHLC).
 //
-// /ohlcv is intentionally not on this struct — Stage 4 of charts.md hosts
-// it; the route binds NotImplementedOHLCV at the router until then.
+// /ohlcv is intentionally not on this struct — until volume ingestion
+// ships (see ADR-0015) the route binds NotImplementedOHLCV at the router.
 //
 // `Charts` is shared with the token-side charts handler in spirit (same
 // ChartService type), but each gets its own instance — one wraps
-// TokenPriceRepository, the other RWAPriceRepository. Converter is left
-// nil here too; Stage 3 wires the close-of-bucket FX path.
+// TokenPriceRepository, the other RWAPriceRepository. Converter on the
+// RWA side enables `?in=` close-of-bucket FX.
 type RWAChartDeps struct {
 	Charts        *apiprices.ChartService
 	Lookup        PairLookup
@@ -52,12 +52,12 @@ type chartRWARequest struct {
 //
 // One (timestamp, close) point per bucket on the `last` side. History
 // before service deploy depends on `equiteez_backfill.go` having been
-// enabled — see charts.md §3.1 ("Backfill") and the operational note in
-// the OpenAPI description.
+// enabled — see ADR-0014 and the operational note in the OpenAPI
+// description.
 //
 // Optional `?in=<currency>` adds a flat top-level numeric key per point
 // with the close price converted at the close-of-bucket FX rate
-// (charts.md §6). One target only — multiple currencies → 400.
+// (see ADR-0015). One target only — multiple currencies → 400.
 func (d RWAChartDeps) Series() gin.HandlerFunc {
 	bind := d.bindChart()
 	action := func(ctx context.Context, req chartRWARequest) (SeriesDTO, error) {
@@ -88,12 +88,12 @@ func (d RWAChartDeps) Series() gin.HandlerFunc {
 
 // OHLC — GET /v1/rwa/:symbol/ohlc
 //
-// Candles without volume. Stage 4 (charts.md §1.1) lifts /ohlcv with
-// real traded-volume from `orderbook_order`; until then the OHLCV route
-// is a 501 stub bound directly at the router.
+// Candles without volume. Real traded-volume from `orderbook_order` lifts
+// /ohlcv in a follow-up (see ADR-0015); until then the OHLCV route is a
+// 501 stub bound directly at the router.
 //
 // Optional `?in=<currency>` adds a nested object per candle with
-// converted o/h/l/c plus rate/rate_ts (charts.md §3.2). One FX rate per
+// converted o/h/l/c plus rate/rate_ts (see ADR-0015). One FX rate per
 // candle (close-of-bucket) keeps the candle valid (`l ≤ o,c ≤ h`).
 func (d RWAChartDeps) OHLC() gin.HandlerFunc {
 	bind := d.bindChart()
@@ -128,7 +128,7 @@ func (d RWAChartDeps) OHLC() gin.HandlerFunc {
 }
 
 // bindChart parses the path/query params shared by Series and OHLC. The
-// ?in= parser caps to ≤1 currency for charts (charts.md §6). Source token
+// ?in= parser caps to ≤1 currency for charts (see ADR-0015). Source token
 // for FX is the pair's native quote, promoted to a registered Token —
 // unregistered native quotes still return 200 from the chart endpoint
 // because in= just gets dropped silently per the legacy /v1/rwa/{symbol}
@@ -150,8 +150,8 @@ func (d RWAChartDeps) bindChart() common.Bind[chartRWARequest] {
 		if err != nil {
 			return chartRWARequest{}, err
 		}
-		// Stage 3 ships line + ohlc + full granularities — interval=raw is
-		// still reserved for a future stage that would wire the existing
+		// Line + OHLC ship with full granularities — interval=raw is still
+		// reserved for a future stage that would wire the existing
 		// PointRepository.Query path against rwa_quote_prices.
 		if interval == apiprices.IntervalRaw {
 			return chartRWARequest{}, coreerrors.InvalidArgument(

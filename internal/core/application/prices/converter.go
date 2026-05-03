@@ -12,7 +12,7 @@ import (
 
 // Sentinel errors returned by PriceConverter.Convert. The HTTP layer maps
 // them into the `fx.error` field of a 200 response (partial success), not
-// 4xx/5xx — see rwa_quotes_adds.md §4.4.
+// 4xx/5xx — see ADR-0013.
 var (
 	ErrNoFXRate                  = errors.New("no fx rate available")
 	ErrUnsupportedTargetCurrency = errors.New("unsupported target currency")

@@ -1,12 +1,12 @@
 -- 0010_rwa_candles.sql
--- Stage 2 of charts.md — additional minute / day continuous aggregates for
--- RWA orderbook prices, plus compression policies on all three CAs.
+-- Additional minute / day continuous aggregates for RWA orderbook prices,
+-- plus compression policies on all three CAs.
 --
 -- The 1h CA already exists from 0007_rwa_quote_prices_aggregates.sql with
 -- the column convention shared by FT prices (open_price, close_price,
 -- min_price, max_price, samples). 0010 keeps `_1h` as-is — volume is parked
--- as Stage 4 (charts.md §1.1), so a `_1h` recreate would be churn for no
--- gain. When Stage 4 lands the volume migration recreates all three CAs.
+-- as a follow-up (see ADR-0015), so a `_1h` recreate would be churn for no
+-- gain. When the volume migration lands it recreates all three CAs.
 --
 -- See ADR-0015 for the full chart layout (3 CAs → 6 served intervals).
 --

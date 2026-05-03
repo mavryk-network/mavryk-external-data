@@ -3,7 +3,6 @@
 - **Status**: Proposed
 - **Date**: 2026-05-01
 - **Deciders**: backend team
-- **Drives**: [charts.md](../../charts.md) (full plan, with stage breakdown)
 - **Builds on**: [ADR-0006](0006-generic-handler-wrap.md),
   [ADR-0013](0013-multi-currency-rwa-conversion-read-side.md),
   [ADR-0014](0014-rwa-backfill-via-orderbook-order.md)
@@ -66,7 +65,7 @@ Wire body for the stub (frozen):
 ```json
 {
   "code": "OHLCV_NOT_IMPLEMENTED",
-  "message": "OHLCV is not yet available; track Stage 4 in charts.md"
+  "message": "OHLCV is not yet available;"
 }
 ```
 
@@ -86,33 +85,30 @@ FA and RWA repositories (no special hypertable-fallback branch for FA).
 - **FA**: native, runs in SQL. The existing `quote_currency` key extends
   cleanly into the chart CAs since they already group by it. No FX layer
   for FA charts.
-- **RWA**: opt-in `?in=` (≤1 currency). Per `rwa_quotes_adds.md` Variant A,
-  one FX-rate per candle, applied to all four price fields at
-  `bucket + interval` (close-of-bucket). This keeps the candle valid
-  (`l ≤ o,c ≤ h`) and bounds the FX-lookups to O(N candles). Wired in
-  Stage 3 of charts.md; rejected as `400` until then.
+- **RWA**: opt-in `?in=` (≤1 currency). One FX-rate per candle, applied
+  to all four price fields at `bucket + interval` (close-of-bucket). This
+  keeps the candle valid (`l ≤ o,c ≤ h`) and bounds the FX-lookups to
+  O(N candles). The underlying converter contract is ADR-0013.
 
-### 5. Application layer (Stage 0 of charts.md, this PR)
+### 5. Application layer
 
 ```
 internal/core/application/prices/charts.go
   Interval (enum) + ParseInterval + AllChartIntervals
   CandleQuery, Candle (volume nullable)
-  CandleRepository interface           — satisfied by RWA/FA repos in Stage 1/2
-  ChartService { Repo, Converter, Caps, MaxLimit }
-    .Series  → projects close-price
-    .OHLC    → passes candles through
-    .OHLCV   → ErrOHLCVNotImplemented (Stage 4)
-  DefaultCaps + ValidateRange          — per-interval window cap (charts.md §2.2)
+  CandleRepository interface           — satisfied by RWA/FA repos
+  ChartService { Repo, Converter, Caps, MaxLimit, Kind }
+    .Series  → projects close-price (+ FX when ?in= is set)
+    .OHLC    → passes candles through (+ close-of-bucket FX when ?in=)
+    .OHLCV   → ErrOHLCVNotImplemented (volume-ingestion follow-up)
+  DefaultCaps + ValidateRange          — per-interval window cap
 
 internal/core/api/http/handlers/charts_common.go
   ChartEnvelope, SeriesDTO, OHLCDTO, OHLCVDTO   — wire shapes
   ParseChartInterval                            — 400 on missing/unknown
+  ParseChartIn                                  — ≤1 currency cap
   NotImplementedOHLCV                           — gin stub for the 501
 ```
-
-Repository implementations and route wiring belong to Stage 1 (FA) and
-Stage 2 (RWA).
 
 ## Anti-decisions
 
@@ -152,20 +148,21 @@ Stage 2 (RWA).
 **Cons**
 
 - The existing `rwa_quote_prices_1h` CA must be drop+recreated to add
-  volume columns in Stage 4. A small ops dance, but on continuous
-  aggregates this is routine.
+  volume columns when volume ingestion lands. A small ops dance, but on
+  continuous aggregates this is routine.
 - FA `1m` at the current 60s polling cadence yields ~1 sample per
   bucket. Valid (open=high=low=close), and migration-friendly when we
-  raise the cadence in Stage 4, but degenerate today.
-- Stage 4 has two parallel sub-tracks (RWA traded-volume, FA volume
-  ingestion) that lift the 501 separately — coordinate releases or
-  the two `/ohlcv` paths will go live at different times.
+  raise the cadence, but degenerate today.
+- The volume-ingestion follow-up has two parallel sub-tracks (RWA
+  traded-volume, FA volume ingestion) that lift the 501 separately —
+  coordinate releases or the two `/ohlcv` paths will go live at
+  different times.
 
 **Operational**
 
-- New migrations: `0010_rwa_candles.sql` (Stage 2), `0011_token_prices_minute.sql`
-  (Stage 1), `0012_token_prices_volume.sql` (Stage 4). API versions
-  to `v1.2.0` once Stage 3 ships.
+- New migrations: `0010_rwa_candles.sql` (RWA `_1m` + `_1d`),
+  `0011_token_prices_minute.sql` (FA `_1m`). A future
+  `0012_token_prices_volume.sql` lands with volume ingestion.
 - `chart_query_duration_seconds`, `chart_query_rows`,
   `chart_query_cap_hits_total` Prometheus series added with the handler
   routes. Reuse existing per-IP RPS limit; profile before adding a
@@ -173,7 +170,5 @@ Stage 2 (RWA).
 
 ## References
 
-- [charts.md](../../charts.md) — full proposal with stage breakdown and SQL
-- [ADR-0013](0013-multi-currency-rwa-conversion-read-side.md) — multi-currency RWA
-- [ADR-0014](0014-rwa-backfill-via-orderbook-order.md) — `orderbook_order` ingestion (Stage 4 builds on this)
-- [rwa_quotes_adds.md](../../rwa_quotes_adds.md) — Variant A FX-in-candle design
+- [ADR-0013](0013-multi-currency-rwa-conversion-read-side.md) — multi-currency RWA / `PriceConverter`
+- [ADR-0014](0014-rwa-backfill-via-orderbook-order.md) — `orderbook_order` ingestion (volume-ingestion follow-up builds on this)

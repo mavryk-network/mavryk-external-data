@@ -61,8 +61,8 @@ type OHLCDTO struct {
 
 // CandleDTO is the no-volume candle row. When `?in=usd` is requested the
 // converted o/h/l/c plus rate/rate_ts inline as a nested object keyed by
-// the target currency (charts.md §3.2 / §6). Conv is empty when no FX
-// conversion was requested or applied.
+// the target currency (see ADR-0015). Conv is empty when no FX conversion
+// was requested or applied.
 type CandleDTO struct {
 	T    string                        `json:"t"`
 	O    num6                          `json:"o"`
@@ -73,7 +73,7 @@ type CandleDTO struct {
 	Conv map[string]ConvertedCandleDTO `json:"-"`
 }
 
-// ConvertedCandleDTO is one converted candle (close-of-bucket FX, charts.md §6).
+// ConvertedCandleDTO is one converted candle (close-of-bucket FX; see ADR-0015).
 // `rate` is the multiplier applied to all four price fields; `rate_ts` is the
 // timestamp of the FX point that produced the rate (auditability for fronts).
 type ConvertedCandleDTO struct {
@@ -102,9 +102,10 @@ func (d CandleDTO) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// OHLCVDTO is the wire shape for /ohlcv (Stage 4, charts.md §1.1). Defined
-// in Stage 0 so the OpenAPI spec and frontend can build against the final
-// shape before the endpoint is live.
+// OHLCVDTO is the wire shape for /ohlcv. Defined alongside the rest of the
+// chart DTOs (even though the endpoint currently 501s — see ADR-0015) so
+// the OpenAPI spec and frontend can build against the final shape before
+// volume ingestion lands.
 type OHLCVDTO struct {
 	ChartEnvelope
 	Candles []CandleVolDTO `json:"candles"`
@@ -118,7 +119,7 @@ type CandleVolDTO struct {
 }
 
 // ParseChartInterval reads ?interval= and validates it. Empty raw value is a
-// 400 (charts.md §3.1: interval is required, no default for first release).
+// 400 — interval is required (no server-side default), see ADR-0015.
 func ParseChartInterval(c *gin.Context) (apiprices.Interval, error) {
 	raw := strings.TrimSpace(c.Query("interval"))
 	if raw == "" {
@@ -133,7 +134,7 @@ func ParseChartInterval(c *gin.Context) (apiprices.Interval, error) {
 }
 
 // ParseChartIn reads `?in=<currency>` for chart endpoints. Charts cap the
-// list to ≤1 target (charts.md §6) — multiple targets is a defense-in-depth
+// list to ≤1 target (see ADR-0015) — multiple targets is a defense-in-depth
 // 400 here even though only handlers wire it; per-endpoint MaxIn is
 // enforced by ChartService.preflight after this returns.
 //
@@ -211,12 +212,12 @@ func renderCandleConv(in map[prices.Currency]apiprices.ConvertedCandle) map[stri
 const notImplementedOHLCVCode coreerrors.Code = "OHLCV_NOT_IMPLEMENTED"
 
 // notImplementedOHLCVMessage is the user-visible body text.
-const notImplementedOHLCVMessage = "OHLCV is not yet available; track Stage 4 in charts.md"
+const notImplementedOHLCVMessage = "OHLCV is not yet available;"
 
-// NotImplementedOHLCV is the gin handler for /ohlcv until Stage 4 ships
-// volume ingestion. Returns 501 with a fixed error envelope (charts.md §2.8).
-// Registering this stub from day one freezes the URL contract — frontend can
-// build against the path while we sequence backend work.
+// NotImplementedOHLCV is the gin handler for /ohlcv until volume
+// ingestion ships (see ADR-0015). Returns 501 with a fixed error envelope.
+// Registering this stub from day one freezes the URL contract — frontend
+// can build against the path while we sequence backend work.
 func NotImplementedOHLCV() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		common.RespondErrorWithStatus(c,

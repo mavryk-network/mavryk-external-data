@@ -33,17 +33,17 @@ tags:
   - name: charts-ft
     description: |
       Time-series charts (line, OHLC, OHLCV) over `token_prices`. See
-      [charts.md](https://github.com/0xVoronov/mavryk-external-data/blob/main/charts.md)
-      and [ADR-0015](https://github.com/0xVoronov/mavryk-external-data/blob/main/docs/adr/0015-charts-line-ohlc-ohlcv.md).
-      Stage 1 ships `/series` and `/ohlc` for `1m / 1h / 1d`. `/ohlcv`
-      returns 501 until Stage 4.
+      [ADR-0015](https://github.com/0xVoronov/mavryk-external-data/blob/main/docs/adr/0015-charts-line-ohlc-ohlcv.md).
+      Ships `/series` and `/ohlc` for `1m / 5m / 15m / 1h / 4h / 1d`;
+      `/ohlcv` returns 501 until volume ingestion lands.
   - name: charts-rwa
     description: |
       Time-series charts (line, OHLC, OHLCV) over `rwa_quote_prices`. Same
       DTO shape as `charts-ft`; uses the `last` orderbook side for every
       bucket. Pre-deploy history depends on `equiteez_backfill.go` having
-      been enabled (charts.md §3.1, "Backfill"). `/ohlcv` shares the same
-      501 stub as `charts-ft` until Stage 4.
+      been enabled (see [ADR-0014](https://github.com/0xVoronov/mavryk-external-data/blob/main/docs/adr/0014-rwa-backfill-via-orderbook-order.md)).
+      `/ohlcv` shares the same 501 stub as `charts-ft` until volume
+      ingestion lands.
 
 paths:
   /healthz:
@@ -193,7 +193,7 @@ paths:
         of `_1m` and `_1h` at query time.
 
         Either `from`+`to` define a window or both are absent for
-        latest mode. Range caps per interval (charts.md §2.2):
+        latest mode. Range caps per interval (see ADR-0015):
         `1m` ≤ 7 days, `1h` ≤ 1 year, `1d` unlimited.
 
         `currency` is required (one value, no comma-list).
@@ -268,9 +268,9 @@ paths:
       summary: OHLCV candles (Stage 4 — TODO)
       description: |
         Reserved URL. Returns **501** with code `OHLCV_NOT_IMPLEMENTED`
-        until Stage 4 of charts.md ships volume ingestion (`token_prices`
+        until volume ingestion ships (see ADR-0015). `token_prices`
         does not yet store volume; CoinGecko `/simple/price` doesn't
-        return it). Frontend can build against this URL safely — the
+        return it. Frontend can build against this URL safely — the
         DTO shape is fixed (see `OHLCVResponse`).
       operationId: tokenOHLCV
       parameters:
@@ -283,7 +283,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
               example:
                 code: OHLCV_NOT_IMPLEMENTED
-                message: "OHLCV is not yet available; track Stage 4 in charts.md"
+                message: "OHLCV is not yet available;"
 
   /v1/rwa/{symbol}:
     get:
@@ -333,11 +333,11 @@ paths:
         and `_1h` at query time.
 
         History before service deploy depends on `equiteez_backfill.go`
-        having been enabled (charts.md §3.1).
+        having been enabled (see ADR-0014).
 
         Optional `?in=<currency>` adds a flat top-level numeric key per
         point with the close price converted at the close-of-bucket FX
-        rate (charts.md §6). Cap = 1 — multiple comma-separated values
+        rate (see ADR-0015). Cap = 1 — multiple comma-separated values
         return 400.
       operationId: rwaSeries
       parameters:
@@ -380,8 +380,8 @@ paths:
         Same `interval` / range cap semantics as `/series`.
 
         Optional `?in=<currency>` adds a nested object per candle with
-        converted `o/h/l/c` plus `rate` and `rate_ts` (close-of-bucket FX,
-        charts.md §6). One rate per candle keeps the converted candle
+        converted `o/h/l/c` plus `rate` and `rate_ts` (close-of-bucket FX;
+        see ADR-0015). One rate per candle keeps the converted candle
         valid (`l ≤ o,c ≤ h`).
       operationId: rwaOHLC
       parameters:
@@ -429,11 +429,11 @@ paths:
       summary: OHLCV candles for an RWA pair (Stage 4 — TODO)
       description: |
         Reserved URL. Returns **501** with code `OHLCV_NOT_IMPLEMENTED`
-        until Stage 4 of charts.md ships traded-volume from the
-        `orderbook_order` event log (the existing `rwa_quote_prices.size`
-        column is a top-of-book snapshot, not traded volume — using it
-        would mislead the frontend). DTO shape is fixed (`OHLCVResponse`)
-        so the frontend can build against this URL today.
+        until traded-volume from the `orderbook_order` event log lands
+        (see ADR-0015). The existing `rwa_quote_prices.size` column is
+        a top-of-book snapshot, not traded volume — using it would
+        mislead the frontend. DTO shape is fixed (`OHLCVResponse`) so
+        the frontend can build against this URL today.
       operationId: rwaOHLCV
       parameters:
         - $ref: "#/components/parameters/Symbol"
@@ -445,7 +445,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
               example:
                 code: OHLCV_NOT_IMPLEMENTED
-                message: "OHLCV is not yet available; track Stage 4 in charts.md"
+                message: "OHLCV is not yet available;"
 
   /v1/rwa/{symbol}/latest:
     get:
@@ -571,7 +571,7 @@ components:
       description: |
         Bucket size for the chart. `raw` is reserved for tick-level series
         (rejected for `/ohlc` and `/ohlcv`, and not yet supported for FA
-        charts in Stage 1). Per-interval window caps live in charts.md §2.2.
+        charts). Per-interval window caps are documented in ADR-0015.
       schema:
         type: string
         enum: [raw, 1m, 5m, 15m, 1h, 4h, 1d]
@@ -594,7 +594,7 @@ components:
       in: query
       required: false
       description: |
-        Single target currency for close-of-bucket FX conversion (charts.md §6).
+        Single target currency for close-of-bucket FX conversion (see ADR-0015).
         Each chart endpoint caps `?in=` to one value — comma-separated lists
         return 400. Used by RWA charts to convert from the pair's native
         quote (e.g. `usdt`) to a registered currency (`usd`, `eur`, …).
@@ -635,7 +635,7 @@ components:
     RangeNotSatisfiable:
       description: |
         The requested `from..to` window exceeds the per-interval cap
-        (`code: RANGE_NOT_SATISFIABLE`, charts.md §2.2). Distinct from
+        (`code: RANGE_NOT_SATISFIABLE`; see ADR-0015). Distinct from
         `400 INVALID_ARGUMENT` so clients can render a "narrow your range"
         UX without parsing the message. Caps: `1m` ≤ 7d, `5m` ≤ 30d,
         `15m` ≤ 90d, `1h` ≤ 1y, `4h` ≤ 4y; `1d` is unlimited.
@@ -816,7 +816,7 @@ components:
       description: |
         One candle without volume. When `?in=<currency>` is supplied the
         converted o/h/l/c plus `rate`/`rate_ts` appear as a nested object
-        keyed by the target currency (charts.md §3.2 / §6).
+        keyed by the target currency (see ADR-0015).
       required: [t, o, h, l, c, n]
       properties:
         t: { type: string, format: date-time, description: Bucket start time (RFC3339 UTC). }
