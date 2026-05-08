@@ -192,3 +192,4 @@ go.work
 
 # Air live reload
 tmp/
+.gstack/

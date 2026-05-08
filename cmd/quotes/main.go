@@ -85,6 +85,9 @@ func run() int {
 	tokenRepo := repositories.NewTokenPriceRepository(db.DB).WithBatchSize(batch)
 	rwaRepo := repositories.NewRWAPriceRepository(db.DB).WithBatchSize(batch)
 	stateRepo := repositories.NewBackfillStateRepository(db.DB)
+	// Change repos for /change endpoints. Read-only; share the GORM handle.
+	tokenChangeRepo := repositories.NewTokenChangeRepository(db.DB)
+	rwaChangeRepo := repositories.NewRWAChangeRepository(db.DB)
 
 	// Application repositories: cache decorator on top, used by HTTP and by jobs
 	// (jobs write through, decorator invalidates).
@@ -108,6 +111,8 @@ func run() int {
 		RWAPriceQuery:   rwaAppRepo,
 		TokenPriceRepo:  tokenRepo,
 		RWAPriceRepo:    rwaRepo,
+		TokenChangeRepo: tokenChangeRepo,
+		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
 		Lookup:          lookup,
 	})

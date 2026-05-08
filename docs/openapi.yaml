@@ -182,6 +182,56 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/Internal" }
 
+  /v1/prices/{token}/change:
+    get:
+      tags: [prices-ft]
+      summary: Price change over fixed periods (24h / 7d / 30d)
+      description: |
+        Returns price-change percentages for `{token}` per currency over
+        each requested period. `now` is the latest sample (matches
+        `/latest` exactly); the anchor for each period is the close of
+        the closest CA bucket at-or-before `now − Δ`.
+
+        **Asymmetry note.** `now` is `last(price)` from the raw store;
+        anchors are CA bucket closes (`token_prices_1m` for `1h`,
+        `token_prices_1h` for `24h`, `token_prices_1d` for `7d`/`30d`).
+        The actual measured interval may therefore differ from the
+        nominal period by ≤ one CA bucket width — meaningful only at
+        `1h` (where it's 60–122 minutes); negligible at 24h+.
+
+        **Top-level `as_of`** is `max(per-currency last_ts)`. Per-currency
+        `now` may be staler than `as_of` for slow-tick currencies.
+
+        **Null fields.** When no anchor row falls inside the period's
+        tolerance window (newly-registered token, ingestion gap), all
+        four period fields render `null`. When the anchor exists but
+        is `0` (degenerate price), `from` and `from_ts` stay populated
+        but `delta_abs` and `change_pct` are `null`.
+      operationId: tokenChange
+      parameters:
+        - $ref: "#/components/parameters/Token"
+        - $ref: "#/components/parameters/CurrencyFilter"
+        - $ref: "#/components/parameters/Periods"
+      responses:
+        "200":
+          description: Price change response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FTChangeResponse" }
+              example:
+                token: mvrk
+                as_of: "2026-05-08T12:00:00Z"
+                currencies:
+                  usd:
+                    now: 0.071541
+                    periods:
+                      "24h": { from_ts: "2026-05-07T12:00:00Z", from: 0.0721, delta_abs: -0.000559, change_pct: -0.7754 }
+                      "7d":  { from_ts: "2026-05-01T00:00:00Z", from: 0.0693, delta_abs: 0.002241, change_pct: 3.2338 }
+                      "30d": { from_ts: null, from: null, delta_abs: null, change_pct: null }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/Internal" }
+
   /v1/prices/{token}/series:
     get:
       tags: [charts-ft]
@@ -480,6 +530,55 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/Internal" }
 
+  /v1/rwa/{symbol}/change:
+    get:
+      tags: [prices-rwa]
+      summary: Price change over fixed periods (24h / 7d / 30d), native quote only in v1
+      description: |
+        Returns price-change percentages for the RWA pair `{symbol}` in
+        its native quote currency over each requested period. Same
+        semantics as the FT `/change` endpoint (see asymmetry / null /
+        div-by-zero notes there) — the only differences are:
+
+        - Single-currency response (the pair's native quote, e.g. `usdt`).
+          Multi-currency conversion (`?in=usd,eur`) is **deferred** until
+          the historical FX-rate fix lands (tracked in `fix_todo.md`);
+          passing `?in=` returns **501 NOT_IMPLEMENTED**.
+        - Period anchors come from `rwa_quote_prices_1m / _1h / _1d`.
+      operationId: rwaChange
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+        - $ref: "#/components/parameters/Periods"
+      responses:
+        "200":
+          description: Price change response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RWAChangeResponse" }
+              example:
+                symbol: mars1-usdt
+                native_quote: usdt
+                as_of: "2026-05-08T12:00:00Z"
+                now: 56.25
+                periods:
+                  "24h": { from_ts: "2026-05-07T12:00:00Z", from: 55.80, delta_abs: 0.45, change_pct: 0.8065 }
+                  "7d":  { from_ts: "2026-05-01T00:00:00Z", from: 54.10, delta_abs: 2.15, change_pct: 3.9741 }
+                  "30d": { from_ts: "2026-04-08T00:00:00Z", from: 51.20, delta_abs: 5.05, change_pct: 9.8633 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "501":
+          description: |
+            `?in=` is reserved at the URL level but not yet wired —
+            blocked on the FX historical-rate fix (see `fix_todo.md`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                code: NOT_IMPLEMENTED
+                message: "'in' parameter is not yet supported on /change; deferred until historical FX-rate fix lands (see fix_todo.md)"
+        "500": { $ref: "#/components/responses/Internal" }
+
 components:
   parameters:
     Token:
@@ -605,6 +704,19 @@ components:
       schema:
         type: string
         example: usd
+
+    Periods:
+      name: periods
+      in: query
+      required: false
+      description: |
+        Comma-separated list of lookback periods for the `/change` endpoint.
+        Each value must be from the closed whitelist `{1h, 24h, 7d, 30d}`.
+        Default when omitted: `24h,7d,30d`. Order is preserved in the
+        response (duplicates are dropped).
+      schema:
+        type: string
+        example: "24h,7d,30d"
 
   responses:
     BadRequest:
@@ -892,13 +1004,96 @@ components:
               type: array
               items: { $ref: "#/components/schemas/ChartCandleVol" }
 
+    ChangePeriod:
+      type: object
+      description: |
+        One period's contribution to a `/change` response. All four
+        fields are nullable — when no anchor row falls inside the
+        period's tolerance window, all four are `null`. When the
+        anchor exists but is `0` (degenerate price), `from` and
+        `from_ts` stay populated but `delta_abs` and `change_pct`
+        are `null` so the client can distinguish "no history" from
+        "change undefined".
+      properties:
+        from_ts:
+          type: string
+          format: date-time
+          nullable: true
+          description: Bucket-start timestamp of the anchor row (UTC RFC3339), or `null` when missing.
+        from:
+          type: number
+          nullable: true
+          description: Anchor price (CA bucket close), 6 d.p., or `null`.
+        delta_abs:
+          type: number
+          nullable: true
+          description: "`now − from`, signed, 6 d.p. `null` when `from` is missing or zero."
+        change_pct:
+          type: number
+          nullable: true
+          description: "`(now − from) / from × 100`, signed, 6 d.p. `null` when `from` is missing or zero."
+
+    FTChangeForCurrency:
+      type: object
+      properties:
+        now:
+          type: number
+          nullable: true
+          description: Latest sample for this currency (matches `/latest`).
+        periods:
+          type: object
+          description: Map keyed by period code (`1h`, `24h`, `7d`, `30d`).
+          additionalProperties: { $ref: "#/components/schemas/ChangePeriod" }
+      required: [now, periods]
+
+    FTChangeResponse:
+      type: object
+      required: [token, as_of, currencies]
+      properties:
+        token:
+          type: string
+          example: mvrk
+        as_of:
+          type: string
+          format: date-time
+          description: |
+            `max(per-currency last_ts)`. Matches the snapshot semantics of
+            `/latest`. Per-currency `now` may be staler than `as_of` for
+            slow-tick currencies — read the per-currency value, not this
+            top-level timestamp, when reasoning about staleness.
+        currencies:
+          type: object
+          description: Map keyed by currency code (`usd`, `eur`, …).
+          additionalProperties: { $ref: "#/components/schemas/FTChangeForCurrency" }
+
+    RWAChangeResponse:
+      type: object
+      required: [symbol, native_quote, as_of, now, periods]
+      properties:
+        symbol:
+          type: string
+          example: mars1-usdt
+        native_quote:
+          type: string
+          example: usdt
+        as_of:
+          type: string
+          format: date-time
+        now:
+          type: number
+          nullable: true
+        periods:
+          type: object
+          description: Map keyed by period code (`1h`, `24h`, `7d`, `30d`).
+          additionalProperties: { $ref: "#/components/schemas/ChangePeriod" }
+
     ErrorResponse:
       type: object
       required: [code, message]
       properties:
         code:
           type: string
-          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, RANGE_NOT_SATISFIABLE, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED]
+          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, RANGE_NOT_SATISFIABLE, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED, NOT_IMPLEMENTED]
         message:
           type: string
           description: Client-safe message. Internal causes are NOT included; check server logs by `request_id` for the underlying error.

@@ -212,6 +212,47 @@ var (
 		},
 		[]string{"kind", "interval", "reason"},
 	)
+
+	// ChangeQueryDurationSeconds — wall time of one /change query end-to-end
+	// (cache lookups + optional repo round-trip + compose). Per (kind=fa|rwa,
+	// periods_count=1..4). periods_count is a closed enum (bounded by the
+	// Period whitelist), keeps cardinality predictable.
+	ChangeQueryDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "change_query_duration_seconds",
+			Help:    "Wall time of one price-change query, per kind+periods_count.",
+			Buckets: durationBuckets,
+		},
+		[]string{"kind", "periods_count"},
+	)
+
+	// ChangeQueryCacheHitsTotal — outcome of every cache slot consulted
+	// during a /change request. result is a closed enum:
+	//   `hit`                     — entry was present and unexpired
+	//   `miss`                    — entry was absent or expired
+	//   `singleflight_collapsed`  — the request joined an in-flight
+	//                               repo call for the same key (stampede
+	//                               protection observed it).
+	ChangeQueryCacheHitsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "change_query_cache_hits_total",
+			Help: "Cache slot outcomes per /change request, for hit-ratio dashboards.",
+		},
+		[]string{"kind", "result"},
+	)
+
+	// ChangeQueryErrorsTotal — counter of failed /change requests, by
+	// closed-enum classification. code is one of:
+	//   `invalid_period`, `invalid_currency`, `invalid_argument`,
+	//   `not_found`, `repo_error`, `internal`.
+	// User input is never echoed — labels stay bounded.
+	ChangeQueryErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "change_query_errors_total",
+			Help: "Failed /change requests by closed-enum reason.",
+		},
+		[]string{"kind", "code"},
+	)
 )
 
 // StatusClass returns 2xx, 4xx, or 5xx for HTTPResponsesTotal labelling.

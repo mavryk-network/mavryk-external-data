@@ -29,6 +29,8 @@ func HTTPStatus(code coreerrors.Code) int {
 		return http.StatusRequestedRangeNotSatisfiable
 	case coreerrors.CodeUnavailable:
 		return http.StatusServiceUnavailable
+	case coreerrors.CodeNotImplemented:
+		return http.StatusNotImplemented
 	case coreerrors.CodeInternal:
 		return http.StatusInternalServerError
 	default:
