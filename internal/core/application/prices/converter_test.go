@@ -13,9 +13,9 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// fakeFXSource is a minimal LatestFXSource for unit tests. Each Query
-// returns the configured points and increments hit counter so we can
-// observe cache effectiveness.
+// fakeFXSource is a minimal HistoricalFXSource for unit tests. Returns
+// the freshest configured point with `ts <= at`, mimicking the real
+// PK-index seek the production repo performs.
 type fakeFXSource struct {
 	mu      sync.Mutex
 	points  []prices.PricePoint
@@ -23,14 +23,37 @@ type fakeFXSource struct {
 	queries int32
 }
 
-func (f *fakeFXSource) Query(_ context.Context, _ prices.Query) ([]prices.PricePoint, error) {
+func (f *fakeFXSource) LatestRateAtOrBefore(
+	_ context.Context,
+	source prices.Source,
+	tokenSymbol string,
+	quoteCurrency string,
+	at time.Time,
+) (prices.PricePoint, bool, error) {
 	atomic.AddInt32(&f.queries, 1)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return nil, f.err
+		return prices.PricePoint{}, false, f.err
 	}
-	return f.points, nil
+	// Pick the freshest point matching (source, token, currency) with ts <= at.
+	var picked *prices.PricePoint
+	for i := range f.points {
+		p := f.points[i]
+		if p.Source != source || p.EntityKey != tokenSymbol || p.Metric != quoteCurrency {
+			continue
+		}
+		if p.Timestamp.After(at) {
+			continue
+		}
+		if picked == nil || p.Timestamp.After(picked.Timestamp) {
+			picked = &f.points[i]
+		}
+	}
+	if picked == nil {
+		return prices.PricePoint{}, false, nil
+	}
+	return *picked, true, nil
 }
 
 func registerFXTokens(t *testing.T) {
@@ -210,6 +233,81 @@ func TestConverter_CacheHit(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&source.queries); got != 1 {
 		t.Errorf("upstream queries = %d, want 1 (5 calls in same minute bucket)", got)
+	}
+}
+
+// TestConverter_HistoricalAtOrBefore proves Decision #19 — the converter
+// returns the rate at-or-before the requested ts, not "today's rate".
+// This used to be a known prod bug (fix_todo.md, 2026-05-03) where every
+// historical chart candle inherited today's FX rate.
+func TestConverter_HistoricalAtOrBefore(t *testing.T) {
+	registerFXTokens(t)
+	t1 := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	source := &fakeFXSource{
+		points: []prices.PricePoint{
+			{Source: prices.SourceCoinGecko, EntityKey: "usdt", Metric: "usd", Timestamp: t1, Price: decimal.NewFromFloat(1.0001)},
+			{Source: prices.SourceCoinGecko, EntityKey: "usdt", Metric: "usd", Timestamp: t2, Price: decimal.NewFromFloat(1.0005)},
+			{Source: prices.SourceCoinGecko, EntityKey: "usdt", Metric: "usd", Timestamp: t3, Price: decimal.NewFromFloat(0.9999)},
+		},
+	}
+	conv := NewTokenFXConverter(source, time.Hour, prices.SourceCoinGecko)
+
+	cases := []struct {
+		name     string
+		askAt    time.Time
+		wantRate decimal.Decimal
+		wantTS   time.Time
+	}{
+		{"at t1 exactly", t1, decimal.NewFromFloat(1.0001), t1},
+		{"between t1 and t2", t1.Add(7 * 24 * time.Hour), decimal.NewFromFloat(1.0001), t1},
+		{"at t2", t2, decimal.NewFromFloat(1.0005), t2},
+		{"after t3", t3.Add(time.Hour), decimal.NewFromFloat(0.9999), t3},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := conv.Convert(
+				context.Background(),
+				prices.Token("usdt"),
+				prices.Currency("usd"),
+				decimal.NewFromInt(100),
+				c.askAt,
+			)
+			if err != nil {
+				t.Fatalf("convert: %v", err)
+			}
+			if !res.Rate.Equal(c.wantRate) {
+				t.Errorf("rate = %s, want %s", res.Rate.String(), c.wantRate.String())
+			}
+			if !res.RateTS.Equal(c.wantTS) {
+				t.Errorf("rate_ts = %v, want %v", res.RateTS, c.wantTS)
+			}
+		})
+	}
+}
+
+// TestConverter_BeforeBackfill — asking for a rate before the earliest
+// known row returns ErrNoFXRate, not today's rate.
+func TestConverter_BeforeBackfill(t *testing.T) {
+	registerFXTokens(t)
+	source := &fakeFXSource{
+		points: []prices.PricePoint{
+			{Source: prices.SourceCoinGecko, EntityKey: "usdt", Metric: "usd",
+				Timestamp: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+				Price:     decimal.NewFromFloat(1.0)},
+		},
+	}
+	conv := NewTokenFXConverter(source, time.Hour, prices.SourceCoinGecko)
+	_, err := conv.Convert(
+		context.Background(),
+		prices.Token("usdt"),
+		prices.Currency("usd"),
+		decimal.NewFromInt(1),
+		time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), // way before the fixture
+	)
+	if !errors.Is(err, ErrNoFXRate) {
+		t.Errorf("err = %v, want ErrNoFXRate (no row at-or-before pre-backfill ts)", err)
 	}
 }
 

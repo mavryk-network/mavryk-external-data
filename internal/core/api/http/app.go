@@ -28,6 +28,10 @@ type AppDeps struct {
 	RWAPriceQuery   apiprices.QueryService
 	TokenPriceRepo  *repositories.TokenPriceRepository
 	RWAPriceRepo    *repositories.RWAPriceRepository // for chart endpoints
+	// TokenChangeRepo / RWAChangeRepo back the /change endpoints. Each
+	// runs a single SQL per request via the existing CAs; no new tables.
+	TokenChangeRepo *repositories.TokenChangeRepository
+	RWAChangeRepo   *repositories.RWAChangeRepository
 	// Optional, enables `?in=` multi-currency conversions on RWA endpoints.
 	// When either field is nil the handler rejects `?in=` with 400.
 	FXConverter apiprices.PriceConverter
@@ -137,6 +141,28 @@ func NewApp(deps AppDeps) *App {
 		MaxLimit:      cfg.Server.MaxQueryLimit,
 		DefaultLimit:  100,
 	}
+	// /change endpoints — per design Decision #5, one ChangeService per class
+	// (FT and RWA), each with its own ChangeCache and Kind label so metrics
+	// stay disambiguated. Service composes ChangeRepository + cache + singleflight.
+	// Converter (Decision #19, post-FX-fix) enables `?in=usd,eur,...` on the
+	// RWA change endpoint with at-or-before FX semantics.
+	changeDeps := handlers.ChangeDeps{
+		FTService: &apiprices.ChangeService{
+			Repo:  deps.TokenChangeRepo,
+			Cache: apiprices.NewChangeCache(),
+			Kind:  "fa",
+		},
+		RWAService: &apiprices.ChangeService{
+			Repo:  deps.RWAChangeRepo,
+			Cache: apiprices.NewChangeCache(),
+			Kind:  "rwa",
+		},
+		Lookup:          deps.Lookup,
+		Converter:       deps.FXConverter,
+		DefaultSource:   prices.SourceCoinGecko,
+		RWASource:       prices.SourceEquiteez,
+		MaxInCurrencies: cfg.Server.MaxInCurrencies,
+	}
 	SetupRoutes(router, RouterDeps{
 		DB:            deps.DB,
 		ReadinessGate: gate,
@@ -144,6 +170,7 @@ func NewApp(deps AppDeps) *App {
 		TokenCharts:   tokenChartsDeps,
 		RWAPrice:      rwaDeps,
 		RWACharts:     rwaChartsDeps,
+		Change:        changeDeps,
 	})
 
 	server := &http.Server{

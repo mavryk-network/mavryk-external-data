@@ -15,6 +15,7 @@ type RouterDeps struct {
 	TokenCharts   handlers.TokenChartDeps
 	RWAPrice      handlers.RWAPriceDeps
 	RWACharts     handlers.RWAChartDeps
+	Change        handlers.ChangeDeps
 }
 
 // SetupRoutes registers all routes on the given engine.
@@ -29,11 +30,13 @@ type RouterDeps struct {
 //	/v1/prices/:token         — list (range or latest)
 //	/v1/prices/:token/latest  — transposed snapshot
 //	/v1/prices/:token/count   — total row count
+//	/v1/prices/:token/change  — price change over 24h/7d/30d (see design doc)
 //	/v1/prices/:token/series  — line chart (see ADR-0015)
 //	/v1/prices/:token/ohlc    — OHLC candles
 //	/v1/prices/:token/ohlcv   — 501 stub until volume ingestion lands
 //	/v1/rwa/:symbol           — list (range or latest); symbol = {base}-{quote}
 //	/v1/rwa/:symbol/latest    — transposed snapshot
+//	/v1/rwa/:symbol/change    — price change over 24h/7d/30d (native quote only in v1)
 //	/v1/rwa/:symbol/series    — line chart (see ADR-0015)
 //	/v1/rwa/:symbol/ohlc      — OHLC candles
 //	/v1/rwa/:symbol/ohlcv     — 501 stub until volume ingestion lands
@@ -54,6 +57,7 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			ft.GET("/:token", deps.TokenPrice.ListByToken())
 			ft.GET("/:token/latest", deps.TokenPrice.LatestSnapshot())
 			ft.GET("/:token/count", deps.TokenPrice.Count())
+			ft.GET("/:token/change", deps.Change.ChangeFT())
 			// FA charts (see ADR-0015). /ohlcv is a 501 stub — the URL
 			// is registered from day one to freeze the contract.
 			ft.GET("/:token/series", deps.TokenCharts.Series())
@@ -64,6 +68,7 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 		{
 			rwa.GET("/:symbol", deps.RWAPrice.ListBySymbol())
 			rwa.GET("/:symbol/latest", deps.RWAPrice.LatestBySymbol())
+			rwa.GET("/:symbol/change", deps.Change.ChangeRWA())
 			// RWA charts (see ADR-0015). /ohlcv is the same 501 stub
 			// shared with the FA side — single source of truth.
 			rwa.GET("/:symbol/series", deps.RWACharts.Series())

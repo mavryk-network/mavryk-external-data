@@ -12,6 +12,7 @@ const (
 	CodeInternal            Code = "INTERNAL"
 	CodeUnavailable         Code = "UNAVAILABLE"
 	CodeRangeNotSatisfiable Code = "RANGE_NOT_SATISFIABLE"
+	CodeNotImplemented      Code = "NOT_IMPLEMENTED"
 )
 
 // Error is an application error safe to expose to HTTP clients (Message + Code only via responder).
@@ -64,6 +65,13 @@ func Internal(message string, cause error) *Error {
 // Unavailable marks dependency outage (HTTP 503).
 func Unavailable(message string) *Error {
 	return &Error{Code: CodeUnavailable, Message: message}
+}
+
+// NotImplemented marks an endpoint or option that is reserved at the URL
+// level but not yet wired (HTTP 501). Used by stubs that freeze the
+// contract before the backend lands.
+func NotImplemented(message string) *Error {
+	return &Error{Code: CodeNotImplemented, Message: message}
 }
 
 // RangeNotSatisfiable marks a request whose `from..to` window exceeds the

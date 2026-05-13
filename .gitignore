@@ -192,3 +192,10 @@ go.work
 
 # Air live reload
 tmp/
+.gstack/
+
+# Local build artifacts
+/quotes
+
+# Local-only working notes / specs
+notion_spec.txt

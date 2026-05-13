@@ -85,6 +85,9 @@ func run() int {
 	tokenRepo := repositories.NewTokenPriceRepository(db.DB).WithBatchSize(batch)
 	rwaRepo := repositories.NewRWAPriceRepository(db.DB).WithBatchSize(batch)
 	stateRepo := repositories.NewBackfillStateRepository(db.DB)
+	// Change repos for /change endpoints. Read-only; share the GORM handle.
+	tokenChangeRepo := repositories.NewTokenChangeRepository(db.DB)
+	rwaChangeRepo := repositories.NewRWAChangeRepository(db.DB)
 
 	// Application repositories: cache decorator on top, used by HTTP and by jobs
 	// (jobs write through, decorator invalidates).
@@ -93,9 +96,12 @@ func run() int {
 	rwaAppRepo := apiprices.NewCachedRepository(rwaRepoAdapter{rwaRepo}, cacheTTL)
 
 	// FX converter for RWA `?in=` multi-currency conversions. Reads from
-	// the same `token_prices` series the live job populates.
+	// the same `token_prices` series the live job populates. Honours the
+	// `ts` argument via at-or-before semantics — historical chart
+	// conversions get the rate that was current at bucket time, not
+	// today's rate (Decision #19; fix_todo.md).
 	fxConverter := apiprices.NewTokenFXConverter(
-		tokenRepoAdapter{tokenRepo},
+		fxRepoAdapter{tokenRepo},
 		time.Duration(cfg.Server.FXMaxStalenessSeconds)*time.Second,
 		prices.SourceCoinGecko,
 	)
@@ -108,6 +114,8 @@ func run() int {
 		RWAPriceQuery:   rwaAppRepo,
 		TokenPriceRepo:  tokenRepo,
 		RWAPriceRepo:    rwaRepo,
+		TokenChangeRepo: tokenChangeRepo,
+		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
 		Lookup:          lookup,
 	})
@@ -230,6 +238,23 @@ func (a tokenRepoAdapter) Save(ctx context.Context, points []prices.PricePoint) 
 }
 func (a tokenRepoAdapter) Query(ctx context.Context, q prices.Query) ([]prices.PricePoint, error) {
 	return a.r.Query(ctx, q)
+}
+
+// fxRepoAdapter satisfies apiprices.HistoricalFXSource without leaking the
+// concrete repository type into the application package. Forwards directly
+// to TokenPriceRepository.LatestRateAtOrBefore (Decision #19).
+type fxRepoAdapter struct {
+	r *repositories.TokenPriceRepository
+}
+
+func (a fxRepoAdapter) LatestRateAtOrBefore(
+	ctx context.Context,
+	source prices.Source,
+	tokenSymbol string,
+	quoteCurrency string,
+	at time.Time,
+) (prices.PricePoint, bool, error) {
+	return a.r.LatestRateAtOrBefore(ctx, source, tokenSymbol, quoteCurrency, at)
 }
 
 type rwaRepoAdapter struct {
