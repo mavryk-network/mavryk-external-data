@@ -97,11 +97,39 @@ jobs:
       - name: Lint OpenAPI spec
         run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
 
+  integration-tests:
+    name: Integration Tests (testcontainers)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Runs the //go:build integration test files in tests/integration/...
+    # which spin up a TimescaleDB testcontainer per package (see
+    # tests/integration/setup_test.go). Docker is preinstalled on
+    # ubuntu-latest; testcontainers-go uses it natively — no service
+    # container is needed.
+    #
+    # Independent of lint-build (no `needs:`) so the two jobs run in
+    # parallel. docker-publish gates on both via `needs:` below.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup and install
+        uses: ./.github/actions/setup-and-install
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Same command as `make test-integration` — kept inline so CI logs
+      # show the exact flags and timeout. -race catches concurrent
+      # singleflight/cache misuse the integration suite exercises.
+      - name: Run integration tests
+        run: go test -race -timeout 15m -tags=integration ./tests/integration/...
+
   docker-publish:
     name: Build and Publish Docker Image
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [lint-build, openapi-lint]
+    needs: [lint-build, openapi-lint, integration-tests]
     env:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       IMAGE_NAME: ${{ secrets.DOCKER_IMAGE_NAME }}

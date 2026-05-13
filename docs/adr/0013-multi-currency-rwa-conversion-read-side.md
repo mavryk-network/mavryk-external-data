@@ -111,3 +111,61 @@ infrastructure.
 - Metrics: `fx_conversion_duration_seconds`, `fx_conversions_total`
   (label `result`: success / identity / no_rate / unsupported_target /
   unregistered_source / query_error), `fx_stale_responses_total`.
+
+## Addendum (2026-05-12): converter now honours `ts` via at-or-before lookup
+
+The original `PriceConverter.Convert(token, target, amount, ts)` contract
+documented above said "looks up the latest `token_prices` row". The
+implementation went further and ignored `ts` entirely — it always
+returned `DISTINCT ON (currency) ORDER BY ts DESC` regardless of the
+caller's `ts`. This was fine for latest-snapshot endpoints (`?in=` on
+`/v1/rwa/{symbol}/latest`) where `ts ≈ time.Now()` and "latest" is what
+the caller wanted anyway. It was wrong for two paths the contract was
+later extended to:
+
+- Chart conversions (`/v1/rwa/{symbol}/series?in=` and `…/ohlc?in=`):
+  `applyFXToCandles` passes `bucket_close` as `ts`, expecting the FX
+  rate that was current at bucket time. Symptom: every historical
+  candle inherited today's rate (`fix_todo.md`, 2026-05-03 smoke).
+- Price-change `?in=` (`/v1/rwa/{symbol}/change?in=`): conversion of
+  the `now` value passes the actual `last(price).ts`, again expecting
+  the rate current at that timestamp.
+
+**Decision**: `tokenFXConverter.lookupRate` now uses
+`LatestRateAtOrBefore(ctx, source, token, currency, ts)` on every call.
+The new method is a single-row index seek on the existing
+`(token_symbol, source_code, quote_currency, ts)` PK — O(log n), no full
+scan, no new index. The "always at-or-before" alternative from
+`fix_todo.md` §2 is adopted (single code path, no historical/latest
+branching).
+
+**Contract compatibility**: callers that pass `time.Now()` (the latest
+path) still get the freshest row — `WHERE ts <= now() ORDER BY ts DESC
+LIMIT 1` returns exactly what `IsLatest` returned before. Existing
+unit tests pass without modification. Historical callers get the
+honest answer.
+
+**Edge case**: when no row exists at-or-before `ts` (asking before
+backfill), `LatestRateAtOrBefore` returns `(zero, false, nil)` and the
+converter surfaces `ErrNoFXRate`. The `?in=` flow already drops failed
+targets silently, so the behaviour at the wire is unchanged from
+"missing rate" — only the cause is sharper.
+
+**Stale flag**: `Stale = ts.Sub(rateTS) > maxStaleness` is now measured
+relative to the caller's `ts`, not `time.Now()`. For latest callers
+nothing changes; for historical callers this answers the honest
+question "how stale was the feed when the chart bucket closed?".
+
+**Test coverage**: `TestConverter_HistoricalAtOrBefore` (unit) and
+`TestLatestRateAtOrBefore_*` (integration, in `tests/integration/`)
+pin the new behaviour. The 2026-05-03 smoke from `fix_todo.md` is the
+end-to-end check — re-run on staging after deploy.
+
+**Interface rename**: the converter's source interface in
+`internal/core/application/prices/fx_converter.go` was renamed from
+`LatestFXSource` (one method, `Query`) to `HistoricalFXSource` (one
+method, `LatestRateAtOrBefore`) to reflect the new contract. Concrete
+impl is `TokenPriceRepository.LatestRateAtOrBefore`.
+
+Cross-reference: this addendum is part of the `feature/price-change`
+branch design doc (`Plan Amendments`, Decision #19).
