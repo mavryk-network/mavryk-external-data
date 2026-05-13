@@ -163,6 +163,9 @@ func NewApp(deps AppDeps) *App {
 		RWASource:       prices.SourceEquiteez,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
+	rwaPairsDeps := handlers.RWAPairsDeps{
+		Lookup: deps.Lookup,
+	}
 	SetupRoutes(router, RouterDeps{
 		DB:            deps.DB,
 		ReadinessGate: gate,
@@ -170,6 +173,7 @@ func NewApp(deps AppDeps) *App {
 		TokenCharts:   tokenChartsDeps,
 		RWAPrice:      rwaDeps,
 		RWACharts:     rwaChartsDeps,
+		RWAPairs:      rwaPairsDeps,
 		Change:        changeDeps,
 	})
 

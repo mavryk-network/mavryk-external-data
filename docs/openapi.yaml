@@ -44,6 +44,10 @@ tags:
       been enabled (see [ADR-0014](https://github.com/0xVoronov/mavryk-external-data/blob/main/docs/adr/0014-rwa-backfill-via-orderbook-order.md)).
       `/ohlcv` shares the same 501 stub as `charts-ft` until volume
       ingestion lands.
+  - name: discovery
+    description: |
+      Catalog endpoints for clients that need to know which entities are
+      available before querying the data endpoints.
 
 paths:
   /healthz:
@@ -576,6 +580,32 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/Internal" }
 
+  /v1/pairs/rwa:
+    get:
+      tags: [discovery]
+      summary: Catalog of enabled RWA pairs
+      description: |
+        Returns the list of enabled RWA pairs currently served by the API.
+        Use it to discover which `{base}-{quote}` symbols can be passed to
+        `/v1/rwa/{symbol}` and its sibling endpoints — clients construct
+        the symbol as `${base}-${quote}` (both already lowercase).
+
+        Order is stable: `(source, base, quote)` ascending. Disabled pairs
+        are never returned. Empty database returns `[]` (200), not 404.
+      operationId: listRWAPairs
+      responses:
+        "200":
+          description: Array of pair catalog entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RWAPairCatalogEntry" }
+              example:
+                - { base: mars1, quote: usdt, source: equiteez }
+                - { base: tst,   quote: usdt, source: equiteez }
+        "500": { $ref: "#/components/responses/Internal" }
+
 components:
   parameters:
     Token:
@@ -822,6 +852,26 @@ components:
           Converted price for a target currency from `?in=`.
           Key is the lowercase ISO-4217 code (`usd`, `eur`, `aed`, …).
           Rounded to 6 decimal places.
+
+    RWAPairCatalogEntry:
+      type: object
+      description: |
+        One enabled RWA pair, in the minimal shape needed to build a
+        `/v1/rwa/{symbol}` request. `symbol` is `${base}-${quote}`.
+      required: [base, quote, source]
+      properties:
+        base:
+          type: string
+          description: Lowercase base asset ticker (`rwa_pairs.base_symbol`).
+          example: mars1
+        quote:
+          type: string
+          description: Lowercase quote currency ticker (`rwa_pairs.quote_symbol`).
+          example: usdt
+        source:
+          type: string
+          description: Upstream provider code (matches `sources.code`).
+          example: equiteez
 
     Snapshot:
       type: object
