@@ -60,6 +60,26 @@ func (r *LookupRepository) RWAPairs(ctx context.Context) ([]prices.RWAPair, erro
 	return out, nil
 }
 
+// EnabledRWAPairs returns enabled rows from `rwa_pairs` sorted by
+// (source_code, base_symbol, quote_symbol). Backs the `/v1/pairs/rwa`
+// discovery endpoint — stable order matters for clients that diff the
+// catalog between polls.
+func (r *LookupRepository) EnabledRWAPairs(ctx context.Context) ([]prices.RWAPair, error) {
+	var rows []entities.RWAPairEntity
+	err := r.db.WithContext(ctx).
+		Where("enabled = ?", true).
+		Order("source_code, base_symbol, quote_symbol").
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("load enabled rwa_pairs: %w", err)
+	}
+	out := make([]prices.RWAPair, 0, len(rows))
+	for _, e := range rows {
+		out = append(out, entityToRWAPair(e))
+	}
+	return out, nil
+}
+
 // LookupRWAPair returns one pair by ID, or ErrPairNotFound.
 func (r *LookupRepository) LookupRWAPair(ctx context.Context, id int64) (prices.RWAPair, error) {
 	var e entities.RWAPairEntity

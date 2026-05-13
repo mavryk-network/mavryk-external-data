@@ -15,6 +15,7 @@ type RouterDeps struct {
 	TokenCharts   handlers.TokenChartDeps
 	RWAPrice      handlers.RWAPriceDeps
 	RWACharts     handlers.RWAChartDeps
+	RWAPairs      handlers.RWAPairsDeps
 	Change        handlers.ChangeDeps
 }
 
@@ -40,6 +41,7 @@ type RouterDeps struct {
 //	/v1/rwa/:symbol/series    — line chart (see ADR-0015)
 //	/v1/rwa/:symbol/ohlc      — OHLC candles
 //	/v1/rwa/:symbol/ohlcv     — 501 stub until volume ingestion lands
+//	/v1/pairs/rwa             — enabled RWA pair catalog (discovery)
 func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 	engine.GET("/healthz", handlers.Liveness())
 	engine.GET("/readyz", handlers.Readiness(deps.DB, deps.ReadinessGate))
@@ -74,6 +76,12 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			rwa.GET("/:symbol/series", deps.RWACharts.Series())
 			rwa.GET("/:symbol/ohlc", deps.RWACharts.OHLC())
 			rwa.GET("/:symbol/ohlcv", handlers.NotImplementedOHLCV())
+		}
+		// Discovery group. Lives outside /v1/rwa because gin's radix
+		// tree won't accept a static segment next to /rwa/:symbol.
+		pairs := v1.Group("/pairs")
+		{
+			pairs.GET("/rwa", deps.RWAPairs.List())
 		}
 	}
 }
