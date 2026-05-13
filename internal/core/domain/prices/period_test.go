@@ -52,26 +52,28 @@ func TestPeriodDuration(t *testing.T) {
 	}
 }
 
-func TestPeriodBackingCA(t *testing.T) {
+func TestPeriodStalenessBudget(t *testing.T) {
 	cases := []struct {
 		p    Period
-		want string
+		want time.Duration
+		ok   bool
 	}{
-		{Period1h, "_1m"},
-		{Period24h, "_1h"},
-		{Period7d, "_1d"},
-		{Period30d, "_1d"},
-		{Period(""), ""},
-		{Period("12h"), ""},
+		{Period1h, 6 * time.Minute, true},
+		{Period24h, 1 * time.Hour, true},
+		{Period7d, 12 * time.Hour, true},
+		{Period30d, 12 * time.Hour, true},
+		{Period(""), 0, false},
+		{Period("12h"), 0, false},
 	}
 	for _, c := range cases {
-		if got := c.p.BackingCA(); got != c.want {
-			t.Errorf("(%q).BackingCA() = %q, want %q", c.p, got, c.want)
+		got, ok := c.p.StalenessBudget()
+		if got != c.want || ok != c.ok {
+			t.Errorf("(%q).StalenessBudget() = (%v,%v), want (%v,%v)", c.p, got, ok, c.want, c.ok)
 		}
 	}
 }
 
-func TestPeriodToleranceWindow(t *testing.T) {
+func TestPeriodAnchorWindow(t *testing.T) {
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
 		p   Period
@@ -80,21 +82,57 @@ func TestPeriodToleranceWindow(t *testing.T) {
 		ok  bool
 		msg string
 	}{
-		{Period1h, now.Add(-66 * time.Minute), now.Add(-60 * time.Minute), true, "1h: 6-minute slack"},
-		{Period24h, now.Add(-25 * time.Hour), now.Add(-24 * time.Hour), true, "24h: 1-hour slack"},
-		{Period7d, now.Add(-7*24*time.Hour - 12*time.Hour), now.Add(-7 * 24 * time.Hour), true, "7d: 12-hour slack"},
-		{Period30d, now.Add(-30*24*time.Hour - 12*time.Hour), now.Add(-30 * 24 * time.Hour), true, "30d: 12-hour slack"},
-		{Period(""), time.Time{}, time.Time{}, false, "zero period"},
-		{Period("12h"), time.Time{}, time.Time{}, false, "unknown period"},
+		{
+			p:   Period1h,
+			lo:  now.Add(-1 * time.Hour).Add(-6 * time.Minute),
+			hi:  now.Add(-1 * time.Hour),
+			ok:  true,
+			msg: "1h: hi=now-1h, 6m staleness",
+		},
+		{
+			p:   Period24h,
+			lo:  now.Add(-24 * time.Hour).Add(-1 * time.Hour),
+			hi:  now.Add(-24 * time.Hour),
+			ok:  true,
+			msg: "24h: hi=now-24h, 1h staleness",
+		},
+		{
+			p:   Period7d,
+			lo:  now.Add(-7 * 24 * time.Hour).Add(-12 * time.Hour),
+			hi:  now.Add(-7 * 24 * time.Hour),
+			ok:  true,
+			msg: "7d: hi=now-7d, 12h staleness",
+		},
+		{
+			p:   Period30d,
+			lo:  now.Add(-30 * 24 * time.Hour).Add(-12 * time.Hour),
+			hi:  now.Add(-30 * 24 * time.Hour),
+			ok:  true,
+			msg: "30d: hi=now-30d, 12h staleness",
+		},
+		{p: Period(""), ok: false, msg: "zero period"},
+		{p: Period("12h"), ok: false, msg: "unknown period"},
 	}
 	for _, c := range cases {
-		lo, hi, ok := c.p.ToleranceWindow(now)
-		if !lo.Equal(c.lo) || !hi.Equal(c.hi) || ok != c.ok {
-			t.Errorf("%s: (%q).ToleranceWindow(now) = (%v,%v,%v), want (%v,%v,%v)",
-				c.msg, c.p, lo, hi, ok, c.lo, c.hi, c.ok)
+		lo, hi, ok := c.p.AnchorWindow(now)
+		if ok != c.ok {
+			t.Errorf("%s: ok = %v, want %v", c.msg, ok, c.ok)
+			continue
 		}
-		if ok && !lo.Before(hi) {
+		if !ok {
+			continue
+		}
+		if !lo.Equal(c.lo) || !hi.Equal(c.hi) {
+			t.Errorf("%s: (lo,hi) = (%v,%v), want (%v,%v)", c.msg, lo, hi, c.lo, c.hi)
+		}
+		if !lo.Before(hi) {
 			t.Errorf("%s: lo (%v) must be before hi (%v)", c.msg, lo, hi)
+		}
+		// Symmetry check: hi must equal exactly now - period.
+		dur, _ := c.p.Duration()
+		if !hi.Equal(now.Add(-dur)) {
+			t.Errorf("%s: hi (%v) must equal now-period (%v) for symmetric anchor semantics",
+				c.msg, hi, now.Add(-dur))
 		}
 	}
 }

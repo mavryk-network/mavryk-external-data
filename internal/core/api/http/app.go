@@ -144,6 +144,8 @@ func NewApp(deps AppDeps) *App {
 	// /change endpoints — per design Decision #5, one ChangeService per class
 	// (FT and RWA), each with its own ChangeCache and Kind label so metrics
 	// stay disambiguated. Service composes ChangeRepository + cache + singleflight.
+	// Converter (Decision #19, post-FX-fix) enables `?in=usd,eur,...` on the
+	// RWA change endpoint with at-or-before FX semantics.
 	changeDeps := handlers.ChangeDeps{
 		FTService: &apiprices.ChangeService{
 			Repo:  deps.TokenChangeRepo,
@@ -155,9 +157,11 @@ func NewApp(deps AppDeps) *App {
 			Cache: apiprices.NewChangeCache(),
 			Kind:  "rwa",
 		},
-		Lookup:        deps.Lookup,
-		DefaultSource: prices.SourceCoinGecko,
-		RWASource:     prices.SourceEquiteez,
+		Lookup:          deps.Lookup,
+		Converter:       deps.FXConverter,
+		DefaultSource:   prices.SourceCoinGecko,
+		RWASource:       prices.SourceEquiteez,
+		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
 	SetupRoutes(router, RouterDeps{
 		DB:            deps.DB,

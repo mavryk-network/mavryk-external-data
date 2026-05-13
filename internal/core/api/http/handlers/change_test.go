@@ -253,23 +253,84 @@ func TestChangeRWA_HappyPath_NativeQuoteOnly(t *testing.T) {
 	}
 }
 
-func TestChangeRWA_InRejected_501NotImplemented(t *testing.T) {
+func TestChangeRWA_InEnabled_ConvertsNow(t *testing.T) {
+	// Decision #19 — RWA /change ?in= is wired now that the FX converter
+	// honours at-or-before semantics. The handler should request a
+	// conversion and surface the converted price as a flat top-level key.
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	now := time.Now().UTC().Truncate(time.Second)
+	pair := prices.RWAPair{ID: 42, BaseSymbol: "mars1", QuoteSymbol: "usdt"}
+	repo := &stubChangeRepo{
+		res: apiprices.ChangeRepoResult{
+			Now: []apiprices.ChangeNow{{Currency: "usdt", Price: decimal.RequireFromString("100"), TS: now, Found: true}},
+			Anchors: []apiprices.ChangeAnchor{
+				{Currency: "usdt", Period: prices.Period24h, Price: decimal.RequireFromString("99"), Bucket: now.Add(-24 * time.Hour), Found: true},
+			},
+		},
+	}
+	conv := &stubConverter{result: apiprices.ConversionResult{Rate: decimal.RequireFromString("1.0001")}}
+	deps := ChangeDeps{
+		RWAService:      &apiprices.ChangeService{Repo: repo, Cache: apiprices.NewChangeCache(), Kind: "rwa"},
+		Lookup:          &stubLookup{pair: pair},
+		Converter:       conv,
+		RWASource:       prices.SourceEquiteez,
+		MaxInCurrencies: 10,
+	}
+	r := newChangeEngine(t, deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt/change?in=usd&periods=24h", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if conv.calls == 0 {
+		t.Errorf("expected at least 1 conversion call for ?in=usd")
+	}
+	// `usd` should appear as a flat top-level key in the response
+	// (matches /v1/rwa/:symbol/latest convention).
+	body := w.Body.String()
+	if !strings.Contains(body, `"usd":`) {
+		t.Errorf("expected `\"usd\":` in flat response, got: %s", body)
+	}
+}
+
+func TestChangeRWA_InRejected_BadCurrency_400(t *testing.T) {
 	pair := prices.RWAPair{ID: 42, BaseSymbol: "mars1", QuoteSymbol: "usdt"}
 	deps := ChangeDeps{
 		RWAService: &apiprices.ChangeService{Repo: &stubChangeRepo{}, Cache: apiprices.NewChangeCache(), Kind: "rwa"},
 		Lookup:     &stubLookup{pair: pair},
+		Converter:  &stubConverter{},
 		RWASource:  prices.SourceEquiteez,
 	}
 	r := newChangeEngine(t, deps)
 
+	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt/change?in=zzz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestChangeRWA_InWithoutConverter_400(t *testing.T) {
+	// When the server is wired without an FX converter, `?in=` must 400
+	// (don't silently swallow the request).
+	pair := prices.RWAPair{ID: 42, BaseSymbol: "mars1", QuoteSymbol: "usdt"}
+	deps := ChangeDeps{
+		RWAService: &apiprices.ChangeService{Repo: &stubChangeRepo{}, Cache: apiprices.NewChangeCache(), Kind: "rwa"},
+		Lookup:     &stubLookup{pair: pair},
+		Converter:  nil,
+		RWASource:  prices.SourceEquiteez,
+	}
+	r := newChangeEngine(t, deps)
 	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt/change?in=usd", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusNotImplemented {
-		t.Errorf("status = %d, want 501", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "NOT_IMPLEMENTED") {
-		t.Errorf("body should contain NOT_IMPLEMENTED, got %s", w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
 

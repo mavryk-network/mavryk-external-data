@@ -128,6 +128,43 @@ func (r *TokenPriceRepository) latestPerMetric(ctx context.Context, q prices.Que
 	return out, nil
 }
 
+// LatestRateAtOrBefore returns the freshest token_prices row for the
+// (token, source, currency) tuple whose `ts` is at or before `at`.
+// Returns (PricePoint{}, false, nil) when no such row exists — typically
+// because the request asks for a timestamp before the backfill window.
+//
+// Implementation: a single-row index seek on the PK
+// `(token_symbol, source_code, quote_currency, ts)`. O(log n), no full
+// scan. Used by the FX converter (Decision #19 in the price-change
+// design doc / `fix_todo.md`) to honour the `ts` argument it has
+// always accepted but was previously ignoring.
+func (r *TokenPriceRepository) LatestRateAtOrBefore(
+	ctx context.Context,
+	source prices.Source,
+	tokenSymbol string,
+	quoteCurrency string,
+	at time.Time,
+) (prices.PricePoint, bool, error) {
+	var rows []entities.TokenPriceEntity
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT token_symbol, source_code, quote_currency, ts, price
+		   FROM token_prices
+		  WHERE token_symbol = ? AND source_code = ? AND quote_currency = ?
+		    AND ts <= ?
+		  ORDER BY ts DESC
+		  LIMIT 1`,
+		tokenSymbol, string(source), quoteCurrency, at.UTC(),
+	).Scan(&rows).Error
+	if err != nil {
+		return prices.PricePoint{}, false, fmt.Errorf("latest rate at-or-before: %w", err)
+	}
+	if len(rows) == 0 {
+		return prices.PricePoint{}, false, nil
+	}
+	p := tokenEntitiesToPoints(rows[:1], source)[0]
+	return p, true, nil
+}
+
 // Count returns the total row count for (token, source) — used by /count endpoint.
 func (r *TokenPriceRepository) Count(ctx context.Context, source prices.Source, tokenSymbol string) (int64, error) {
 	var n int64

@@ -31,17 +31,17 @@ func NewTokenChangeRepository(db *gorm.DB) *TokenChangeRepository {
 	return &TokenChangeRepository{db: db}
 }
 
-// GetChange runs one SQL per request: a UNION ALL across (1) the "now"
-// branch reading raw token_prices, and (2) one anchor branch per period
-// reading the appropriate continuous aggregate. Each branch returns at
-// most one row per currency (DISTINCT ON quote_currency, ORDER BY
-// quote_currency, ts/bucket DESC) so the row count is bounded by
-// len(currencies) × (1 + len(periods)).
+// GetChange runs one SQL per request: a UNION ALL across the "now"
+// branch and one anchor branch per period. Both kinds of branch read
+// the SAME raw `token_prices` table (Decision #18) so `now` and anchor
+// have symmetric semantics — both are "latest sample at-or-before the
+// reference timestamp". CAs are not used here; the existing PK index
+// `(token_symbol, source_code, quote_currency, ts)` makes each branch
+// a single index seek (DISTINCT ON ... ORDER BY ts DESC).
 //
+// Row count is bounded by len(currencies) × (1 + len(periods)).
 // All filter values flow through prepared-statement parameters; no
-// user-controlled string ever touches the SQL body. The CA view names
-// come from a closed enum (Period.BackingCA()) and are safe to
-// fmt.Sprintf into the query.
+// user-controlled string ever touches the SQL body.
 func (r *TokenChangeRepository) GetChange(ctx context.Context, q apiprices.ChangeQuery) (apiprices.ChangeRepoResult, error) {
 	if len(q.Currencies) == 0 || len(q.Periods) == 0 {
 		// Defensive: ChangeService.preflight rejects these. If we get here
@@ -105,30 +105,27 @@ FROM (
 	args = append(args, q.EntityKey, string(q.Source))
 	args = append(args, curArgs...)
 
-	// One UNION ALL branch per period.
+	// One UNION ALL branch per period — same raw table, different ts window
+	// per Decision #18. hi = now-period (at-or-before semantics);
+	// lo = now-period-staleness (prevents pulling year-old anchors).
 	for _, period := range q.Periods {
-		ca := period.BackingCA()
-		if ca == "" {
-			return "", nil, fmt.Errorf("period %q has no backing CA — preflight should have caught this", period)
-		}
-		lo, hi, ok := period.ToleranceWindow(q.Now)
+		lo, hi, ok := period.AnchorWindow(q.Now)
 		if !ok {
-			return "", nil, fmt.Errorf("period %q has no tolerance window", period)
+			return "", nil, fmt.Errorf("period %q has no anchor window", period)
 		}
-		view := "token_prices" + ca // closed enum from Period.BackingCA — safe to interpolate
 		sql.WriteString(fmt.Sprintf(`
 UNION ALL
-SELECT ?::text, quote_currency, bucket AS observed_ts, close_price AS price
+SELECT ?::text, quote_currency, observed_ts, price
 FROM (
     SELECT DISTINCT ON (quote_currency)
            quote_currency,
-           bucket,
-           close_price
-      FROM %s
+           ts          AS observed_ts,
+           price
+      FROM token_prices
      WHERE token_symbol = ? AND source_code = ? AND quote_currency IN (%s)
-       AND bucket >= ? AND bucket <= ?
-     ORDER BY quote_currency, bucket DESC
-) a`, view, inFrag))
+       AND ts >= ? AND ts <= ?
+     ORDER BY quote_currency, ts DESC
+) a`, inFrag))
 		args = append(args, string(period), q.EntityKey, string(q.Source))
 		args = append(args, curArgs...)
 		args = append(args, lo.UTC(), hi.UTC())

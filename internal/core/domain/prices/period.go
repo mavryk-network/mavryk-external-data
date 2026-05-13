@@ -63,57 +63,59 @@ func (p Period) Duration() (time.Duration, bool) {
 	}
 }
 
-// BackingCA returns the continuous-aggregate suffix used to look up the
-// anchor price for this period. The mapping picks a CA whose bucket width
-// is meaningfully smaller than the period itself, so the anchor is
-// representative of "Δ ago" within ≤ one bucket of error:
+// StalenessBudget returns the maximum acceptable age (relative to `now-period`)
+// of the at-or-before anchor sample. The repository scans raw `token_prices` /
+// `rwa_quote_prices` (not CAs) and picks the latest row whose `ts` is
+// in `[now-period-staleness, now-period]`. If no row falls in that window
+// the period returns a `Found=false` anchor and the wire renders nulls
+// (Decision #3 / #18).
 //
-//	1h  → "_1m"   (1m buckets, ≤1m error on a 60m span)
-//	24h → "_1h"   (1h buckets, ≤1h error on a 24h span)
-//	7d  → "_1d"   (1d buckets, ≤24h error on a 7d span)
-//	30d → "_1d"   (1d buckets, ≤24h error on a 30d span)
+// Why per-period staleness:
+//   - 1h period over 1m-cadence data: 6 min covers a brief outage without
+//     letting a stale 30-min-old anchor pretend to be "1h ago".
+//   - 24h period: 1h slack absorbs ingestion lag and CoinGecko hiccups but
+//     keeps the anchor inside the same trading session.
+//   - 7d / 30d: 12h slack is generous because daily candles are noisy on
+//     thin pairs; one missed day shouldn't blank the period.
 //
-// The empty string for unknown values is intentional — repositories
-// switch on it and return a typed error; we never silently default.
-func (p Period) BackingCA() string {
+// Returns ok=false for unknown periods.
+func (p Period) StalenessBudget() (time.Duration, bool) {
 	switch p {
 	case Period1h:
-		return "_1m"
+		return 6 * time.Minute, true
 	case Period24h:
-		return "_1h"
-	case Period7d, Period30d:
-		return "_1d"
+		return 1 * time.Hour, true
+	case Period7d:
+		return 12 * time.Hour, true
+	case Period30d:
+		return 12 * time.Hour, true
 	default:
-		return ""
+		return 0, false
 	}
 }
 
-// ToleranceWindow returns the [low, high] bracket of bucket-start
-// timestamps to scan for the closest-before anchor, relative to `now`.
-// `now - high` is always ≤ now-Δ; `now - low` is the loosest acceptable
-// staleness. The 1h slot includes a one-extra-bucket grace because the
-// _1m CA has end_offset=1m and may not have materialised the now-60m
-// bucket yet at the start of a fresh minute.
+// AnchorWindow returns the [lo, hi] timestamp bracket for the at-or-before
+// anchor sample, where:
 //
-//	1h:  [now-66m,         now-60m]
-//	24h: [now-25h,         now-24h]
-//	7d:  [now-7d12h,       now-7d]
-//	30d: [now-30d12h,      now-30d]
+//	hi = now − period
+//	lo = now − period − staleness
+//
+// Repositories scan raw price tables filtered by `ts >= lo AND ts <= hi`
+// and ORDER BY ts DESC LIMIT 1 to get the latest sample no later than
+// `now-period`. The lower bound prevents the query from pulling a
+// year-old sample after a long ingestion gap — an absent anchor maps
+// to JSON null per Decision #3.
 //
 // Returns ok=false for unknown periods.
-func (p Period) ToleranceWindow(now time.Time) (lo, hi time.Time, ok bool) {
-	switch p {
-	case Period1h:
-		return now.Add(-66 * time.Minute), now.Add(-60 * time.Minute), true
-	case Period24h:
-		return now.Add(-25 * time.Hour), now.Add(-24 * time.Hour), true
-	case Period7d:
-		return now.Add(-7*24*time.Hour - 12*time.Hour), now.Add(-7 * 24 * time.Hour), true
-	case Period30d:
-		return now.Add(-30*24*time.Hour - 12*time.Hour), now.Add(-30 * 24 * time.Hour), true
-	default:
+func (p Period) AnchorWindow(now time.Time) (lo, hi time.Time, ok bool) {
+	dur, dok := p.Duration()
+	stale, sok := p.StalenessBudget()
+	if !dok || !sok {
 		return time.Time{}, time.Time{}, false
 	}
+	hi = now.Add(-dur)
+	lo = hi.Add(-stale)
+	return lo, hi, true
 }
 
 // String implements fmt.Stringer and is the canonical wire form.

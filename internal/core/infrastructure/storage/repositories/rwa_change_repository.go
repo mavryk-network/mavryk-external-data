@@ -39,10 +39,13 @@ func NewRWAChangeRepository(db *gorm.DB) *RWAChangeRepository {
 }
 
 // GetChange runs one SQL per request: a UNION ALL across the "now"
-// branch (raw rwa_quote_prices) plus one anchor branch per period
-// (rwa_quote_prices_{1m|1h|1d}). Each branch returns at most one row
-// (DISTINCT ON (side) — but the metric filter is pinned to a single side,
-// so it's effectively `LIMIT 1`).
+// branch and one anchor branch per period. Both kinds of branch read
+// the SAME raw `rwa_quote_prices` table (Decision #18). CAs are not
+// used here; the existing PK index `(pair_id, side, ts)` makes each
+// branch a single index seek (ORDER BY ts DESC LIMIT 1).
+//
+// Each branch returns at most one row (`side` is pinned to a single
+// value, ts ordering does the rest).
 func (r *RWAChangeRepository) GetChange(ctx context.Context, q apiprices.ChangeQuery) (apiprices.ChangeRepoResult, error) {
 	if len(q.Currencies) == 0 || len(q.Periods) == 0 {
 		return apiprices.ChangeRepoResult{}, nil
@@ -108,26 +111,21 @@ FROM (
 	args = append(args, pid, side)
 
 	for _, period := range q.Periods {
-		ca := period.BackingCA()
-		if ca == "" {
-			return "", nil, fmt.Errorf("period %q has no backing CA — preflight should have caught this", period)
-		}
-		lo, hi, ok := period.ToleranceWindow(q.Now)
+		lo, hi, ok := period.AnchorWindow(q.Now)
 		if !ok {
-			return "", nil, fmt.Errorf("period %q has no tolerance window", period)
+			return "", nil, fmt.Errorf("period %q has no anchor window", period)
 		}
-		view := "rwa_quote_prices" + ca // closed enum from Period.BackingCA — safe to interpolate
-		sql.WriteString(fmt.Sprintf(`
+		sql.WriteString(`
 UNION ALL
-SELECT ?::text, bucket AS observed_ts, close_price AS price
+SELECT ?::text, observed_ts, price
 FROM (
-    SELECT bucket, close_price
-      FROM %s
+    SELECT ts AS observed_ts, price
+      FROM rwa_quote_prices
      WHERE pair_id = ? AND side = ?
-       AND bucket >= ? AND bucket <= ?
-     ORDER BY bucket DESC
+       AND ts >= ? AND ts <= ?
+     ORDER BY ts DESC
      LIMIT 1
-) a`, view))
+) a`)
 		args = append(args, string(period), pid, side, lo.UTC(), hi.UTC())
 	}
 

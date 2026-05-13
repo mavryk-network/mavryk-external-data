@@ -25,18 +25,22 @@ func TestBuildTokenChangeSQL_StructureAndParamCount(t *testing.T) {
 		t.Fatalf("buildTokenChangeSQL: %v", err)
 	}
 
-	// Structural checks — the assertion stays loose so cosmetic SQL
-	// reformatting doesn't break the test.
+	// All branches read raw `token_prices` (Decision #18 — no CA suffixes).
 	for _, want := range []string{
 		"FROM token_prices",
-		"FROM token_prices_1h",
-		"FROM token_prices_1d",
 		"DISTINCT ON (quote_currency)",
 		"UNION ALL",
 		"'now'::text",
+		"ts >= ? AND ts <= ?",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("SQL missing %q in:\n%s", want, sql)
+		}
+	}
+	// Negative assertions: no CA references should remain.
+	for _, banned := range []string{"token_prices_1m", "token_prices_1h", "token_prices_1d", "close_price", "bucket"} {
+		if strings.Contains(sql, banned) {
+			t.Errorf("SQL must not reference %q (Decision #18 — raw only):\n%s", banned, sql)
 		}
 	}
 
@@ -53,7 +57,7 @@ func TestBuildTokenChangeSQL_StructureAndParamCount(t *testing.T) {
 	}
 }
 
-func TestBuildTokenChangeSQL_AllFourPeriods(t *testing.T) {
+func TestBuildTokenChangeSQL_AllFourPeriods_AnchorWindow(t *testing.T) {
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	q := apiprices.ChangeQuery{
 		Source:     prices.SourceCoinGecko,
@@ -66,27 +70,21 @@ func TestBuildTokenChangeSQL_AllFourPeriods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildTokenChangeSQL: %v", err)
 	}
-	for _, view := range []string{"token_prices_1m", "token_prices_1h", "token_prices_1d"} {
-		if !strings.Contains(sql, view) {
-			t.Errorf("expected %s reference in SQL", view)
-		}
+	// Single source table, 5 references (1 now + 4 anchors).
+	if got := strings.Count(sql, "FROM token_prices"); got != 5 {
+		t.Errorf("FROM token_prices count = %d, want 5 (1 now + 4 periods)", got)
 	}
-	// 1h → _1m, 24h → _1h, 7d/30d → _1d
-	if strings.Count(sql, "FROM token_prices_1d") != 2 {
-		t.Errorf("expected 2 references to token_prices_1d (7d + 30d), got %d", strings.Count(sql, "FROM token_prices_1d"))
-	}
-
-	// Defensive: confirm window bounds make it into args. Last 2 args of
-	// the 30d branch should be -30d12h and -30d.
+	// Confirm the anchor window args make it through for the LAST period (30d).
+	// Per period the trailing pair is (lo, hi); 30d is the last branch.
 	hi30 := args[len(args)-1].(time.Time)
 	lo30 := args[len(args)-2].(time.Time)
 	wantHi30 := now.Add(-30 * 24 * time.Hour).UTC()
 	wantLo30 := now.Add(-30*24*time.Hour - 12*time.Hour).UTC()
 	if !hi30.Equal(wantHi30) {
-		t.Errorf("30d hi = %v, want %v", hi30, wantHi30)
+		t.Errorf("30d hi = %v, want %v (now-30d, at-or-before semantics)", hi30, wantHi30)
 	}
 	if !lo30.Equal(wantLo30) {
-		t.Errorf("30d lo = %v, want %v", lo30, wantLo30)
+		t.Errorf("30d lo = %v, want %v (now-30d-12h staleness)", lo30, wantLo30)
 	}
 }
 
