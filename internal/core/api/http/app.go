@@ -166,6 +166,16 @@ func NewApp(deps AppDeps) *App {
 	rwaPairsDeps := handlers.RWAPairsDeps{
 		Lookup: deps.Lookup,
 	}
+	// Legacy /quotes — restored for downstream services that still pin to
+	// the v0.1.0 wide-format route. MVRK + CoinGecko only by design;
+	// hard-coded rather than registry-looked-up so a missing tokens row
+	// doesn't break server startup.
+	legacyQuotesDeps := handlers.LegacyQuotesDeps{
+		Repo:        repositories.NewLegacyQuoteRepository(deps.DB),
+		TokenSymbol: "mvrk",
+		SourceCode:  string(prices.SourceCoinGecko),
+		MaxLimit:    cfg.Server.MaxQueryLimit,
+	}
 	SetupRoutes(router, RouterDeps{
 		DB:            deps.DB,
 		ReadinessGate: gate,
@@ -175,6 +185,7 @@ func NewApp(deps AppDeps) *App {
 		RWACharts:     rwaChartsDeps,
 		RWAPairs:      rwaPairsDeps,
 		Change:        changeDeps,
+		LegacyQuotes:  legacyQuotesDeps,
 	})
 
 	server := &http.Server{

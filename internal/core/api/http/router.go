@@ -17,6 +17,7 @@ type RouterDeps struct {
 	RWACharts     handlers.RWAChartDeps
 	RWAPairs      handlers.RWAPairsDeps
 	Change        handlers.ChangeDeps
+	LegacyQuotes  handlers.LegacyQuotesDeps
 }
 
 // SetupRoutes registers all routes on the given engine.
@@ -28,6 +29,7 @@ type RouterDeps struct {
 //	/metrics                 — Prometheus
 //	/openapi.yaml            — embedded OpenAPI 3.0 spec
 //	/docs                    — Swagger UI loading /openapi.yaml
+//	/quotes                  — legacy v0.1.0 wide-format MVRK quotes
 //	/v1/prices/:token         — list (range or latest)
 //	/v1/prices/:token/latest  — transposed snapshot
 //	/v1/prices/:token/count   — total row count
@@ -45,6 +47,10 @@ type RouterDeps struct {
 func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 	engine.GET("/healthz", handlers.Liveness())
 	engine.GET("/readyz", handlers.Readiness(deps.DB, deps.ReadinessGate))
+
+	// Legacy v0.1.0 wide-format MVRK quotes. Kept alive outside /v1 for
+	// downstream services that still call the old route.
+	engine.GET("/quotes", deps.LegacyQuotes.LegacyQuotes())
 
 	// Static OpenAPI 3.0 spec + Swagger UI shell. Both bytes are embedded at
 	// compile time via docs.OpenAPIYAML / docs.SwaggerUIHTML.
