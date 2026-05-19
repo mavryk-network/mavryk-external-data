@@ -13,6 +13,8 @@ const (
 	CodeUnavailable         Code = "UNAVAILABLE"
 	CodeRangeNotSatisfiable Code = "RANGE_NOT_SATISFIABLE"
 	CodeNotImplemented      Code = "NOT_IMPLEMENTED"
+	CodeUnauthorized        Code = "UNAUTHORIZED"
+	CodeForbidden           Code = "FORBIDDEN"
 )
 
 // Error is an application error safe to expose to HTTP clients (Message + Code only via responder).
@@ -79,6 +81,21 @@ func NotImplemented(message string) *Error {
 // InvalidArgument so clients can render "narrow your range" UX.
 func RangeNotSatisfiable(message string) *Error {
 	return &Error{Code: CodeRangeNotSatisfiable, Message: message}
+}
+
+// Unauthorized marks a missing or invalid Bearer credential (HTTP 401).
+// Used by the MBIO JWT middleware on /v1/rwa/* and /v1/pairs/rwa for public-listener
+// requests that fail signature/issuer/audience/expiry checks. Internal-listener
+// traffic never sees this — the middleware is only mounted on the public engine.
+func Unauthorized(message string) *Error {
+	return &Error{Code: CodeUnauthorized, Message: message}
+}
+
+// Forbidden marks an authenticated request that lacks the required claim shape
+// (HTTP 403). Distinct from Unauthorized so clients can tell "log in" from
+// "your token is fine but your account can't do this".
+func Forbidden(message string) *Error {
+	return &Error{Code: CodeForbidden, Message: message}
 }
 
 // Wrap builds an error with an explicit code (use when none of the helpers fit).

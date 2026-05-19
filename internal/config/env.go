@@ -13,6 +13,9 @@ func overrideWithEnv(config *Config) error {
 	if port := os.Getenv("SERVER_PORT"); port != "" {
 		config.Server.Port = port
 	}
+	if port := os.Getenv("SERVER_INTERNAL_PORT"); port != "" {
+		config.Server.InternalPort = port
+	}
 	if host := os.Getenv("SERVER_HOST"); host != "" {
 		config.Server.Host = host
 	}
@@ -286,6 +289,36 @@ func overrideWithEnv(config *Config) error {
 			return fmt.Errorf("RWA_CONCURRENCY: invalid int %q: %w", v, err)
 		}
 		config.RWA.Concurrency = val
+	}
+
+	if v := os.Getenv("AUTH_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("AUTH_ENABLED: invalid bool %q: %w", v, err)
+		}
+		config.Auth.Enabled = &val
+	}
+	if v := os.Getenv("AUTH_MBIO_API_GATEWAY_BASE_URL"); v != "" {
+		config.Auth.MBIOAPIGatewayBaseURL = v
+	}
+	if v := os.Getenv("AUTH_MBIO_JWT_BASE_URL"); v != "" {
+		config.Auth.MBIOJWTBaseURL = v
+	}
+	if v := os.Getenv("AUTH_MBIO_JWT_ISSUER"); v != "" {
+		config.Auth.MBIOJWTIssuer = v
+	}
+	if v := os.Getenv("AUTH_MBIO_JWT_AUDIENCE"); v != "" {
+		config.Auth.MBIOJWTAudience = v
+	}
+	if v := os.Getenv("AUTH_JWKS_CACHE_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("AUTH_JWKS_CACHE_TTL: invalid duration %q: %w", v, err)
+		}
+		config.Auth.JWKSCacheTTL = d
+	}
+	if v := os.Getenv("AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY"); v != "" {
+		config.Auth.JWTLocalVerifyPublicKeyBase64 = v
 	}
 	return nil
 }

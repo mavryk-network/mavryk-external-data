@@ -21,6 +21,10 @@ func HTTPStatus(code coreerrors.Code) int {
 	switch code {
 	case coreerrors.CodeInvalidArgument:
 		return http.StatusBadRequest
+	case coreerrors.CodeUnauthorized:
+		return http.StatusUnauthorized
+	case coreerrors.CodeForbidden:
+		return http.StatusForbidden
 	case coreerrors.CodeNotFound:
 		return http.StatusNotFound
 	case coreerrors.CodeConflict:

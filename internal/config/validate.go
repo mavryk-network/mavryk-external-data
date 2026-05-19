@@ -27,6 +27,7 @@ func (c *Config) Validate() error {
 		c.validateEquiteezBackfill,
 		c.validateTokens,
 		c.validateRWA,
+		c.validateAuth,
 		c.validateProductionSafety,
 	} {
 		if err := fn(); err != nil {
@@ -45,6 +46,15 @@ func (c *Config) validateServer() error {
 	}
 	if port, err := strconv.Atoi(strings.TrimSpace(c.Server.Port)); err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("server.port must be a TCP port number 1-65535, got %q", c.Server.Port)
+	}
+	if ip := strings.TrimSpace(c.Server.InternalPort); ip != "" {
+		port, err := strconv.Atoi(ip)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("server.internal_port must be a TCP port number 1-65535, got %q", c.Server.InternalPort)
+		}
+		if ip == strings.TrimSpace(c.Server.Port) {
+			return fmt.Errorf("server.internal_port (%q) must differ from server.port", ip)
+		}
 	}
 	if c.Server.LatestQuoteCacheTTLSeconds < 0 {
 		return fmt.Errorf("server.latest_quote_cache_ttl_seconds must be >= 0, got %d", c.Server.LatestQuoteCacheTTLSeconds)
@@ -230,6 +240,42 @@ func (c *Config) validateRWA() error {
 	}
 	if c.RWA.Enabled && strings.TrimSpace(c.Equiteez.IndexerURL) == "" {
 		return fmt.Errorf("rwa.enabled=true requires equiteez.indexer_url to be set")
+	}
+	return nil
+}
+
+// validateAuth checks the MBIO JWT settings when verification is enabled.
+// Verification is on by default; explicit `auth.enabled: false` disables all checks.
+//
+// Matches rwa-backend's posture: audience is **optional**. MBIO currently mints
+// tokens with only iss/sub/exp/iat (no aud), so enforcing aud would reject every
+// real token. The middleware emits a one-shot startup warn-log when aud is empty
+// so the missing check stays visible in ops logs.
+func (c *Config) validateAuth() error {
+	a := &c.Auth
+	if !a.JWTVerificationEnabled() {
+		return nil
+	}
+	if strings.TrimSpace(a.MBIOJWTIssuer) == "" {
+		return fmt.Errorf("auth.mbio_jwt_issuer is required when auth is enabled (env AUTH_MBIO_JWT_ISSUER)")
+	}
+	if a.JWKSCacheTTL < 0 {
+		return fmt.Errorf("auth.jwks_cache_ttl must be >= 0, got %s", a.JWKSCacheTTL)
+	}
+	if a.LocalJWTVerifyConfigured() {
+		pemBytes, err := a.LocalJWTVerifyPublicKeyPEMBytes()
+		if err != nil {
+			return err
+		}
+		if len(pemBytes) == 0 {
+			return fmt.Errorf("auth.jwt_local_verify_public_key is empty after base64 decode (AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY)")
+		}
+		// Deeper PEM validity (ParseRSAPublicKeyFromPEM) happens at middleware
+		// build time — keeps validate.go free of the JWT dep.
+		return nil
+	}
+	if strings.TrimSpace(a.MBIOJWTBaseURL) == "" && strings.TrimSpace(a.MBIOAPIGatewayBaseURL) == "" {
+		return fmt.Errorf("auth.mbio_jwt_base_url or auth.mbio_api_gateway_base_url is required when AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY is unset; set one of AUTH_MBIO_JWT_BASE_URL / AUTH_MBIO_API_GATEWAY_BASE_URL, or provide a base64 PEM in AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY for local RS256 verification")
 	}
 	return nil
 }

@@ -1,5 +1,11 @@
 server:
   port: "3010"
+  # internal_port: second HTTP listener for intra-cluster callers. RWA routes
+  # are open here (no MBIO JWT) and /metrics, /docs, /openapi.yaml move here.
+  # Empty (the local default) = single-port mode — everything on `port`.
+  # In k8s the helm chart sets SERVER_INTERNAL_PORT=3011 via env, splitting
+  # the listeners. Uncomment locally only if you want to mirror that split.
+  # internal_port: "3011"
   host: "0.0.0.0"
   # gin_mode: debug | release | test. Empty → derive from host (localhost → debug).
   # gin_mode: "release"
@@ -101,6 +107,25 @@ rwa:
   enabled: false
   interval_seconds: 60
   concurrency: 4
+
+# MBIO JWT verification for the public listener's RWA routes (/v1/rwa/*,
+# /v1/pairs/rwa). Internal listener traffic skips this entirely.
+#
+# - enabled: false here is a local-dev convenience. Production must keep it on
+#   (omit / true). The flag does not affect the internal listener.
+# - mbio_jwt_issuer: required when enabled. MBIO uses the plain string
+#   "mbio-api-gateway", not a URL.
+# - mbio_jwt_audience: optional. MBIO does not currently mint `aud`, so leaving
+#   this empty is the correct default. A startup warn-log fires when empty.
+# - jwt_local_verify_public_key: base64-PEM of an RSA public key for local /
+#   CI verification. When set the middleware skips the JWKS fetch entirely.
+auth:
+  enabled: false
+  mbio_jwt_base_url: ""
+  mbio_jwt_issuer: "mbio-api-gateway"
+  mbio_jwt_audience: ""
+  jwks_cache_ttl: "5m"
+  jwt_local_verify_public_key: ""
 
 # Per-token live/backfill overrides.
 tokens:

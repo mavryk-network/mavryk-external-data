@@ -131,6 +131,10 @@ func setDefaults(config *Config) {
 		config.Equiteez.Backfill.MaxBackoffMs = 24 * 60 * 60 * 1000
 	}
 
+	if config.Auth.JWKSCacheTTL == 0 {
+		config.Auth.JWKSCacheTTL = defaultAuthConfig().JWKSCacheTTL
+	}
+
 	if config.RWA.IntervalSeconds == 0 && config.RWA.Enabled {
 		// 10s matches Mavryk block time — orderbook prices on Equiteez change
 		// at most once per block, so polling faster doesn't surface fresher

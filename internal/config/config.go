@@ -10,5 +10,6 @@ type Config struct {
 	Equiteez  EquiteezConfig         `yaml:"equiteez"`
 	Backfill  BackfillConfig         `yaml:"backfill"`
 	RWA       RWAConfig              `yaml:"rwa"`
+	Auth      AuthConfig             `yaml:"auth"`
 	Tokens    map[string]TokenConfig `yaml:"tokens"`
 }
