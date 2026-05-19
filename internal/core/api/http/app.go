@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
@@ -38,16 +40,28 @@ type AppDeps struct {
 	Lookup      *repositories.LookupRepository
 }
 
+// App owns one or two HTTP servers:
+//
+//	publicServer   — :{server.port}, internet-facing. CORS + rate-limit on,
+//	                 MBIO JWT middleware guards /v1/rwa/* and /v1/pairs/rwa.
+//	internalServer — :{server.internal_port}, optional. No CORS, no rate-limit,
+//	                 no RWA auth. Hosts /metrics. Reached only from inside the
+//	                 cluster via a ClusterIP Service + NetworkPolicy.
+//
+// When server.internal_port is unset (local dev) internalServer is nil and
+// /metrics is mounted on the public engine — the single-port legacy layout.
 type App struct {
-	config        *config.Config
-	server        *http.Server
-	logger        *zerolog.Logger
-	readinessGate *handlers.ReadinessGate
+	config         *config.Config
+	publicServer   *http.Server
+	internalServer *http.Server
+	logger         *zerolog.Logger
+	readinessGate  *handlers.ReadinessGate
 }
 
-// NewApp builds the HTTP server. Side-effects: sets gin mode from config, creates
-// the engine, registers middleware, mounts routes, configures timeouts.
-func NewApp(deps AppDeps) *App {
+// NewApp builds the HTTP server(s). Side-effects: sets gin mode from config,
+// creates engines, registers middleware, mounts routes, configures timeouts,
+// builds the MBIO JWT middleware (when auth is enabled).
+func NewApp(deps AppDeps) (*App, error) {
 	logger := deps.Logger
 	if logger == nil {
 		nop := zerolog.Nop()
@@ -55,6 +69,78 @@ func NewApp(deps AppDeps) *App {
 	}
 	cfg := deps.Config
 
+	configureGinMode(cfg)
+
+	appLogger := logging.WithComponent(logger, "http_app")
+	gate := handlers.NewReadinessGate()
+	routerDepsBase := buildRouterDeps(deps, cfg, gate)
+
+	// MBIO JWT middleware. Built once, mounted only on the public engine. When
+	// auth is disabled (auth.enabled=false, dev/CI only) the public listener
+	// serves RWA routes without a token wrapper — same as the internal one.
+	var rwaAuth gin.HandlerFunc
+	if cfg.Auth.JWTVerificationEnabled() {
+		mid, err := httpmw.MBIOJWT(&cfg.Auth, appLogger)
+		if err != nil {
+			return nil, err
+		}
+		rwaAuth = mid
+	} else {
+		appLogger.Warn().Msg("auth_disabled_rwa_routes_open_on_public_listener")
+	}
+
+	publicEngine := buildPublicEngine(cfg, appLogger)
+	publicDeps := routerDepsBase
+	publicDeps.RWAAuth = rwaAuth
+	// Docs (Swagger UI + openapi.yaml) get mounted on the internal listener
+	// when one exists; here on the public engine only as a fallback for
+	// single-port local-dev runs.
+	publicDeps.MountDocs = strings.TrimSpace(cfg.Server.InternalPort) == ""
+	SetupRoutes(publicEngine, publicDeps)
+
+	publicServer := &http.Server{
+		Addr:              cfg.Server.Host + ":" + cfg.Server.Port,
+		Handler:           publicEngine,
+		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.D(),
+		ReadTimeout:       cfg.Server.ReadTimeout.D(),
+		WriteTimeout:      cfg.Server.WriteTimeout.D(),
+		IdleTimeout:       cfg.Server.IdleTimeout.D(),
+	}
+
+	app := &App{
+		config:        cfg,
+		publicServer:  publicServer,
+		logger:        appLogger,
+		readinessGate: gate,
+	}
+
+	internalPort := strings.TrimSpace(cfg.Server.InternalPort)
+	if internalPort == "" {
+		// Single-port mode (local dev). /metrics stays on the public engine for
+		// scrape continuity; the security note in app docs applies.
+		publicEngine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+		return app, nil
+	}
+
+	internalEngine := buildInternalEngine(cfg, appLogger)
+	internalDeps := routerDepsBase
+	internalDeps.RWAAuth = nil
+	internalDeps.MountDocs = true
+	SetupRoutes(internalEngine, internalDeps)
+	internalEngine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	app.internalServer = &http.Server{
+		Addr:              cfg.Server.Host + ":" + internalPort,
+		Handler:           internalEngine,
+		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.D(),
+		ReadTimeout:       cfg.Server.ReadTimeout.D(),
+		WriteTimeout:      cfg.Server.WriteTimeout.D(),
+		IdleTimeout:       cfg.Server.IdleTimeout.D(),
+	}
+	return app, nil
+}
+
+func configureGinMode(cfg *config.Config) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Server.GinMode)) {
 	case "debug":
 		gin.SetMode(gin.DebugMode)
@@ -72,12 +158,14 @@ func NewApp(deps AppDeps) *App {
 	default:
 		gin.SetMode(gin.ReleaseMode)
 	}
+}
 
-	appLogger := logging.WithComponent(logger, "http_app")
-
+// buildPublicEngine returns the engine used for the external-facing listener:
+// full middleware stack, CORS allowlist, optional inbound rate limit.
+func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
 	router.Use(logging.RequestIDMiddleware(""))
-	router.Use(logging.RequestLogger(appLogger))
+	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())
 	router.Use(gin.Recovery())
 	router.Use(httpmw.CORS(cfg.Server.CORS))
@@ -88,11 +176,27 @@ func NewApp(deps AppDeps) *App {
 	if cfg.Server.PprofEnabled {
 		httpmw.RegisterPprof(router)
 	}
+	return router
+}
 
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+// buildInternalEngine returns the engine used for the intra-cluster listener.
+// CORS and rate-limit are stripped: callers are trusted pods inside the cluster,
+// not browsers or external clients. Logging, prometheus, recovery and per-handler
+// timeout stay — they protect against runaway internal callers and keep metrics
+// consistent.
+func buildInternalEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
+	router := gin.New()
+	router.Use(logging.RequestIDMiddleware(""))
+	router.Use(logging.RequestLogger(logger))
+	router.Use(httpmw.PrometheusHTTP())
+	router.Use(gin.Recovery())
+	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
+		router.Use(httpmw.HandlerTimeout(to))
+	}
+	return router
+}
 
-	gate := handlers.NewReadinessGate()
-
+func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessGate) RouterDeps {
 	tokenDeps := handlers.TokenPriceDeps{
 		Service:       deps.TokenPriceQuery,
 		Repo:          deps.TokenPriceRepo,
@@ -163,9 +267,7 @@ func NewApp(deps AppDeps) *App {
 		RWASource:       prices.SourceEquiteez,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
-	rwaPairsDeps := handlers.RWAPairsDeps{
-		Lookup: deps.Lookup,
-	}
+	rwaPairsDeps := handlers.RWAPairsDeps{Lookup: deps.Lookup}
 	// Legacy /quotes — restored for downstream services that still pin to
 	// the v0.1.0 wide-format route. MVRK + CoinGecko only by design;
 	// hard-coded rather than registry-looked-up so a missing tokens row
@@ -176,7 +278,7 @@ func NewApp(deps AppDeps) *App {
 		SourceCode:  string(prices.SourceCoinGecko),
 		MaxLimit:    cfg.Server.MaxQueryLimit,
 	}
-	SetupRoutes(router, RouterDeps{
+	return RouterDeps{
 		DB:            deps.DB,
 		ReadinessGate: gate,
 		TokenPrice:    tokenDeps,
@@ -186,30 +288,46 @@ func NewApp(deps AppDeps) *App {
 		RWAPairs:      rwaPairsDeps,
 		Change:        changeDeps,
 		LegacyQuotes:  legacyQuotesDeps,
-	})
-
-	server := &http.Server{
-		Addr:              cfg.Server.Host + ":" + cfg.Server.Port,
-		Handler:           router,
-		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.D(),
-		ReadTimeout:       cfg.Server.ReadTimeout.D(),
-		WriteTimeout:      cfg.Server.WriteTimeout.D(),
-		IdleTimeout:       cfg.Server.IdleTimeout.D(),
 	}
-
-	return &App{config: cfg, server: server, logger: appLogger, readinessGate: gate}
 }
 
+// Run starts both listeners (or just the public one in single-port mode) and
+// blocks until either returns. The first error from either server cancels the
+// errgroup so the caller's Shutdown can drain both cleanly.
 func (a *App) Run() error {
-	a.logger.Info().Str("addr", a.server.Addr).Msg("starting_http_server")
-	return a.server.ListenAndServe()
+	g, _ := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		a.logger.Info().Str("addr", a.publicServer.Addr).Str("listener", "public").Msg("starting_http_server")
+		if err := a.publicServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	})
+	if a.internalServer != nil {
+		g.Go(func() error {
+			a.logger.Info().Str("addr", a.internalServer.Addr).Str("listener", "internal").Msg("starting_http_server")
+			if err := a.internalServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				return err
+			}
+			return nil
+		})
+	}
+	return g.Wait()
 }
 
-// Server returns the underlying HTTP server for graceful shutdown.
-func (a *App) Server() *http.Server { return a.server }
+// Shutdown gracefully stops both listeners in parallel. ctx is shared so a single
+// deadline applies to the whole drain — typical caller passes 30s.
+func (a *App) Shutdown(ctx context.Context) error {
+	g, _ := errgroup.WithContext(ctx)
+	g.Go(func() error { return a.publicServer.Shutdown(ctx) })
+	if a.internalServer != nil {
+		g.Go(func() error { return a.internalServer.Shutdown(ctx) })
+	}
+	return g.Wait()
+}
 
 // StartDraining flips /readyz to 503 so a load balancer pulls the pod out of
-// rotation before Server.Shutdown stops accepting connections. Idempotent.
+// rotation before Shutdown stops accepting connections. Idempotent.
 func (a *App) StartDraining() {
 	if a.readinessGate != nil {
 		a.readinessGate.StartDraining()

@@ -8,6 +8,18 @@ import (
 )
 
 // RouterDeps holds the per-domain handler bundles plus DB and the readiness gate.
+//
+// RWAAuth, when non-nil, wraps /v1/rwa/* and /v1/pairs/rwa in the MBIO JWT
+// middleware. It is non-nil on the public listener and nil on the internal
+// listener — same handler graph, same code path, different exposure surface.
+//
+// MountDocs, when true, registers /openapi.yaml and /docs (Swagger UI). When
+// the two-listener layout is active these are mounted on the internal engine
+// only — the API spec is operator documentation, not customer-facing. In
+// single-port mode (no internal listener) docs go on the public engine so
+// local-dev `curl /docs` still works.
+//
+// See app.go for the wiring.
 type RouterDeps struct {
 	DB            *gorm.DB
 	ReadinessGate *handlers.ReadinessGate
@@ -18,17 +30,19 @@ type RouterDeps struct {
 	RWAPairs      handlers.RWAPairsDeps
 	Change        handlers.ChangeDeps
 	LegacyQuotes  handlers.LegacyQuotesDeps
+	RWAAuth       gin.HandlerFunc
+	MountDocs     bool
 }
 
 // SetupRoutes registers all routes on the given engine.
 //
-// Hierarchy:
+// Hierarchy (public listener; internal mirrors this minus RWA auth):
 //
 //	/healthz                 — liveness
 //	/readyz                  — readiness (db ping + drain gate)
-//	/metrics                 — Prometheus
-//	/openapi.yaml            — embedded OpenAPI 3.0 spec
-//	/docs                    — Swagger UI loading /openapi.yaml
+//	/metrics                 — Prometheus (internal listener only)
+//	/openapi.yaml            — embedded OpenAPI 3.0 spec (internal only when two-port)
+//	/docs                    — Swagger UI (internal only when two-port)
 //	/quotes                  — legacy v0.1.0 wide-format MVRK quotes
 //	/v1/prices/:token         — list (range or latest)
 //	/v1/prices/:token/latest  — transposed snapshot
@@ -53,10 +67,14 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 	engine.GET("/quotes", deps.LegacyQuotes.LegacyQuotes())
 
 	// Static OpenAPI 3.0 spec + Swagger UI shell. Both bytes are embedded at
-	// compile time via docs.OpenAPIYAML / docs.SwaggerUIHTML.
-	engine.GET("/openapi.yaml", handlers.OpenAPISpec())
-	engine.GET("/docs", handlers.SwaggerUI())
-	engine.GET("/docs/", handlers.SwaggerUI())
+	// compile time via docs.OpenAPIYAML / docs.SwaggerUIHTML. In two-listener
+	// mode these live on the internal engine only — the public listener does
+	// not expose the API spec.
+	if deps.MountDocs {
+		engine.GET("/openapi.yaml", handlers.OpenAPISpec())
+		engine.GET("/docs", handlers.SwaggerUI())
+		engine.GET("/docs/", handlers.SwaggerUI())
+	}
 
 	v1 := engine.Group("/v1")
 	{
@@ -73,6 +91,9 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			ft.GET("/:token/ohlcv", handlers.NotImplementedOHLCV())
 		}
 		rwa := v1.Group("/rwa")
+		if deps.RWAAuth != nil {
+			rwa.Use(deps.RWAAuth)
+		}
 		{
 			rwa.GET("/:symbol", deps.RWAPrice.ListBySymbol())
 			rwa.GET("/:symbol/latest", deps.RWAPrice.LatestBySymbol())
@@ -84,8 +105,12 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			rwa.GET("/:symbol/ohlcv", handlers.NotImplementedOHLCV())
 		}
 		// Discovery group. Lives outside /v1/rwa because gin's radix
-		// tree won't accept a static segment next to /rwa/:symbol.
+		// tree won't accept a static segment next to /rwa/:symbol. Shares
+		// the RWA auth posture — catalog is treated as RWA data.
 		pairs := v1.Group("/pairs")
+		if deps.RWAAuth != nil {
+			pairs.Use(deps.RWAAuth)
+		}
 		{
 			pairs.GET("/rwa", deps.RWAPairs.List())
 		}

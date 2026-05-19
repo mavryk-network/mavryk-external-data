@@ -3,7 +3,13 @@ package config
 // ServerConfig holds HTTP server bind options and response-cache settings.
 type ServerConfig struct {
 	Port string `yaml:"port"`
-	Host string `yaml:"host"`
+	// InternalPort, when non-empty, binds a second HTTP listener for intra-cluster
+	// traffic. The internal listener mounts the same routes as the public one but
+	// **without** the MBIO JWT middleware on /v1/rwa/* and /v1/pairs/rwa, and
+	// hosts /metrics. Reach it via a ClusterIP Service + NetworkPolicy. Empty
+	// disables the second listener (single-port mode, useful for local dev).
+	InternalPort string `yaml:"internal_port"`
+	Host         string `yaml:"host"`
 	// GinMode: debug, release, or test. Empty means derive from host (localhost/127.0.0.1 → debug).
 	GinMode string `yaml:"gin_mode"`
 	// HTTP server timeouts (see net/http.Server). YAML uses Go duration strings, e.g. "30s".

@@ -106,7 +106,7 @@ func run() int {
 		prices.SourceCoinGecko,
 	)
 
-	httpApp := httpapp.NewApp(httpapp.AppDeps{
+	httpApp, err := httpapp.NewApp(httpapp.AppDeps{
 		Config:          cfg,
 		DB:              db.DB,
 		Logger:          logger,
@@ -119,6 +119,10 @@ func run() int {
 		FXConverter:     fxConverter,
 		Lookup:          lookup,
 	})
+	if err != nil {
+		logger.Error().Err(err).Msg("http_app_init_failed")
+		return 1
+	}
 
 	liveJob := jobs.NewCoinGeckoLiveJob(cfg, tokenAppRepo, logger)
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
@@ -194,7 +198,7 @@ func run() int {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
-	if err := httpApp.Server().Shutdown(shutdownCtx); err != nil {
+	if err := httpApp.Shutdown(shutdownCtx); err != nil {
 		logger.Error().Err(err).Msg("http_shutdown_error")
 	} else {
 		logger.Info().Msg("http_shutdown_complete")
