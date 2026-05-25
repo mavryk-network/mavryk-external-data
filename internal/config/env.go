@@ -320,5 +320,96 @@ func overrideWithEnv(config *Config) error {
 	if v := os.Getenv("AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY"); v != "" {
 		config.Auth.JWTLocalVerifyPublicKeyBase64 = v
 	}
+
+	return applyTokenEnvOverrides(config)
+}
+
+// applyTokenEnvOverrides scans TOKEN_<NAME>__<FIELD> env vars and merges them
+// into config.Tokens. Double underscore separates the token name from the
+// field name so tokens with underscores in the name (wrapped_btc) parse
+// unambiguously. Tokens absent from yaml get Enabled=true by default —
+// matches GetTokenConfig's "unknown token = enabled" semantics, so a one-off
+// `TOKEN_FOO__INTERVAL_SECONDS=60` doesn't silently land disabled.
+func applyTokenEnvOverrides(config *Config) error {
+	const prefix = "TOKEN_"
+	const sep = "__"
+
+	if config.Tokens == nil {
+		config.Tokens = make(map[string]TokenConfig)
+	}
+
+	for _, kv := range os.Environ() {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		key, val := kv[:eq], kv[eq+1:]
+		if !strings.HasPrefix(key, prefix) || val == "" {
+			continue
+		}
+		rest := key[len(prefix):]
+		sepIdx := strings.Index(rest, sep)
+		if sepIdx <= 0 {
+			continue
+		}
+		tokenName := strings.ToLower(rest[:sepIdx])
+		field := rest[sepIdx+len(sep):]
+		if tokenName == "" || field == "" {
+			return fmt.Errorf("%s: malformed env var (expected TOKEN_<name>%s<field>)", key, sep)
+		}
+
+		tc, exists := config.Tokens[tokenName]
+		if !exists {
+			tc = TokenConfig{Enabled: true}
+		}
+		if err := applyTokenField(&tc, field, val); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		config.Tokens[tokenName] = tc
+	}
+	return nil
+}
+
+func applyTokenField(tc *TokenConfig, field, val string) error {
+	switch field {
+	case "INTERVAL_SECONDS":
+		return parseIntInto(val, &tc.IntervalSeconds)
+	case "ENABLED":
+		return parseBoolInto(val, &tc.Enabled)
+	case "TIMEOUT_SECONDS":
+		return parseIntInto(val, &tc.TimeoutSeconds)
+	case "MIN_TIME_RANGE_SECONDS":
+		return parseIntInto(val, &tc.MinTimeRangeSeconds)
+	case "LIVE_LOOKBACK_SECONDS":
+		return parseIntInto(val, &tc.LiveLookbackSeconds)
+	case "MAX_CHUNK_MINUTES":
+		return parseIntInto(val, &tc.MaxChunkMinutes)
+	case "BACKFILL_ENABLED":
+		return parseBoolInto(val, &tc.Backfill.Enabled)
+	case "BACKFILL_START_FROM":
+		tc.Backfill.StartFrom = val
+		return nil
+	case "BACKFILL_CHUNK_MINUTES":
+		return parseIntInto(val, &tc.Backfill.ChunkMinutes)
+	default:
+		return fmt.Errorf("unknown token field %q", field)
+	}
+}
+
+func parseIntInto(s string, dst *int) error {
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("invalid int %q: %w", s, err)
+	}
+	*dst = v
+	return nil
+}
+
+func parseBoolInto(s string, dst *bool) error {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return fmt.Errorf("invalid bool %q: %w", s, err)
+	}
+	*dst = v
 	return nil
 }
