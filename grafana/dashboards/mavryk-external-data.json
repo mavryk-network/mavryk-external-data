@@ -24,7 +24,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "options": {
         "mode": "markdown",
-        "content": "**Mavryk External Data** — observability dashboard.\n\nFour metric families in this board:\n- **HTTP (inbound)** — `http_*` from gin middleware.\n- **Outbound HTTP** — `outbound_http_*` from the resilience stack (CoinGecko + Equiteez).\n- **Background jobs** — `job_*` and `backfill_*` from live, backfill, RWA collectors.\n- **Database pool** — `db_pool_*` sampled every 15s by `metrics.StartDBPoolCollector`.\n\nSet **namespace** to your scrape label (default: `mavryk-external-data`)."
+        "content": "**Mavryk External Data** — observability dashboard.\n\nFour metric families in this board:\n- **HTTP (inbound)** — `http_*` from gin middleware.\n- **Outbound HTTP** — `outbound_http_*` from the resilience stack (CoinGecko + Equiteez). `outbound_http_requests_total{component,outcome}` counts every attempt (incl. retries); subtract `outbound_http_retries_total` to get logical-request RPS.\n- **Background jobs** — `job_*` and `backfill_*` from live, backfill, RWA collectors.\n- **Database pool** — `db_pool_*` sampled every 15s by `metrics.StartDBPoolCollector`.\n\nSet **namespace** to your scrape label (default: `mavryk-external-data`)."
       }
     },
 
@@ -139,14 +139,75 @@
         "expr": "histogram_quantile(0.95, sum by (component, le) (rate(outbound_http_rate_limit_wait_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
         "legendFormat": "{{component}}" }]
     },
+    {
+      "type": "timeseries", "id": 15, "title": "Outbound RPS by component",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 40 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "description": "Every attempt (including retries) counted once. Subtract outbound_http_retries_total to get logical-request RPS."
+        }
+      },
+      "targets": [{ "refId": "A",
+        "expr": "sum by (component) (rate(outbound_http_requests_total{namespace=\"$namespace\"}[$__rate_interval]))",
+        "legendFormat": "{{component}}" }]
+    },
+    {
+      "type": "timeseries", "id": 16, "title": "Outbound requests by outcome",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 40 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "description": "Outcome: 2xx healthy, 4xx caller bug / rate-limited, 5xx upstream, error = transport failure (no HTTP status)."
+        }
+      },
+      "targets": [{ "refId": "A",
+        "expr": "sum by (component, outcome) (rate(outbound_http_requests_total{namespace=\"$namespace\"}[$__rate_interval]))",
+        "legendFormat": "{{component}} {{outcome}}" }]
+    },
+    {
+      "type": "stat", "id": 17, "title": "Outbound requests last 1h (by component)",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 46 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "description": "Total outbound attempts in the last hour. Useful for capacity planning against CoinGecko's quota."
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value"
+      },
+      "targets": [{ "refId": "A",
+        "expr": "sum by (component) (increase(outbound_http_requests_total{namespace=\"$namespace\"}[1h]))",
+        "legendFormat": "{{component}}" }]
+    },
+    {
+      "type": "timeseries", "id": 18, "title": "Outbound error ratio (% non-2xx + transport)",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 46 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "description": "Share of attempts that returned 4xx/5xx or failed at the transport layer. Sustained > 5% is alertable."
+        }
+      },
+      "targets": [{ "refId": "A",
+        "expr": "sum by (component) (rate(outbound_http_requests_total{namespace=\"$namespace\",outcome!=\"2xx\"}[$__rate_interval])) / clamp_min(sum by (component) (rate(outbound_http_requests_total{namespace=\"$namespace\"}[$__rate_interval])), 1e-9)",
+        "legendFormat": "{{component}}" }]
+    },
 
     { "type": "row", "id": 20, "title": "Background jobs (live / backfill / RWA)",
-      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 }, "panels": [] },
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 }, "panels": [] },
 
     {
       "type": "timeseries", "id": 21, "title": "Job tick duration p95 by (job, entity)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 41 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 53 },
       "fieldConfig": { "defaults": { "unit": "s" } },
       "targets": [{ "refId": "A",
         "expr": "histogram_quantile(0.95, sum by (job, source, entity, le) (rate(job_tick_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
@@ -155,7 +216,7 @@
     {
       "type": "timeseries", "id": 22, "title": "Job errors by reason (rate)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 61 },
       "fieldConfig": { "defaults": { "unit": "short" } },
       "targets": [{ "refId": "A",
         "expr": "sum by (job, source, reason) (rate(job_errors_total{namespace=\"$namespace\"}[$__rate_interval]))",
@@ -164,7 +225,7 @@
     {
       "type": "timeseries", "id": 23, "title": "Rows affected (rate)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 61 },
       "fieldConfig": { "defaults": { "unit": "short" } },
       "targets": [{ "refId": "A",
         "expr": "sum by (job, source, entity) (rate(job_rows_affected_total{namespace=\"$namespace\"}[$__rate_interval]))",
@@ -172,12 +233,12 @@
     },
 
     { "type": "row", "id": 30, "title": "Backfill cursor",
-      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }, "panels": [] },
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 69 }, "panels": [] },
 
     {
       "type": "timeseries", "id": 31, "title": "Oldest backfilled timestamp (cursor) per token",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 58 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 70 },
       "fieldConfig": {
         "defaults": {
           "unit": "dateTimeAsIso",
@@ -191,7 +252,7 @@
     {
       "type": "timeseries", "id": 32, "title": "Auto-disabled events (rate)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 66 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 78 },
       "fieldConfig": { "defaults": { "unit": "short" } },
       "targets": [{ "refId": "A",
         "expr": "sum by (entity, reason) (increase(backfill_auto_disabled_total{namespace=\"$namespace\"}[1h]))",
@@ -199,12 +260,12 @@
     },
 
     { "type": "row", "id": 40, "title": "Database connection pool",
-      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 72 }, "panels": [] },
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 84 }, "panels": [] },
 
     {
       "type": "timeseries", "id": 41, "title": "DB pool connections (open / in_use / idle)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 73 },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 85 },
       "fieldConfig": { "defaults": { "unit": "short" } },
       "targets": [
         { "refId": "A", "expr": "db_pool_open_connections{namespace=\"$namespace\"}",   "legendFormat": "open" },
@@ -215,7 +276,7 @@
     {
       "type": "stat", "id": 42, "title": "Open connections (current)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 73 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 85 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -238,7 +299,7 @@
     {
       "type": "timeseries", "id": 43, "title": "DB pool wait duration (cumulative seconds)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 81 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 93 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -251,12 +312,12 @@
     },
 
     { "type": "row", "id": 50, "title": "FX conversions (RWA `?in=`)",
-      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 87 }, "panels": [] },
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 99 }, "panels": [] },
 
     {
       "type": "timeseries", "id": 51, "title": "FX conversion p95 by (source_token, target)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 88 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -270,7 +331,7 @@
     {
       "type": "timeseries", "id": 52, "title": "FX conversion outcomes (rate by result)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 88 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -287,7 +348,7 @@
     {
       "type": "timeseries", "id": 53, "title": "FX stale-rate per target (alertable)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 96 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 108 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -324,6 +385,6 @@
   "timezone": "browser",
   "title": "Mavryk External Data (Quotes)",
   "uid": "mavryk-external-data-quotes",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

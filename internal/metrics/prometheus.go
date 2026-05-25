@@ -46,6 +46,19 @@ var (
 		[]string{"component"},
 	)
 
+	// OutboundHTTPRequestsTotal counts every RoundTrip that actually hit the
+	// network — one increment per attempt, so retries are counted separately.
+	// `total - outbound_http_retries_total` ≈ logical requests issued by callers.
+	// outcome ∈ {2xx, 4xx, 5xx, error}; `error` covers network/transport errors
+	// where no HTTP status was received.
+	OutboundHTTPRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "outbound_http_requests_total",
+			Help: "Total outbound HTTP attempts (post-retry layer), labelled by component and outcome class.",
+		},
+		[]string{"component", "outcome"},
+	)
+
 	OutboundHTTPCircuitBreakerTransitionsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "outbound_http_circuit_breaker_transitions_total",
@@ -265,4 +278,14 @@ func StatusClass(code int) string {
 	default:
 		return "2xx"
 	}
+}
+
+// OutboundOutcome maps a RoundTrip result to the closed-enum label used by
+// OutboundHTTPRequestsTotal. Pass err != nil for transport-level failures
+// (status is ignored in that case).
+func OutboundOutcome(status int, err error) string {
+	if err != nil {
+		return "error"
+	}
+	return StatusClass(status)
 }

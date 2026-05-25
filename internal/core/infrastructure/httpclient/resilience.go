@@ -57,16 +57,20 @@ func (s ResilienceSettings) Normalized() ResilienceSettings {
 }
 
 // WrapResilientTransport returns base wrapped with retry, then optionally a circuit breaker (outermost).
-// Order: circuit breaker → retry → base.
+// Order: circuit breaker → retry → counter → base.
+// The counter sits inside retry so each attempt (including retries) increments
+// outbound_http_requests_total — `total - outbound_http_retries_total` then
+// gives logical-request count.
 func WrapResilientTransport(base http.RoundTripper, s ResilienceSettings) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	if s.CircuitBreakerDisabled && s.RetryMaxAttempts == 1 {
-		return base
-	}
 	s = s.Normalized()
-	rt := http.RoundTripper(&retryTransport{next: base, s: s})
+	counted := WrapCounted(base, s.Component)
+	if s.CircuitBreakerDisabled && s.RetryMaxAttempts == 1 {
+		return counted
+	}
+	rt := http.RoundTripper(&retryTransport{next: counted, s: s})
 	if !s.CircuitBreakerDisabled {
 		rt = newCircuitBreakerRoundTripper(s, rt)
 	}
