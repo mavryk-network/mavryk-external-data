@@ -92,14 +92,16 @@
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "closed",    "color": "green"  } } },
-            { "type": "value", "options": { "1": { "text": "OPEN",      "color": "red"    } } },
-            { "type": "value", "options": { "2": { "text": "half-open", "color": "yellow" } } }
+            { "type": "value", "options": {
+              "0": { "text": "closed",    "color": "green"  },
+              "1": { "text": "OPEN",      "color": "red"    },
+              "2": { "text": "half-open", "color": "yellow" }
+            } }
           ],
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green",  "value": null },
-            { "color": "yellow", "value": 1.5 },
-            { "color": "red",    "value": 0.5 }
+            { "color": "red",    "value": 0.5 },
+            { "color": "yellow", "value": 1.5 }
           ] }
         }
       },
@@ -170,7 +172,7 @@
     {
       "type": "stat", "id": 17, "title": "Outbound requests last 1h (by component)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 46 },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 46 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -187,9 +189,33 @@
         "legendFormat": "{{component}}" }]
     },
     {
+      "type": "stat", "id": 19, "title": "CoinGecko requests last 24h (daily quota burn)",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 46 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "description": "Total outbound attempts to CoinGecko over the last 24h. Thresholds reflect a 15k/day soft budget — adjust to your actual CG plan quota.",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green",  "value": null },
+            { "color": "yellow", "value": 10000 },
+            { "color": "red",    "value": 14000 }
+          ] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value"
+      },
+      "targets": [{ "refId": "A",
+        "expr": "sum (increase(outbound_http_requests_total{namespace=\"$namespace\",component=\"coingecko\"}[24h]))",
+        "legendFormat": "coingecko 24h" }]
+    },
+    {
       "type": "timeseries", "id": 18, "title": "Outbound error ratio (% non-2xx + transport)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 46 },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 46 },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -297,13 +323,13 @@
         "legendFormat": "open" }]
     },
     {
-      "type": "timeseries", "id": 43, "title": "DB pool wait duration (cumulative seconds)",
+      "type": "timeseries", "id": 43, "title": "DB pool wait rate (s/s)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 93 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "description": "Total seconds spent waiting for a free pool slot. A growing slope means the pool is too small for the workload."
+          "description": "Saturation: seconds-per-second the pool spent blocking acquirers (rate of cumulative wait counter). Sustained > 0.1 s/s means the pool is undersized."
         }
       },
       "targets": [{ "refId": "A",
@@ -346,17 +372,17 @@
         "legendFormat": "{{result}}" }]
     },
     {
-      "type": "timeseries", "id": 53, "title": "FX stale-rate per target (alertable)",
+      "type": "timeseries", "id": 53, "title": "FX stale ratio per target (alertable)",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 108 },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "description": "Conversions returned with `fx.stale=true` (FX older than `server.fx_max_staleness_seconds`). A growing rate means the CoinGecko live job is behind. Alert on `> 1%` of total."
+          "unit": "percentunit",
+          "description": "Share of conversions returned with `fx.stale=true` (FX older than `server.fx_max_staleness_seconds`). A growing ratio means the CoinGecko live job is behind. Alert on `> 1%` (0.01) sustained."
         }
       },
       "targets": [{ "refId": "A",
-        "expr": "sum by (target) (rate(fx_stale_responses_total{namespace=\"$namespace\"}[$__rate_interval]))",
+        "expr": "sum by (target) (rate(fx_stale_responses_total{namespace=\"$namespace\"}[$__rate_interval])) / clamp_min(sum by (target) (rate(fx_conversions_total{namespace=\"$namespace\"}[$__rate_interval])), 1e-9)",
         "legendFormat": "{{target}}" }]
     }
   ],
@@ -376,7 +402,7 @@
         ],
         "query": "mavryk-external-data",
         "skipUrlSync": false,
-        "type": "constant"
+        "type": "custom"
       }
     ]
   },
@@ -385,6 +411,6 @@
   "timezone": "browser",
   "title": "Mavryk External Data (Quotes)",
   "uid": "mavryk-external-data-quotes",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }
