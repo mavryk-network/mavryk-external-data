@@ -27,8 +27,9 @@ Consumers read everything through one HTTP API.
 
 ```
                         ┌──────────────────────┐
-              CoinGecko ┤ live job → token_prices
-              CoinGecko ┤ backfill job ───────┘
+              CoinGecko ┤ live job     → token_prices
+              CoinGecko ┤ backfill job → token_prices
+              CoinGecko ┤ tickers job  → exchanges + token_tickers
                         └──────────────────────┘
                         ┌──────────────────────┐
                 Equiteez┤ RWA job → rwa_quote_prices
@@ -41,6 +42,7 @@ Consumers read everything through one HTTP API.
                                 │  HTTP API  │
                                 │ /v1/prices │
                                 │ /v1/rwa    │
+                                │ /v1/tickers│
                                 └────────────┘
 ```
 
@@ -62,12 +64,15 @@ mavryk-external-data/
 │   ├── config/                    # YAML + env, validation, defaults
 │   ├── core/
 │   │   ├── domain/prices/         # PricePoint, Source, Token, Currency, Side
+│   │   ├── domain/tickers/        # Ticker, Snapshot, Distribution, ExchangeKind
+│   │   ├── application/cache/     # Generic TTL[T any] — backs all CachedRepositories
 │   │   ├── application/prices/    # Repository interface, CachedRepository decorator
+│   │   ├── application/tickers/   # Repository + 2-TTL CachedRepository (latest/distribution)
 │   │   ├── api/http/              # Gin app, generic Wrap[Req,Res], handlers
 │   │   └── infrastructure/
-│   │       ├── interactions/      # CoinGecko client, Equiteez client
+│   │       ├── interactions/      # CoinGecko client (prices, tickers), Equiteez client
 │   │       ├── httpclient/        # Resilience: retry, CB, rate-limit, transport
-│   │       ├── jobs/              # live, backfill, RWA collectors
+│   │       ├── jobs/              # live, backfill, RWA, tickers collectors
 │   │       └── storage/           # entities, repositories, db.go
 │   ├── logging/                   # zerolog setup, request_id middleware
 │   └── metrics/                   # Prometheus collectors
@@ -91,17 +96,21 @@ mavryk-external-data/
 | `GET /v1/prices/:token/count`     | Total row count for token                            |
 | `GET /v1/rwa/:symbol`             | RWA orderbook points (range or latest); `:symbol` is `{base}-{quote}`, case-insensitive (e.g. `mars1-usdt`) |
 | `GET /v1/rwa/:symbol/latest`      | RWA snapshot — all sides, transposed                 |
+| `GET /v1/tickers/:token/latest`        | Per-exchange tickers for token: price, 24h volume, 1D change %, exchange logo. Filters stale rows by default; `?include_stale=true` opts in |
+| `GET /v1/tickers/:token/distribution`  | Volume-distribution pie data; `?group_by=exchange\|target&in=usd` aggregates volume into one row per group with `share_pct` |
 
 ### Common query parameters
 
-| Param      | On endpoints      | Notes                                       |
-|------------|-------------------|---------------------------------------------|
-| `from`     | list              | RFC3339; both omitted → "latest" mode       |
-| `to`       | list              | RFC3339                                     |
-| `limit`    | list              | capped by `server.max_query_limit` (10000)  |
-| `currency` | FT list           | filter: `usd`, `usd,eur`                    |
-| `side`     | RWA list          | filter: `bid`, `ask`, `last`, `mid`         |
-| `in`       | RWA list+latest   | read-side conversion targets, e.g. `usd,eur,aed` (see [ADR-0013](docs/adr/0013-multi-currency-rwa-conversion-read-side.md)); capped by `server.max_in_currencies` (10) |
+| Param           | On endpoints                | Notes                                       |
+|-----------------|-----------------------------|---------------------------------------------|
+| `from`          | list                        | RFC3339; both omitted → "latest" mode       |
+| `to`            | list                        | RFC3339                                     |
+| `limit`         | list                        | capped by `server.max_query_limit` (10000)  |
+| `currency`      | FT list                     | filter: `usd`, `usd,eur`                    |
+| `side`          | RWA list                    | filter: `bid`, `ask`, `last`, `mid`         |
+| `in`            | RWA + tickers list+latest   | read-side conversion targets, e.g. `usd,eur,aed` (see [ADR-0013](docs/adr/0013-multi-currency-rwa-conversion-read-side.md)); capped by `server.max_in_currencies` (10) |
+| `include_stale` | tickers /latest             | `true` returns rows older than `server.ticker_stale_after` (default 1h) flagged `is_stale: true` |
+| `group_by`      | tickers /distribution       | `exchange` or `target` — required          |
 
 ### Examples
 
@@ -111,6 +120,15 @@ curl http://localhost:3010/v1/prices/mvrk/latest
 
 # MVRK in USD over a window
 curl "http://localhost:3010/v1/prices/mvrk?currency=usd&from=2026-04-01T00:00:00Z&to=2026-04-02T00:00:00Z"
+
+# Per-exchange tickers for MVRK with USD+EUR conversions
+curl "http://localhost:3010/v1/tickers/mvrk/latest?in=usd,eur"
+
+# Pie chart: volume share by exchange
+curl "http://localhost:3010/v1/tickers/mvrk/distribution?group_by=exchange&in=usd"
+
+# Pie chart: volume share by quote currency (BTC vs USDT vs ETH ...)
+curl "http://localhost:3010/v1/tickers/mvrk/distribution?group_by=target&in=usd"
 
 # RWA pair 42 — last bid/ask in native quote (USDT)
 curl http://localhost:3010/v1/rwa/42/latest
@@ -252,13 +270,17 @@ For Docker, the `migration` stage in the Dockerfile runs
 
 Schema highlights:
 
-- `sources`, `tokens`, `rwa_pairs` — lookup tables (FK targets).
+- `sources`, `tokens`, `rwa_pairs`, `exchanges` — lookup tables (FK targets).
 - `token_prices` — FT hypertable (`(token_symbol, source_code, quote_currency, ts)` PK).
 - `rwa_quote_prices` — RWA hypertable (`(pair_id, side, ts)` PK).
+- `token_tickers` — per-exchange ticker hypertable
+  (`(token_symbol, source_code, exchange_id, target_symbol, ts)` PK).
 - `backfill_state` — composite `(source_code, entity_key)` cursor +
   error/backoff bookkeeping ([ADR-0008](docs/adr/0008-backfill-state-composite-key.md)).
 - Continuous aggregates: `token_prices_1h`, `_1d`, `rwa_quote_prices_1h`.
-- Compression policies: 14d for FT, 7d for RWA. Retention: 2 years on raw.
+- Compression policies: 14d for FT, 7d for RWA, 7d for tickers. Retention:
+  2 years on FT/RWA raw, 90d on tickers raw (no validated retro-analytics
+  use yet — extend when a consumer asks).
 
 ## Observability
 
