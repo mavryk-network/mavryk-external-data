@@ -6,12 +6,15 @@ servers:
 
 info:
   title: Mavryk External Data API
-  version: "2.2.0"
+  version: "2.3.0"
   description: |
     Long-format price service.
 
       * **FT prices** — CoinGecko-sourced quotes per (token, currency).
       * **RWA prices** — Equiteez orderbook prices per (pair, side).
+      * **Tickers** — CoinGecko-sourced per-exchange ticker data (price,
+        24h volume, 1D change %) plus volume-distribution pie chart data
+        for a given token.
 
     All prices are returned as **JSON numbers** rounded to 6 decimal places.
     Timestamps are RFC3339 in UTC.
@@ -44,6 +47,14 @@ tags:
       been enabled (see [ADR-0014](https://github.com/0xVoronov/mavryk-external-data/blob/main/docs/adr/0014-rwa-backfill-via-orderbook-order.md)).
       `/ohlcv` shares the same 501 stub as `charts-ft` until volume
       ingestion lands.
+  - name: prices-tickers
+    description: |
+      Per-exchange market data for a token (CoinGecko `/coins/{id}/tickers`).
+      List of exchanges trading the token with price + 24h volume + 1D
+      change %, plus a pie-chart `/distribution` endpoint that aggregates
+      volume by exchange or quote currency. Conversion to any supported
+      `?in=usd,eur,...` happens read-side via the same FX rates used by
+      `prices-rwa` (ADR-0013).
   - name: discovery
     description: |
       Catalog endpoints for clients that need to know which entities are
@@ -580,6 +591,135 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/Internal" }
 
+  /v1/tickers/{token}/latest:
+    get:
+      tags: [prices-tickers]
+      summary: Latest per-exchange tickers for a token
+      description: |
+        Returns one row per `(exchange, target_symbol)` for `{token}` —
+        freshest first. Each row carries the native `last_price` in
+        `target` units, `volume_24h_base` in token units, and a
+        query-time-computed `change_24h_pct` (null when no row exists
+        at `ts - 24h`).
+
+        Rows whose latest `ts` is older than `server.ticker_stale_after`
+        (default 1h) are filtered out by default. Set `?include_stale=true`
+        to receive them with `is_stale: true`.
+
+        Optional `?in=usd,eur,...` adds a nested `in.<target>` block per
+        row carrying the converted `price`, `volume_24h`, and FX
+        metadata. Conversion uses the FT-side `token_prices` series as
+        the FX source (ADR-0013). Per-target failures populate
+        `in.<target>.fx.error`; numeric fields are omitted but the parent
+        response stays 200.
+      operationId: latestTickers
+      parameters:
+        - $ref: "#/components/parameters/Token"
+        - $ref: "#/components/parameters/InFilter"
+        - $ref: "#/components/parameters/IncludeStale"
+      responses:
+        "200":
+          description: Tickers snapshot for the token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TickersSnapshot" }
+              example:
+                source: coingecko
+                entity: mvrk
+                timestamp: "2026-05-29T12:00:00Z"
+                tickers:
+                  - exchange: binance
+                    exchange_name: Binance
+                    exchange_kind: cex
+                    logo_url: "https://example.com/binance.png"
+                    target: btc
+                    pair: MVRK/BTC
+                    last_price: "0.000021"
+                    volume_24h_base: "1234567.89"
+                    change_24h_pct: "5.34"
+                    bid_ask_spread_pct: "0.10"
+                    trust_score: green
+                    is_stale: false
+                    is_anomaly: false
+                    trade_url: "https://www.binance.com/en/trade/MVRK_BTC"
+                    in:
+                      usd:
+                        price: "0.0853"
+                        volume_24h: "104938.27"
+                        fx:
+                          rate: "4063.95"
+                          source: coingecko
+                          ts: "2026-05-29T11:58:00Z"
+                          method: rate
+                          stale: false
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/tickers/{token}/distribution:
+    get:
+      tags: [prices-tickers]
+      summary: Volume distribution (pie chart) for a token
+      description: |
+        Aggregates the latest-per-pair `volume_24h_base` into one row per
+        group. `?group_by=exchange` groups by exchange (one bar per
+        exchange, summing across all quote targets); `?group_by=target`
+        groups by quote currency (one bar per target, summing across all
+        exchanges). `share_pct` is each group's share of `total_volume_base`.
+
+        Stale rows (older than `server.ticker_stale_after`) are **always**
+        excluded server-side — the pie chart is about current market
+        structure, not historical state. There is no `?include_stale=` on
+        this endpoint.
+
+        Optional `?in=usd,eur,...` adds a nested `in.<target>` block per
+        row carrying converted `volume_24h`. Per-target failures populate
+        `fx.error` and omit the numeric value; response stays 200.
+
+        When `total_volume_base` is zero (cold start, all volumes nil), the
+        endpoint returns 200 with an empty `rows` array.
+      operationId: tickerDistribution
+      parameters:
+        - $ref: "#/components/parameters/Token"
+        - $ref: "#/components/parameters/GroupBy"
+        - $ref: "#/components/parameters/InFilter"
+      responses:
+        "200":
+          description: Volume distribution rows.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TickerDistribution" }
+              example:
+                source: coingecko
+                entity: mvrk
+                timestamp: "2026-05-29T12:00:00Z"
+                group_by: exchange
+                total_volume_base: "5432109.50"
+                rows:
+                  - exchange: binance
+                    exchange_name: Binance
+                    exchange_kind: cex
+                    logo_url: "https://example.com/binance.png"
+                    volume_24h_base: "2345678.10"
+                    share_pct: "43.180000"
+                    in:
+                      usd:
+                        volume_24h: "199382.50"
+                        fx:
+                          rate: "0.085"
+                          source: coingecko
+                          ts: "2026-05-29T11:58:00Z"
+                          method: rate
+                          stale: false
+                  - exchange: kraken
+                    exchange_name: Kraken
+                    exchange_kind: cex
+                    volume_24h_base: "1234567.89"
+                    share_pct: "22.730000"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/Internal" }
+
   /v1/pairs/rwa:
     get:
       tags: [discovery]
@@ -669,6 +809,33 @@ components:
       schema:
         type: string
         example: usd,eur
+
+    IncludeStale:
+      name: include_stale
+      in: query
+      required: false
+      description: |
+        When `true`, return ticker rows whose `ts` is older than
+        `server.ticker_stale_after` (default 1h) — flagged with
+        `is_stale: true`. Default `false` hides them.
+      schema:
+        type: boolean
+        default: false
+        example: false
+
+    GroupBy:
+      name: group_by
+      in: query
+      required: true
+      description: |
+        Aggregation dimension for `/v1/tickers/:token/distribution`.
+        `exchange` groups by exchange identifier (one row per exchange,
+        summing across all quote targets). `target` groups by quote
+        currency (one row per target, summing across all exchanges).
+      schema:
+        type: string
+        enum: [exchange, target]
+        example: exchange
 
     InFilter:
       name: in
@@ -1143,6 +1310,259 @@ components:
           Per-target FX-converted `now` value when `?in=` is supplied
           (one numeric key per requested currency that succeeded).
           Same flat-top-level-key convention as `/v1/rwa/{symbol}/latest`.
+
+    TickersSnapshot:
+      type: object
+      description: |
+        Envelope for `/v1/tickers/:token/latest`. One row per
+        `(exchange, target_symbol)`. Numbers are JSON strings (preserves
+        full `numeric(38,18)` precision, same convention as
+        `/v1/prices/:token`).
+      required: [source, entity, timestamp, tickers]
+      properties:
+        source:
+          type: string
+          description: Upstream source code (e.g. `coingecko`).
+          example: coingecko
+        entity:
+          type: string
+          description: Token symbol (lowercase).
+          example: mvrk
+        timestamp:
+          type: string
+          format: date-time
+          description: Newest `ts` across all returned rows.
+        tickers:
+          type: array
+          items: { $ref: "#/components/schemas/TickerRow" }
+
+    TickerRow:
+      type: object
+      description: One per-exchange ticker datapoint inside `TickersSnapshot`.
+      required: [exchange, exchange_name, exchange_kind, target, pair, last_price, is_stale, is_anomaly, change_24h_pct]
+      properties:
+        exchange:
+          type: string
+          description: CoinGecko market identifier (FK to `exchanges.id`).
+          example: binance
+        exchange_name:
+          type: string
+          example: Binance
+        exchange_kind:
+          type: string
+          enum: [cex, dex]
+          description: |
+            Centralized vs decentralized exchange. Derived in code via
+            a hard-coded DEX allowlist; default `cex`.
+        logo_url:
+          type: string
+          description: |
+            URL of the exchange logo (CoinGecko Pro `include_exchange_logo`
+            flag). Omitted when upstream omits it.
+        target:
+          type: string
+          description: Quote symbol of the pair (lowercase), e.g. `btc`, `usdt`.
+          example: btc
+        pair:
+          type: string
+          description: Human label `{TOKEN}/{TARGET}` uppercased.
+          example: MVRK/BTC
+        last_price:
+          type: string
+          description: |
+            Price of 1 token in `target` units, as a JSON string with
+            full `numeric(38,18)` precision.
+          example: "0.000021"
+        volume_24h_base:
+          type: string
+          nullable: true
+          description: |
+            24h trading volume in **token units** (e.g. count of MVRK).
+            Null when upstream omits it.
+          example: "1234567.89"
+        change_24h_pct:
+          type: string
+          nullable: true
+          description: |
+            Price change over 24h as percent, rounded to 6dp. Null when no
+            row exists at `ts - 24h` (cold start, exchange delisted then
+            relisted, etc.).
+          example: "5.34"
+        bid_ask_spread_pct:
+          type: string
+          nullable: true
+          example: "0.10"
+        trust_score:
+          type: string
+          description: Upstream trust score (`green` / `yellow` / `red` / "").
+          example: green
+        is_stale:
+          type: boolean
+          description: |
+            Derived from `ts < now - server.ticker_stale_after`. Always
+            `false` on the default `/latest` response (stale rows are
+            filtered); only appears `true` when `?include_stale=true`.
+        is_anomaly:
+          type: boolean
+          description: |
+            True when CoinGecko flagged the entry as anomalous or stale at
+            ingest time. Caller-facing — UI may want to dim the row.
+        trade_url:
+          type: string
+          description: Direct deep link into the exchange's trade UI.
+        in:
+          type: object
+          description: |
+            Per-`?in=` projection. Present only when `?in=` was supplied
+            and at least one target succeeded. Each key is a lowercase
+            ISO-4217 / asset code that matches the request.
+          additionalProperties: { $ref: "#/components/schemas/ConvertedTickerBlock" }
+
+    ConvertedTickerBlock:
+      type: object
+      description: |
+        Per-target conversion result for one `TickerRow`. `price` and
+        `volume_24h` may be omitted when conversion failed — in that
+        case `fx.error` is populated and the parent response stays 200.
+      required: [fx]
+      properties:
+        price:
+          type: string
+          description: |
+            `last_price` converted to the target currency
+            (FX(target_symbol → currency) × last_price).
+          example: "0.0853"
+        volume_24h:
+          type: string
+          nullable: true
+          description: |
+            `volume_24h_base` converted to the target currency
+            (FX(token → currency) × volume_24h_base). Null when upstream
+            omitted the base volume.
+          example: "104938.27"
+        fx:
+          $ref: "#/components/schemas/TickerFXMeta"
+
+    TickerFXMeta:
+      type: object
+      description: |
+        FX metadata for one conversion. On success, `rate`/`source`/`ts`
+        are populated and `error` is empty. On failure, `error` carries
+        the reason and the numeric fields are absent.
+      properties:
+        rate:
+          type: string
+          example: "4063.95"
+        source:
+          type: string
+          example: coingecko
+        ts:
+          type: string
+          format: date-time
+          description: Timestamp of the FX rate (at-or-before the row `ts`).
+        method:
+          type: string
+          enum: [rate, identity]
+          description: |
+            `identity` when source-token == target-currency (rate=1, no
+            upstream lookup). `rate` otherwise.
+        stale:
+          type: boolean
+          description: |
+            True when the FX rate is older than `server.fx_max_staleness_seconds`
+            (default 300s). Still served; UI may want to flag.
+        error:
+          type: string
+          enum: [no_rate, unsupported_target, unregistered_source, query_error]
+          description: Populated only when conversion failed for this target.
+
+    TickerDistribution:
+      type: object
+      description: |
+        Envelope for `/v1/tickers/:token/distribution`. One row per group
+        (exchange or target) with summed `volume_24h_base` and `share_pct`.
+        `share_pct` over all returned rows sums to ~100 (±epsilon).
+      required: [source, entity, timestamp, group_by, total_volume_base, rows]
+      properties:
+        source:
+          type: string
+          example: coingecko
+        entity:
+          type: string
+          example: mvrk
+        timestamp:
+          type: string
+          format: date-time
+        group_by:
+          type: string
+          enum: [exchange, target]
+        total_volume_base:
+          type: string
+          description: |
+            Sum of `rows[].volume_24h_base` across all returned groups,
+            in token units. Zero when there's no usable data yet — `rows`
+            is empty in that case.
+          example: "5432109.50"
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/TickerDistributionRow" }
+
+    TickerDistributionRow:
+      type: object
+      description: |
+        One slice of the pie. Exactly one of `exchange` or `target` is
+        populated, depending on the `group_by` mode.
+      required: [volume_24h_base, share_pct]
+      properties:
+        exchange:
+          type: string
+          description: |
+            Exchange identifier (present when `group_by=exchange`).
+            Omitted under `group_by=target`.
+          example: binance
+        exchange_name:
+          type: string
+        exchange_kind:
+          type: string
+          enum: [cex, dex]
+        logo_url:
+          type: string
+        target:
+          type: string
+          description: |
+            Quote currency symbol (present when `group_by=target`).
+            Omitted under `group_by=exchange`.
+          example: btc
+        volume_24h_base:
+          type: string
+          description: Group's summed volume in token units.
+          example: "2345678.10"
+        share_pct:
+          type: string
+          description: |
+            `volume_24h_base / total_volume_base × 100`, rounded to 6dp.
+          example: "43.180000"
+        in:
+          type: object
+          description: Per-`?in=` converted volume block, omitted when no `?in=`.
+          additionalProperties: { $ref: "#/components/schemas/ConvertedVolumeBlock" }
+
+    ConvertedVolumeBlock:
+      type: object
+      description: |
+        Per-target conversion result for one `TickerDistributionRow`.
+        Slimmer than `ConvertedTickerBlock` — pies only convert volume,
+        never a price.
+      required: [fx]
+      properties:
+        volume_24h:
+          type: string
+          description: |
+            Group volume in the target currency
+            (FX(token → currency) × volume_24h_base).
+          example: "199382.50"
+        fx:
+          $ref: "#/components/schemas/TickerFXMeta"
 
     ErrorResponse:
       type: object
