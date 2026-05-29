@@ -30,6 +30,7 @@ type RouterDeps struct {
 	RWAPairs      handlers.RWAPairsDeps
 	Change        handlers.ChangeDeps
 	LegacyQuotes  handlers.LegacyQuotesDeps
+	Ticker        handlers.TickerDeps
 	RWAAuth       gin.HandlerFunc
 	MountDocs     bool
 }
@@ -103,6 +104,16 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			rwa.GET("/:symbol/series", deps.RWACharts.Series())
 			rwa.GET("/:symbol/ohlc", deps.RWACharts.OHLC())
 			rwa.GET("/:symbol/ohlcv", handlers.NotImplementedOHLCV())
+		}
+		// Per-exchange ticker market data (CoinGecko /coins/{id}/tickers).
+		// Open on both listeners — same posture as /v1/prices (FT data, not
+		// tenant-scoped). Mounted only when Ticker.Service is wired.
+		if deps.Ticker.Service != nil {
+			tk := v1.Group("/tickers")
+			{
+				tk.GET("/:token/latest", deps.Ticker.LatestByToken())
+				tk.GET("/:token/distribution", deps.Ticker.Distribution())
+			}
 		}
 		// Discovery group. Lives outside /v1/rwa because gin's radix
 		// tree won't accept a static segment next to /rwa/:symbol. Shares

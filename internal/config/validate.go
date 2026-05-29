@@ -27,6 +27,7 @@ func (c *Config) Validate() error {
 		c.validateEquiteezBackfill,
 		c.validateTokens,
 		c.validateRWA,
+		c.validateTickers,
 		c.validateAuth,
 		c.validateProductionSafety,
 	} {
@@ -67,6 +68,9 @@ func (c *Config) validateServer() error {
 	}
 	if c.Server.MaxInCurrencies < 0 {
 		return fmt.Errorf("server.max_in_currencies must be >= 0, got %d", c.Server.MaxInCurrencies)
+	}
+	if c.Server.TickerStaleAfter < 0 {
+		return fmt.Errorf("server.ticker_stale_after must be >= 0, got %s", time.Duration(c.Server.TickerStaleAfter))
 	}
 	if err := validatePositiveDuration("server.read_timeout", c.Server.ReadTimeout); err != nil {
 		return err
@@ -227,6 +231,29 @@ func (c *Config) validateEquiteezBackfill() error {
 	}
 	if err := validateBackfillStartFrom(b.StartFrom); err != nil {
 		return fmt.Errorf("equiteez.backfill.start_from: %w", err)
+	}
+	return nil
+}
+
+func (c *Config) validateTickers() error {
+	t := c.Tickers
+	if !t.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(t.TokenSymbol) == "" {
+		return fmt.Errorf("tickers.token_symbol is required when tickers.enabled is true")
+	}
+	if t.IntervalSeconds <= 0 {
+		return fmt.Errorf("tickers.interval_seconds must be > 0 when tickers.enabled is true, got %d", t.IntervalSeconds)
+	}
+	if t.HTTPTimeout <= 0 {
+		return fmt.Errorf("tickers.http_timeout must be > 0 when tickers.enabled is true, got %s", time.Duration(t.HTTPTimeout))
+	}
+	if t.Cache.LatestTTLSeconds < 0 {
+		return fmt.Errorf("tickers.cache.latest_ttl_seconds must be >= 0")
+	}
+	if t.Cache.DistributionTTLSeconds < 0 {
+		return fmt.Errorf("tickers.cache.distribution_ttl_seconds must be >= 0")
 	}
 	return nil
 }

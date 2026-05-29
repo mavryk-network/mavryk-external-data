@@ -2,9 +2,10 @@ package prices
 
 import (
 	"context"
-	"sync"
+	"strings"
 	"time"
 
+	"quotes/internal/core/application/cache"
 	"quotes/internal/core/domain/prices"
 )
 
@@ -16,24 +17,12 @@ import (
 // cache for the (Source, EntityKey) it wrote. This is conservative — readers
 // see their writes immediately, at the cost of dropping a possibly-still-fresh
 // entry. For our cadence (1–60 s ticks) this is the right tradeoff.
+//
+// Built on top of cache.TTL[[]PricePoint] — see internal/core/application/cache
+// for the generic primitive shared with the tickers domain.
 type CachedRepository struct {
 	inner Repository
-	ttl   time.Duration
-
-	mu    sync.RWMutex
-	cache map[cacheKey]cacheEntry
-}
-
-type cacheKey struct {
-	Source  prices.Source
-	Entity  string
-	Metrics string // joined sorted metrics list ("" for all)
-	Limit   int
-}
-
-type cacheEntry struct {
-	expires time.Time
-	points  []prices.PricePoint
+	cache *cache.TTL[[]prices.PricePoint]
 }
 
 // NewCachedRepository returns a decorator. ttl <= 0 disables caching transparently
@@ -41,8 +30,7 @@ type cacheEntry struct {
 func NewCachedRepository(inner Repository, ttl time.Duration) *CachedRepository {
 	return &CachedRepository{
 		inner: inner,
-		ttl:   ttl,
-		cache: make(map[cacheKey]cacheEntry),
+		cache: cache.New(ttl, cloneSlice),
 	}
 }
 
@@ -52,7 +40,7 @@ func (c *CachedRepository) Save(ctx context.Context, points []prices.PricePoint)
 	if err != nil {
 		return n, err
 	}
-	if n > 0 && c.ttl > 0 {
+	if n > 0 && c.cache.Enabled() {
 		c.invalidate(points)
 	}
 	return n, nil
@@ -60,72 +48,42 @@ func (c *CachedRepository) Save(ctx context.Context, points []prices.PricePoint)
 
 // Query consults the cache for IsLatest queries; otherwise passes through.
 func (c *CachedRepository) Query(ctx context.Context, q prices.Query) ([]prices.PricePoint, error) {
-	if c.ttl <= 0 || !q.IsLatest() {
+	if !c.cache.Enabled() || !q.IsLatest() {
 		return c.inner.Query(ctx, q)
 	}
 	key := keyFor(q)
-	if cached, ok := c.lookup(key); ok {
-		return cloneSlice(cached), nil
-	}
-	points, err := c.inner.Query(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	c.store(key, cloneSlice(points))
-	return points, nil
+	return c.cache.GetOrLoad(ctx, key, func(ctx context.Context) ([]prices.PricePoint, error) {
+		return c.inner.Query(ctx, q)
+	})
 }
 
-func (c *CachedRepository) lookup(k cacheKey) ([]prices.PricePoint, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	entry, ok := c.cache[k]
-	if !ok || time.Now().After(entry.expires) {
-		return nil, false
-	}
-	return entry.points, true
-}
-
-func (c *CachedRepository) store(k cacheKey, points []prices.PricePoint) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cache[k] = cacheEntry{
-		expires: time.Now().Add(c.ttl),
-		points:  points,
-	}
-}
-
-// invalidate drops every entry whose (source, entity) appears in points.
-// Fast-path: collect distinct keys first, then a single locked sweep.
+// invalidate drops every cache entry whose (source, entity) appears in points.
+// Cache keys encode (source, entity, metrics, limit) — we split on a sentinel
+// to recover (source, entity) cheaply without holding a parsed-key index.
 func (c *CachedRepository) invalidate(points []prices.PricePoint) {
-	affected := make(map[struct {
-		s prices.Source
-		e string
-	}]struct{}, 4)
+	type key struct {
+		source prices.Source
+		entity string
+	}
+	affected := make(map[key]struct{}, 4)
 	for _, p := range points {
-		affected[struct {
-			s prices.Source
-			e string
-		}{p.Source, p.EntityKey}] = struct{}{}
+		affected[key{p.Source, p.EntityKey}] = struct{}{}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k := range c.cache {
-		if _, hit := affected[struct {
-			s prices.Source
-			e string
-		}{k.Source, k.Entity}]; hit {
-			delete(c.cache, k)
+	c.cache.Invalidate(func(k string) bool {
+		// key encoding: "src|entity|metrics|limit"; first two segments are
+		// what we match on.
+		parts := strings.SplitN(k, "|", 3)
+		if len(parts) < 2 {
+			return false
 		}
-	}
+		_, hit := affected[key{prices.Source(parts[0]), parts[1]}]
+		return hit
+	})
 }
 
-func keyFor(q prices.Query) cacheKey {
-	return cacheKey{
-		Source:  q.Source,
-		Entity:  q.EntityKey,
-		Metrics: joinSorted(q.Metrics),
-		Limit:   q.Limit,
-	}
+func keyFor(q prices.Query) string {
+	// Order: source | entity | metrics-joined-sorted | limit
+	return string(q.Source) + "|" + q.EntityKey + "|" + joinSorted(q.Metrics) + "|" + itoa(q.Limit)
 }
 
 func joinSorted(in []string) string {
@@ -142,10 +100,12 @@ func joinSorted(in []string) string {
 	}
 	out := cp[0]
 	for _, s := range cp[1:] {
-		out += "|" + s
+		out += "," + s
 	}
 	return out
 }
+
+// itoa: see changes.go (same package). Reused to keep cache keys allocation-free.
 
 func cloneSlice(in []prices.PricePoint) []prices.PricePoint {
 	if in == nil {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"quotes/internal/config"
 	"quotes/internal/core/api/http/handlers"
 	httpmw "quotes/internal/core/api/http/middleware"
 	apiprices "quotes/internal/core/application/prices"
+	apitickers "quotes/internal/core/application/tickers"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/storage/repositories"
 	"quotes/internal/logging"
@@ -38,6 +40,9 @@ type AppDeps struct {
 	// When either field is nil the handler rejects `?in=` with 400.
 	FXConverter apiprices.PriceConverter
 	Lookup      *repositories.LookupRepository
+	// TickerQuery powers /v1/tickers/:token/latest and /distribution. Nil
+	// disables the routes silently (no handlers mounted).
+	TickerQuery apitickers.QueryService
 }
 
 // App owns one or two HTTP servers:
@@ -268,6 +273,13 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
 	rwaPairsDeps := handlers.RWAPairsDeps{Lookup: deps.Lookup}
+	tickerDeps := handlers.TickerDeps{
+		Service:          deps.TickerQuery,
+		Converter:        deps.FXConverter,
+		DefaultSource:    prices.SourceCoinGecko,
+		MaxInCurrencies:  cfg.Server.MaxInCurrencies,
+		TickerStaleAfter: time.Duration(cfg.Server.TickerStaleAfter),
+	}
 	// Legacy /quotes — restored for downstream services that still pin to
 	// the v0.1.0 wide-format route. MVRK + CoinGecko only by design;
 	// hard-coded rather than registry-looked-up so a missing tokens row
@@ -288,6 +300,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		RWAPairs:      rwaPairsDeps,
 		Change:        changeDeps,
 		LegacyQuotes:  legacyQuotesDeps,
+		Ticker:        tickerDeps,
 	}
 }
 

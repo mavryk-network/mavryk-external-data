@@ -40,8 +40,13 @@ type ServerConfig struct {
 	// MaxInCurrencies — cap on the number of comma-separated currencies a
 	// single request may pass to `?in=`. Defends against `?in=usd,eur,...`
 	// spam. 0 means use the in-code default (10).
-	MaxInCurrencies int        `yaml:"max_in_currencies"`
-	CORS            CORSConfig `yaml:"cors"`
+	MaxInCurrencies int `yaml:"max_in_currencies"`
+	// TickerStaleAfter — /v1/tickers/:token/latest hides rows whose `ts` is
+	// older than now-TickerStaleAfter by default. Opt-in `?include_stale=true`
+	// returns them with is_stale=true. /distribution always excludes stale
+	// rows regardless of caller flag. 0 means use the in-code default (1h).
+	TickerStaleAfter DurationYAML `yaml:"ticker_stale_after"`
+	CORS             CORSConfig   `yaml:"cors"`
 }
 
 // ServerRateLimitConfig controls inbound HTTP throttling.

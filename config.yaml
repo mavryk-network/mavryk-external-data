@@ -17,6 +17,10 @@ server:
   latest_quote_cache_ttl_seconds: 5
   # Hard cap on the ?limit= query param. 0 = use compiled default (10000).
   max_query_limit: 10000
+  # /v1/tickers/:token/latest hides rows whose `ts` is older than this by default.
+  # `?include_stale=true` returns them with is_stale=true. /distribution always
+  # excludes stale rows regardless of caller flag.
+  ticker_stale_after: "1h"
   pprof_enabled: false
   # Per-handler ctx timeout (request budget). 0 disables.
   handler_timeout: "10s"
@@ -107,6 +111,19 @@ rwa:
   enabled: false
   interval_seconds: 60
   concurrency: 4
+
+# Per-exchange ticker collector. Polls CoinGecko /coins/{id}/tickers on a fixed
+# cadence and serves /v1/tickers/:token/latest + /distribution.
+# Default off — flip after migrations 0012/0013/0014 are applied.
+tickers:
+  enabled: false
+  token_symbol: "mvrk"
+  interval_seconds: 300
+  http_timeout: "10s"
+  include_exchange_logo: true
+  cache:
+    latest_ttl_seconds: 30
+    distribution_ttl_seconds: 60
 
 # MBIO JWT verification for the public listener's RWA routes (/v1/rwa/*,
 # /v1/pairs/rwa). Internal listener traffic skips this entirely.

@@ -36,6 +36,9 @@ func setDefaults(config *Config) {
 	if config.Server.MaxInCurrencies == 0 {
 		config.Server.MaxInCurrencies = 10
 	}
+	if config.Server.TickerStaleAfter == 0 {
+		config.Server.TickerStaleAfter = DurationYAML(60 * time.Minute)
+	}
 	if len(config.Server.CORS.AllowedOrigins) == 0 {
 		config.Server.CORS.AllowedOrigins = []string{
 			"http://localhost:3010",
@@ -144,5 +147,24 @@ func setDefaults(config *Config) {
 	}
 	if config.RWA.Concurrency == 0 && config.RWA.Enabled {
 		config.RWA.Concurrency = 4
+	}
+
+	// Tickers defaults — only the cache TTLs are eager; the rest stay zero
+	// unless explicitly enabled in YAML so a fresh service doesn't start
+	// hammering CG without an operator decision.
+	if config.Tickers.TokenSymbol == "" {
+		config.Tickers.TokenSymbol = "mvrk"
+	}
+	if config.Tickers.IntervalSeconds == 0 {
+		config.Tickers.IntervalSeconds = 300 // 5 min
+	}
+	if config.Tickers.HTTPTimeout == 0 {
+		config.Tickers.HTTPTimeout = DurationYAML(10 * time.Second)
+	}
+	if config.Tickers.Cache.LatestTTLSeconds == 0 {
+		config.Tickers.Cache.LatestTTLSeconds = 30
+	}
+	if config.Tickers.Cache.DistributionTTLSeconds == 0 {
+		config.Tickers.Cache.DistributionTTLSeconds = 60
 	}
 }
