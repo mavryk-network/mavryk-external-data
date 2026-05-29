@@ -19,6 +19,7 @@ import (
 	"quotes/internal/config"
 	httpapp "quotes/internal/core/api/http"
 	apiprices "quotes/internal/core/application/prices"
+	apitickers "quotes/internal/core/application/tickers"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/httpclient"
 	"quotes/internal/core/infrastructure/jobs"
@@ -88,6 +89,14 @@ func run() int {
 	// Change repos for /change endpoints. Read-only; share the GORM handle.
 	tokenChangeRepo := repositories.NewTokenChangeRepository(db.DB)
 	rwaChangeRepo := repositories.NewRWAChangeRepository(db.DB)
+	// Ticker repo + cache decorator. Two TTLs because /latest and /distribution
+	// have different cost / call-rate profiles (see ADR-0007 / Q1).
+	tickerRepo := repositories.NewTickerRepository(db.DB).WithBatchSize(batch)
+	tickerAppRepo := apitickers.NewCachedRepository(
+		tickerRepo,
+		time.Duration(cfg.Tickers.Cache.LatestTTLSeconds)*time.Second,
+		time.Duration(cfg.Tickers.Cache.DistributionTTLSeconds)*time.Second,
+	)
 
 	// Application repositories: cache decorator on top, used by HTTP and by jobs
 	// (jobs write through, decorator invalidates).
@@ -118,6 +127,7 @@ func run() int {
 		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
 		Lookup:          lookup,
+		TickerQuery:     tickerAppRepo,
 	})
 	if err != nil {
 		logger.Error().Err(err).Msg("http_app_init_failed")
@@ -128,6 +138,7 @@ func run() int {
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
+	tickersJob := jobs.NewCoinGeckoTickersJob(cfg, tickerAppRepo, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -163,6 +174,7 @@ func run() int {
 
 	rwaJob.Start(ctx)
 	rwaBackfillJob.Start(ctx)
+	tickersJob.Start(ctx)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -195,6 +207,7 @@ func run() int {
 	backfillJob.Stop()
 	rwaJob.Stop()
 	rwaBackfillJob.Stop()
+	tickersJob.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
