@@ -44,6 +44,7 @@ func overrideWithEnv(config *Config) error {
 		{"SERVER_WRITE_TIMEOUT", &config.Server.WriteTimeout},
 		{"SERVER_READ_HEADER_TIMEOUT", &config.Server.ReadHeaderTimeout},
 		{"SERVER_IDLE_TIMEOUT", &config.Server.IdleTimeout},
+		{"SERVER_TICKER_STALE_AFTER", &config.Server.TickerStaleAfter},
 	} {
 		if v := os.Getenv(e.env); v != "" {
 			d, err := time.ParseDuration(v)
@@ -289,6 +290,47 @@ func overrideWithEnv(config *Config) error {
 			return fmt.Errorf("RWA_CONCURRENCY: invalid int %q: %w", v, err)
 		}
 		config.RWA.Concurrency = val
+	}
+
+	if v := os.Getenv("TICKERS_ENABLED"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("TICKERS_ENABLED: invalid bool %q: %w", v, err)
+		}
+		config.Tickers.Enabled = val
+	}
+	if v := os.Getenv("TICKERS_TOKEN_SYMBOL"); v != "" {
+		config.Tickers.TokenSymbol = v
+	}
+	if v := os.Getenv("TICKERS_INCLUDE_EXCHANGE_LOGO"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("TICKERS_INCLUDE_EXCHANGE_LOGO: invalid bool %q: %w", v, err)
+		}
+		config.Tickers.IncludeExchangeLogo = val
+	}
+	for _, e := range []struct {
+		env string
+		dst *int
+	}{
+		{"TICKERS_INTERVAL_SECONDS", &config.Tickers.IntervalSeconds},
+		{"TICKERS_CACHE_LATEST_TTL_SECONDS", &config.Tickers.Cache.LatestTTLSeconds},
+		{"TICKERS_CACHE_DISTRIBUTION_TTL_SECONDS", &config.Tickers.Cache.DistributionTTLSeconds},
+	} {
+		if v := os.Getenv(e.env); v != "" {
+			val, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("%s: invalid int %q: %w", e.env, v, err)
+			}
+			*e.dst = val
+		}
+	}
+	if v := os.Getenv("TICKERS_HTTP_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("TICKERS_HTTP_TIMEOUT: invalid duration %q: %w", v, err)
+		}
+		config.Tickers.HTTPTimeout = DurationYAML(d)
 	}
 
 	if v := os.Getenv("AUTH_ENABLED"); v != "" {

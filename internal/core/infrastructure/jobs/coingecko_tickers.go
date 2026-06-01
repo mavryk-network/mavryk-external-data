@@ -138,6 +138,16 @@ func (j *CoinGeckoTickersJob) collectOnce(ctx context.Context, token prices.Toke
 	metrics.JobRowsAffectedTotal.
 		WithLabelValues("tickers", string(j.source), string(token)).
 		Add(float64(n))
+	// Snapshot gauges — distinct (exchange, target) and distinct exchanges
+	// observed in THIS tick. Set unconditionally on a successful save so the
+	// gauge reflects the freshest reality, even when n==0 (mapper found rows
+	// but the DB had them all already → ON CONFLICT DO NOTHING).
+	metrics.TickersActiveCount.
+		WithLabelValues(string(j.source), string(token)).
+		Set(float64(len(rows)))
+	metrics.TickersExchangesCount.
+		WithLabelValues(string(j.source), string(token)).
+		Set(float64(len(exchanges)))
 	logger.Info().
 		Int("exchanges", len(exchanges)).
 		Int("rows", len(rows)).

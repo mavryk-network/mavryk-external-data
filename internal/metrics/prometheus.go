@@ -266,6 +266,45 @@ var (
 		},
 		[]string{"kind", "code"},
 	)
+
+	// TickersActiveCount — gauge of distinct (exchange, target_symbol) pairs
+	// observed in the latest CoinGecko tickers tick, per token. Set after each
+	// successful job tick. A drop from 50 → 30 between ticks means CoinGecko
+	// stopped reporting ~20 pairs (exchange delisted, market paused) — alert
+	// when this gauge falls more than ~30% in 15min.
+	TickersActiveCount = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "tickers_active_count",
+			Help: "Distinct (exchange, target_symbol) pairs in the last CoinGecko tickers tick, per token.",
+		},
+		[]string{"source", "token"},
+	)
+
+	// TickersExchangesCount — gauge of distinct exchanges observed in the
+	// latest tick, per token. Useful as a coarser signal than
+	// TickersActiveCount (catches "Binance delisted MVRK" even if Binance
+	// previously had only one pair).
+	TickersExchangesCount = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "tickers_exchanges_count",
+			Help: "Distinct exchanges reporting the token in the last CoinGecko tickers tick.",
+		},
+		[]string{"source", "token"},
+	)
+
+	// TickersCacheRequestsTotal — counter of cache outcomes for the in-process
+	// snapshot caches that back /v1/tickers/:token/latest and /distribution.
+	// endpoint ∈ {latest, distribution}; result ∈ {hit, miss}.
+	// hit_ratio = sum(hit) / (sum(hit) + sum(miss)) per endpoint — alert when
+	// hit_ratio drops below ~0.5 (cache too small / TTL too short / poll rate
+	// pathological).
+	TickersCacheRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tickers_cache_requests_total",
+			Help: "Outcome of tickers in-process cache lookups, per endpoint.",
+		},
+		[]string{"endpoint", "result"},
+	)
 )
 
 // StatusClass returns 2xx, 4xx, or 5xx for HTTPResponsesTotal labelling.

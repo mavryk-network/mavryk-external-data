@@ -7,6 +7,7 @@ import (
 
 	"quotes/internal/core/application/cache"
 	"quotes/internal/core/domain/tickers"
+	"quotes/internal/metrics"
 )
 
 // CachedRepository wraps a Repository with per-endpoint TTL caches.
@@ -75,9 +76,17 @@ func (c *CachedRepository) LatestSnapshot(ctx context.Context, q LatestQuery) (t
 		return c.inner.LatestSnapshot(ctx, q)
 	}
 	key := latestKey(q)
-	return c.latest.GetOrLoad(ctx, key, func(ctx context.Context) (tickers.Snapshot, error) {
-		return c.inner.LatestSnapshot(ctx, q)
-	})
+	if v, ok := c.latest.Lookup(key); ok {
+		metrics.TickersCacheRequestsTotal.WithLabelValues("latest", "hit").Inc()
+		return v, nil
+	}
+	metrics.TickersCacheRequestsTotal.WithLabelValues("latest", "miss").Inc()
+	v, err := c.inner.LatestSnapshot(ctx, q)
+	if err != nil {
+		return tickers.Snapshot{}, err
+	}
+	c.latest.Store(key, v)
+	return v, nil
 }
 
 func (c *CachedRepository) VolumeDistribution(ctx context.Context, q DistributionQuery) (tickers.Distribution, error) {
@@ -85,9 +94,17 @@ func (c *CachedRepository) VolumeDistribution(ctx context.Context, q Distributio
 		return c.inner.VolumeDistribution(ctx, q)
 	}
 	key := distributionKey(q)
-	return c.distribution.GetOrLoad(ctx, key, func(ctx context.Context) (tickers.Distribution, error) {
-		return c.inner.VolumeDistribution(ctx, q)
-	})
+	if v, ok := c.distribution.Lookup(key); ok {
+		metrics.TickersCacheRequestsTotal.WithLabelValues("distribution", "hit").Inc()
+		return v, nil
+	}
+	metrics.TickersCacheRequestsTotal.WithLabelValues("distribution", "miss").Inc()
+	v, err := c.inner.VolumeDistribution(ctx, q)
+	if err != nil {
+		return tickers.Distribution{}, err
+	}
+	c.distribution.Store(key, v)
+	return v, nil
 }
 
 func latestKey(q LatestQuery) string {
