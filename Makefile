@@ -31,6 +31,11 @@ run:
 	@echo "Running application..."
 	go run cmd/quotes/main.go
 
+# Mint an RS256 Bearer JWT for the RWA routes, signed with secret.key.
+# Override fields via flags, e.g. `make jwt JWT_ARGS="--ttl 24h"`.
+jwt:
+	@go run cmd/jwtgen/main.go $(JWT_ARGS)
+
 test:
 	@echo "Running tests..."
 	go test -race -timeout 5m -cover ./...

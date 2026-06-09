@@ -97,10 +97,11 @@ func NewApp(deps AppDeps) (*App, error) {
 	publicEngine := buildPublicEngine(cfg, appLogger)
 	publicDeps := routerDepsBase
 	publicDeps.RWAAuth = rwaAuth
-	// Docs (Swagger UI + openapi.yaml) get mounted on the internal listener
-	// when one exists; here on the public engine only as a fallback for
-	// single-port local-dev runs.
-	publicDeps.MountDocs = strings.TrimSpace(cfg.Server.InternalPort) == ""
+	// Docs (Swagger UI + openapi.yaml) are mounted on the public engine in every
+	// mode. Access to /docs and /openapi.yaml is gated at the infrastructure
+	// layer (reverse proxy / network policy), not in the app — so we expose them
+	// unconditionally here and let the edge decide who reaches them.
+	publicDeps.MountDocs = true
 	SetupRoutes(publicEngine, publicDeps)
 
 	publicServer := &http.Server{

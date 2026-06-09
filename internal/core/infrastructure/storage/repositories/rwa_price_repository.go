@@ -277,11 +277,14 @@ func (r *RWAPriceRepository) AllTimeHighLast(
 		HighPrice decimal.Decimal `gorm:"column:high_price"`
 		Bucket    time.Time       `gorm:"column:bucket"`
 	}
+	// The 1d CAGG stores the daily high as `max_price` (see migration 0010);
+	// alias it to high_price so the scan struct binds. Mirrors the
+	// max_price→high_price alias the chart SQL already uses (candle_sql.go).
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT high_price, bucket
+		`SELECT max_price AS high_price, bucket
 		   FROM rwa_quote_prices_1d
 		  WHERE pair_id = ? AND side = ?
-		  ORDER BY high_price DESC
+		  ORDER BY max_price DESC
 		  LIMIT 1`,
 		pairID, side).Scan(&rows).Error
 	if err != nil {
