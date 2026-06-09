@@ -232,6 +232,8 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxLimit:        cfg.Server.MaxQueryLimit,
 		DefaultLimit:    100,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
+		// ath + price-one-year-ago for /latest; same concrete repo as charts.
+		Stats: deps.RWAPriceRepo,
 	}
 	// RWA chart service runs over RWAPriceRepository. Converter enables
 	// `?in=<currency>` close-of-bucket FX (see ADR-0015 / ADR-0013); when

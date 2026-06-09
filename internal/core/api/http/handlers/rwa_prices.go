@@ -34,6 +34,15 @@ type PairLookup interface {
 	LookupRWAPairBySymbol(ctx context.Context, base, quote string) (prices.RWAPair, error)
 }
 
+// RWAStatsReader supplies the derived per-pair stats that enrich the /latest
+// snapshot: the all-time-high (price + date) and the price one year ago. Both
+// are read on the `last` side. Optional on RWAPriceDeps — when the reader is
+// nil, /latest simply omits the `ath` / `price_one_year_ago` blocks.
+type RWAStatsReader interface {
+	AllTimeHighLast(ctx context.Context, pairID int64, side string) (decimal.Decimal, time.Time, bool, error)
+	PriceAtOrBefore(ctx context.Context, pairID int64, side string, ts time.Time) (decimal.Decimal, time.Time, bool, error)
+}
+
 // RWAPriceDeps wires the RWA-side dependencies.
 type RWAPriceDeps struct {
 	Service       apiprices.QueryService
@@ -45,6 +54,10 @@ type RWAPriceDeps struct {
 	// MaxInCurrencies caps the number of comma-separated currencies in `?in=`.
 	// 0 means unlimited (not recommended); production should pin to e.g. 10.
 	MaxInCurrencies int
+	// Stats is optional; supplies ath + price-one-year-ago for /latest. When
+	// nil those blocks are omitted (keeps the endpoint back-compatible and lets
+	// unit tests that don't exercise them stay minimal).
+	Stats RWAStatsReader
 }
 
 // ListBySymbol — GET /v1/rwa/:symbol
@@ -162,9 +175,45 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 		if len(req.InTargets) > 0 {
 			dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, picked.Price, picked.Timestamp)
 		}
+		d.enrichLatest(ctx, &dto, req.Pair, quoteToken, quoteResolved, req.InTargets)
 		return dto, nil
 	}
 	return common.Wrap(bind, action)
+}
+
+// enrichLatest adds the `ath` and `price_one_year_ago` blocks to a /latest DTO
+// when a Stats reader is configured. Each block carries the native-quote value
+// plus — when `?in=` targets are present — the same flat per-currency
+// conversions as the top-level price, converted at the block's own timestamp
+// (ATH at the ATH date; the year-ago price at its observation time). A nil
+// reader, missing data, or a repo error simply omits the block: the core price
+// snapshot still returns 200.
+func (d RWAPriceDeps) enrichLatest(
+	ctx context.Context,
+	dto *rwaPriceDTO,
+	pair prices.RWAPair,
+	quoteToken prices.Token,
+	quoteResolved bool,
+	targets []prices.Currency,
+) {
+	if d.Stats == nil {
+		return
+	}
+	if price, ts, found, err := d.Stats.AllTimeHighLast(ctx, pair.ID, lastSide); err == nil && found {
+		ath := &athDTO{Price: newNum6(price), Date: ts.Format("2006-01-02")}
+		if len(targets) > 0 {
+			ath.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, ts)
+		}
+		dto.ATH = ath
+	}
+	yearAgo := time.Now().UTC().AddDate(-1, 0, 0)
+	if price, ts, found, err := d.Stats.PriceAtOrBefore(ctx, pair.ID, lastSide, yearAgo); err == nil && found {
+		p1y := &priceAtDTO{Price: newNum6(price)}
+		if len(targets) > 0 {
+			p1y.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, ts)
+		}
+		dto.PriceOneYearAgo = p1y
+	}
 }
 
 // --- DTO ---
@@ -182,6 +231,11 @@ type rwaPriceDTO struct {
 	NativeQuote string
 	Price       num6
 	Converted   map[string]num6 // optional; one key per `?in=` target that succeeded
+	// Optional enrichment (only on /latest, only when a Stats reader is wired).
+	// `ath` / `price_one_year_ago` are nested objects (not flat currency keys)
+	// so they don't collide with the top-level converted-price currency keys.
+	ATH             *athDTO
+	PriceOneYearAgo *priceAtDTO
 }
 
 func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
@@ -190,6 +244,49 @@ func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
 	out["native_quote"] = d.NativeQuote
 	out["price"] = d.Price
 	for cur, v := range d.Converted {
+		out[cur] = v
+	}
+	if d.ATH != nil {
+		out["ath"] = d.ATH
+	}
+	if d.PriceOneYearAgo != nil {
+		out["price_one_year_ago"] = d.PriceOneYearAgo
+	}
+	return json.Marshal(out)
+}
+
+// athDTO is the all-time-high block on /latest: native-quote `price`, the
+// `date` (YYYY-MM-DD) it occurred, plus one numeric key per `?in=` currency
+// (converted at the ATH date). Same flat-currency-inline convention as
+// rwaPriceDTO, scoped inside the `ath` object.
+type athDTO struct {
+	Price     num6
+	Date      string
+	Converted map[string]num6
+}
+
+func (a athDTO) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, 2+len(a.Converted))
+	out["price"] = a.Price
+	out["date"] = a.Date
+	for cur, v := range a.Converted {
+		out[cur] = v
+	}
+	return json.Marshal(out)
+}
+
+// priceAtDTO is a bare price block (price-one-year-ago): native-quote `price`
+// plus one numeric key per `?in=` currency, converted at the observation
+// timestamp of that historical point.
+type priceAtDTO struct {
+	Price     num6
+	Converted map[string]num6
+}
+
+func (p priceAtDTO) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, 1+len(p.Converted))
+	out["price"] = p.Price
+	for cur, v := range p.Converted {
 		out[cur] = v
 	}
 	return json.Marshal(out)
