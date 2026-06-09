@@ -653,3 +653,168 @@ func (s *stubFnConverter) Convert(
 ) (apiprices.ConversionResult, error) {
 	return s.fn(ctx, src, target, amt, ts)
 }
+
+// stubStats satisfies RWAStatsReader. Returns the configured ath / price-at
+// values and records call counts so tests can assert the reader is consulted.
+type stubStats struct {
+	athPrice decimal.Decimal
+	athTS    time.Time
+	athFound bool
+	athErr   error
+	p1yPrice decimal.Decimal
+	p1yTS    time.Time
+	p1yFound bool
+	p1yErr   error
+	athCalls int
+	p1yCalls int
+}
+
+func (s *stubStats) AllTimeHighLast(_ context.Context, _ int64, _ string) (decimal.Decimal, time.Time, bool, error) {
+	s.athCalls++
+	return s.athPrice, s.athTS, s.athFound, s.athErr
+}
+
+func (s *stubStats) PriceAtOrBefore(_ context.Context, _ int64, _ string, _ time.Time) (decimal.Decimal, time.Time, bool, error) {
+	s.p1yCalls++
+	return s.p1yPrice, s.p1yTS, s.p1yFound, s.p1yErr
+}
+
+// TestRWA_Latest_StatsEnriched — with a Stats reader, /latest carries the
+// `ath {price,date}` and `price_one_year_ago {price}` blocks (native quote, no `?in=`).
+func TestRWA_Latest_StatsEnriched(t *testing.T) {
+	svc, lookup := rwaLastPointForTests(t)
+	stats := &stubStats{
+		athPrice: decimal.NewFromFloat(161.0),
+		athTS:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		athFound: true,
+		p1yPrice: decimal.NewFromFloat(84.0),
+		p1yTS:    time.Date(2025, 4, 28, 12, 0, 0, 0, time.UTC),
+		p1yFound: true,
+	}
+	deps := RWAPriceDeps{Service: svc, Lookup: lookup, DefaultSource: prices.SourceEquiteez, Stats: stats}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, w.Body.String())
+	}
+
+	ath, ok := got["ath"].(map[string]any)
+	if !ok {
+		t.Fatalf("ath missing or not an object: %v; body=%s", got["ath"], w.Body.String())
+	}
+	if p, ok := ath["price"].(float64); !ok || p != 161.0 {
+		t.Errorf("ath.price = %v, want 161.0", ath["price"])
+	}
+	if ath["date"] != "2025-10-06" {
+		t.Errorf("ath.date = %v, want 2025-10-06", ath["date"])
+	}
+
+	p1y, ok := got["price_one_year_ago"].(map[string]any)
+	if !ok {
+		t.Fatalf("price_one_year_ago missing or not an object: %v", got["price_one_year_ago"])
+	}
+	if p, ok := p1y["price"].(float64); !ok || p != 84.0 {
+		t.Errorf("price_one_year_ago.price = %v, want 84.0", p1y["price"])
+	}
+}
+
+// TestRWA_Latest_StatsConverted — `?in=usd` converts the ath and year-ago
+// blocks at their own timestamps, inlined as flat currency keys inside each.
+func TestRWA_Latest_StatsConverted(t *testing.T) {
+	svc, lookup := rwaLastPointForTests(t)
+	conv := &stubConverter{result: apiprices.ConversionResult{
+		Rate:   decimal.NewFromInt(2),
+		Source: prices.SourceCoinGecko,
+		RateTS: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
+	}}
+	stats := &stubStats{
+		athPrice: decimal.NewFromFloat(161.0),
+		athTS:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		athFound: true,
+		p1yPrice: decimal.NewFromFloat(84.0),
+		p1yTS:    time.Date(2025, 4, 28, 12, 0, 0, 0, time.UTC),
+		p1yFound: true,
+	}
+	deps := RWAPriceDeps{
+		Service: svc, Converter: conv, Lookup: lookup,
+		DefaultSource: prices.SourceEquiteez, MaxInCurrencies: 10, Stats: stats,
+	}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest?in=usd", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, w.Body.String())
+	}
+
+	ath := got["ath"].(map[string]any)
+	if usd, ok := ath["usd"].(float64); !ok || usd != 322.0 { // 161 * 2
+		t.Errorf("ath.usd = %v, want 322.0", ath["usd"])
+	}
+	p1y := got["price_one_year_ago"].(map[string]any)
+	if usd, ok := p1y["usd"].(float64); !ok || usd != 168.0 { // 84 * 2
+		t.Errorf("price_one_year_ago.usd = %v, want 168.0", p1y["usd"])
+	}
+}
+
+// TestRWA_Latest_NoStats_OmitsBlocks — with no Stats reader wired, the ath /
+// price_one_year_ago keys are absent (back-compat with existing consumers).
+func TestRWA_Latest_NoStats_OmitsBlocks(t *testing.T) {
+	svc, lookup := rwaLastPointForTests(t)
+	deps := RWAPriceDeps{Service: svc, Lookup: lookup, DefaultSource: prices.SourceEquiteez}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := got["ath"]; ok {
+		t.Errorf("ath present without a Stats reader")
+	}
+	if _, ok := got["price_one_year_ago"]; ok {
+		t.Errorf("price_one_year_ago present without a Stats reader")
+	}
+}
+
+// TestRWA_Latest_StatsNotFound_OmitsBlocks — the reader is consulted but has no
+// data (found=false); the blocks are omitted and the core price still returns 200.
+func TestRWA_Latest_StatsNotFound_OmitsBlocks(t *testing.T) {
+	svc, lookup := rwaLastPointForTests(t)
+	stats := &stubStats{athFound: false, p1yFound: false}
+	deps := RWAPriceDeps{Service: svc, Lookup: lookup, DefaultSource: prices.SourceEquiteez, Stats: stats}
+	r := newRWAEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt/latest", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := got["ath"]; ok {
+		t.Errorf("ath present when reader returned found=false")
+	}
+	if _, ok := got["price_one_year_ago"]; ok {
+		t.Errorf("price_one_year_ago present when reader returned found=false")
+	}
+	if stats.athCalls != 1 || stats.p1yCalls != 1 {
+		t.Errorf("reader calls = (ath %d, p1y %d), want (1,1)", stats.athCalls, stats.p1yCalls)
+	}
+}

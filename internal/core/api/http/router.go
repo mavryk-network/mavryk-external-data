@@ -13,11 +13,10 @@ import (
 // middleware. It is non-nil on the public listener and nil on the internal
 // listener — same handler graph, same code path, different exposure surface.
 //
-// MountDocs, when true, registers /openapi.yaml and /docs (Swagger UI). When
-// the two-listener layout is active these are mounted on the internal engine
-// only — the API spec is operator documentation, not customer-facing. In
-// single-port mode (no internal listener) docs go on the public engine so
-// local-dev `curl /docs` still works.
+// MountDocs, when true, registers /openapi.yaml and /docs (Swagger UI). It is
+// true on both listeners: the spec and Swagger UI are exposed on the public
+// engine and access is gated at the infrastructure layer (reverse proxy /
+// network policy), not in the app.
 //
 // See app.go for the wiring.
 type RouterDeps struct {
@@ -42,8 +41,8 @@ type RouterDeps struct {
 //	/healthz                 — liveness
 //	/readyz                  — readiness (db ping + drain gate)
 //	/metrics                 — Prometheus (internal listener only)
-//	/openapi.yaml            — embedded OpenAPI 3.0 spec (internal only when two-port)
-//	/docs                    — Swagger UI (internal only when two-port)
+//	/openapi.yaml            — embedded OpenAPI 3.0 spec (public; gated at the edge)
+//	/docs                    — Swagger UI (public; gated at the edge)
 //	/quotes                  — legacy v0.1.0 wide-format MVRK quotes
 //	/v1/prices/:token         — list (range or latest)
 //	/v1/prices/:token/latest  — transposed snapshot
@@ -68,9 +67,9 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 	engine.GET("/quotes", deps.LegacyQuotes.LegacyQuotes())
 
 	// Static OpenAPI 3.0 spec + Swagger UI shell. Both bytes are embedded at
-	// compile time via docs.OpenAPIYAML / docs.SwaggerUIHTML. In two-listener
-	// mode these live on the internal engine only — the public listener does
-	// not expose the API spec.
+	// compile time via docs.OpenAPIYAML / docs.SwaggerUIHTML. Mounted on the
+	// public listener; access is restricted at the infrastructure layer rather
+	// than in the app.
 	if deps.MountDocs {
 		engine.GET("/openapi.yaml", handlers.OpenAPISpec())
 		engine.GET("/docs", handlers.SwaggerUI())

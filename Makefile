@@ -31,6 +31,9 @@ run:
 	@echo "Running application..."
 	go run cmd/quotes/main.go
 
+jwt:
+	@go run cmd/jwtgen/main.go $(JWT_ARGS)
+
 test:
 	@echo "Running tests..."
 	go test -race -timeout 5m -cover ./...

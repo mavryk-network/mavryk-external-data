@@ -264,3 +264,61 @@ func rwaEntitiesToPoints(rows []entities.RWAQuotePriceEntity, source prices.Sour
 	}
 	return out
 }
+
+// AllTimeHighLast returns the highest price ever recorded for a pair on the
+// given side, plus the day it occurred. It reads the 1d continuous aggregate
+// (rwa_quote_prices_1d.high_price): the max daily high across all buckets is
+// the all-time high, and that bucket is the ATH date. The read contract passes
+// side="last". found=false when the pair has no aggregated rows yet.
+func (r *RWAPriceRepository) AllTimeHighLast(
+	ctx context.Context, pairID int64, side string,
+) (decimal.Decimal, time.Time, bool, error) {
+	var rows []struct {
+		HighPrice decimal.Decimal `gorm:"column:high_price"`
+		Bucket    time.Time       `gorm:"column:bucket"`
+	}
+	// The 1d CAGG stores the daily high as `max_price` (see migration 0010);
+	// alias it to high_price so the scan struct binds. Mirrors the
+	// max_price→high_price alias the chart SQL already uses (candle_sql.go).
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT max_price AS high_price, bucket
+		   FROM rwa_quote_prices_1d
+		  WHERE pair_id = ? AND side = ?
+		  ORDER BY max_price DESC
+		  LIMIT 1`,
+		pairID, side).Scan(&rows).Error
+	if err != nil {
+		return decimal.Decimal{}, time.Time{}, false, fmt.Errorf("query rwa all-time high: %w", err)
+	}
+	if len(rows) == 0 {
+		return decimal.Decimal{}, time.Time{}, false, nil
+	}
+	return rows[0].HighPrice, rows[0].Bucket.UTC(), true, nil
+}
+
+// PriceAtOrBefore returns the most recent price at or before ts for a pair on
+// the given side — the anchor for "price one year ago". It is a point lookup on
+// raw rwa_quote_prices over the (pair_id, side, ts) index. found=false when no
+// observation exists at/before ts (e.g. the pair is younger than the lookback).
+func (r *RWAPriceRepository) PriceAtOrBefore(
+	ctx context.Context, pairID int64, side string, ts time.Time,
+) (decimal.Decimal, time.Time, bool, error) {
+	var rows []struct {
+		Price decimal.Decimal `gorm:"column:price"`
+		TS    time.Time       `gorm:"column:ts"`
+	}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT price, ts
+		   FROM rwa_quote_prices
+		  WHERE pair_id = ? AND side = ? AND ts <= ?
+		  ORDER BY ts DESC
+		  LIMIT 1`,
+		pairID, side, ts.UTC()).Scan(&rows).Error
+	if err != nil {
+		return decimal.Decimal{}, time.Time{}, false, fmt.Errorf("query rwa price-at-or-before: %w", err)
+	}
+	if len(rows) == 0 {
+		return decimal.Decimal{}, time.Time{}, false, nil
+	}
+	return rows[0].Price, rows[0].TS.UTC(), true, nil
+}
