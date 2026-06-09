@@ -522,6 +522,19 @@ paths:
         Optional `?in=usd,eur,...` adds converted prices as flat top-level
         numeric keys. Targets that fail conversion (no FX rate, unregistered
         quote currency, etc.) are silently omitted; the response stays 200.
+
+        This endpoint also carries two optional enrichment blocks (absent on
+        the list endpoint):
+        - `ath` — all-time-high on the `last` side: native-quote `price` plus
+          the `date` (YYYY-MM-DD) it occurred. Omitted when no aggregated
+          history exists yet.
+        - `price_one_year_ago` — most recent `last` price at or before now-1y,
+          in native quote. Omitted when the pair is younger than one year.
+
+        When `?in=` is supplied, both blocks also carry the same flat
+        per-currency keys, converted at the snapshot's current FX rate (the
+        same rate as the top-level price), for whichever currencies were
+        requested in `?in=`.
       operationId: latestRWASnapshot
       parameters:
         - $ref: "#/components/parameters/Symbol"
@@ -539,6 +552,17 @@ paths:
                 usd: 100.46
                 eur: 85.63
                 aed: 368.72
+                ath:
+                  price: 150.00
+                  date: "2025-12-03"
+                  usd: 150.02
+                  eur: 127.88
+                  aed: 550.95
+                price_one_year_ago:
+                  price: 82.30
+                  usd: 82.31
+                  eur: 70.16
+                  aed: 302.30
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -990,9 +1014,10 @@ components:
         ISO-4217 code). Targets that fail conversion are silently absent —
         the response stays 200 as long as the native price was found.
 
-        Top-level reserved keys: `timestamp`, `native_quote`, `price`.
-        All other top-level keys are converted currencies (3-letter codes
-        that can never collide with the reserved names).
+        Top-level reserved keys: `timestamp`, `native_quote`, `price`, and —
+        on `/latest` only — the optional `ath` and `price_one_year_ago`
+        objects. All other top-level keys are converted currencies (3-letter
+        codes that can never collide with the reserved names).
       required: [timestamp, native_quote, price]
       properties:
         timestamp:
@@ -1012,12 +1037,70 @@ components:
             Last price in `native_quote`, rounded to 6 decimal places.
             Serialised as a JSON number (not a quoted string).
           example: 100.45
+        ath:
+          $ref: "#/components/schemas/RWAAllTimeHigh"
+        price_one_year_ago:
+          $ref: "#/components/schemas/RWAPriceAt"
       additionalProperties:
         type: number
         description: |
           Converted price for a target currency from `?in=`.
           Key is the lowercase ISO-4217 code (`usd`, `eur`, `aed`, …).
           Rounded to 6 decimal places.
+
+    RWAAllTimeHigh:
+      type: object
+      description: |
+        All-time-high block on `/v1/rwa/{symbol}/latest` (the `ath` key).
+        Computed on the `last` side. `price` is the peak in native quote;
+        `date` is the day it occurred.
+
+        When `?in=` is supplied, each requested currency appears as an
+        additional top-level numeric key, converted at the snapshot's current
+        FX rate (the same rate as the top-level price), NOT the ATH date.
+
+        Reserved keys: `price`, `date`. All other keys are converted
+        currencies.
+      required: [price, date]
+      properties:
+        price:
+          type: number
+          description: Highest recorded price in native quote, 6 d.p.
+          example: 150.00
+        date:
+          type: string
+          description: YYYY-MM-DD (UTC) of the day the ATH occurred.
+          example: "2025-12-03"
+      additionalProperties:
+        type: number
+        description: |
+          ATH price converted to a `?in=` target at the snapshot's current
+          FX rate. Lowercase ISO-4217 key. Absent when conversion failed.
+
+    RWAPriceAt:
+      type: object
+      description: |
+        Price-one-year-ago block on `/v1/rwa/{symbol}/latest` (the
+        `price_one_year_ago` key). The most recent `last` observation at or
+        before now-1y, in native quote.
+
+        When `?in=` is supplied, each requested currency appears as an
+        additional top-level numeric key, converted at the snapshot's current
+        FX rate (the same rate as the top-level price).
+
+        Reserved key: `price`. All other keys are converted currencies.
+      required: [price]
+      properties:
+        price:
+          type: number
+          description: The year-ago price in native quote, 6 d.p.
+          example: 82.30
+      additionalProperties:
+        type: number
+        description: |
+          Year-ago price converted to a `?in=` target at the snapshot's
+          current FX rate. Lowercase ISO-4217 key. Absent when conversion
+          failed.
 
     RWAPairCatalogEntry:
       type: object
