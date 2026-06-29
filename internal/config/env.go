@@ -184,12 +184,6 @@ func overrideWithEnv(config *Config) error {
 	if v := os.Getenv("EQUITEEZ_INDEXER_PASSWORD"); v != "" {
 		config.Equiteez.IndexerPassword = v
 	}
-	if v := os.Getenv("EQUITEEZ_TOKEN_INDEXER_URL"); v != "" {
-		config.Equiteez.TokenIndexerURL = v
-	}
-	if v := os.Getenv("EQUITEEZ_TOKEN_INDEXER_PASSWORD"); v != "" {
-		config.Equiteez.TokenIndexerPassword = v
-	}
 	if v := os.Getenv("EQUITEEZ_RATE_LIMIT_RPS"); v != "" {
 		val, err := strconv.ParseFloat(v, 64)
 		if err != nil {

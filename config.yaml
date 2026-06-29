@@ -85,10 +85,11 @@ coingecko:
     burst: 16
 
 equiteez:
+  # Indexer via the public worker (injects the Hasura admin-secret and gates by
+  # origin/domain). Keep the *_password empty in deployed envs; set it locally/in
+  # CI so the client passes ?bypass=<secret> to the worker (see .env.example).
   indexer_url: ""
   indexer_password: ""
-  token_indexer_url: ""
-  token_indexer_password: ""
   rate_limit:
     rps: 0
     burst: 0
