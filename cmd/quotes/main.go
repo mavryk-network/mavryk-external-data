@@ -230,15 +230,6 @@ func warnDevDefaults(cfg *config.Config, logger *zerolog.Logger) {
 	if !strings.EqualFold(strings.TrimSpace(cfg.Server.GinMode), "release") {
 		return
 	}
-	for _, o := range cfg.Server.CORS.AllowedOrigins {
-		s := strings.ToLower(strings.TrimSpace(o))
-		if strings.Contains(s, "localhost") || strings.Contains(s, "127.0.0.1") {
-			logger.Warn().
-				Strs("cors_allowed_origins", cfg.Server.CORS.AllowedOrigins).
-				Msg("dev_cors_origin_in_release_mode")
-			break
-		}
-	}
 	if cfg.Server.RateLimit.RPS <= 0 {
 		logger.Warn().Msg("inbound_rate_limit_disabled_in_release_mode")
 	}

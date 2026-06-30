@@ -54,20 +54,6 @@ func overrideWithEnv(config *Config) error {
 			*e.dst = DurationYAML(d)
 		}
 	}
-	if v := os.Getenv("SERVER_CORS_ALLOWED_ORIGINS"); v != "" {
-		parts := strings.Split(v, ",")
-		var origins []string
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				origins = append(origins, p)
-			}
-		}
-		if len(origins) > 0 {
-			config.Server.CORS.AllowedOrigins = origins
-		}
-	}
-
 	if host := os.Getenv("POSTGRES_HOST"); host != "" {
 		config.Database.Host = host
 	}

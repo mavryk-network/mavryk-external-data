@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strings"
 	"time"
 )
 
@@ -38,24 +37,6 @@ func setDefaults(config *Config) {
 	}
 	if config.Server.TickerStaleAfter == 0 {
 		config.Server.TickerStaleAfter = DurationYAML(60 * time.Minute)
-	}
-	if len(config.Server.CORS.AllowedOrigins) == 0 {
-		config.Server.CORS.AllowedOrigins = []string{
-			"http://localhost:3010",
-			"http://127.0.0.1:3010",
-			"http://localhost:3000",
-			"http://127.0.0.1:3000",
-			"http://localhost:8080",
-			"http://127.0.0.1:8080",
-			"http://localhost:5173",
-			"http://127.0.0.1:5173",
-		}
-	}
-	if strings.TrimSpace(config.Server.CORS.AllowedMethods) == "" {
-		config.Server.CORS.AllowedMethods = "GET, HEAD, OPTIONS"
-	}
-	if strings.TrimSpace(config.Server.CORS.AllowedHeaders) == "" {
-		config.Server.CORS.AllowedHeaders = "Origin, Content-Type, Accept"
 	}
 
 	if config.Database.Host == "" {
