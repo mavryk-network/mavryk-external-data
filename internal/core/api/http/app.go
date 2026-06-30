@@ -47,9 +47,10 @@ type AppDeps struct {
 
 // App owns one or two HTTP servers:
 //
-//	publicServer   — :{server.port}, internet-facing. CORS + rate-limit on,
+//	publicServer   — :{server.port}, internet-facing. Rate-limit on,
 //	                 MBIO JWT middleware guards /v1/rwa/* and /v1/pairs/rwa.
-//	internalServer — :{server.internal_port}, optional. No CORS, no rate-limit,
+//	                 CORS is handled at the edge (Envoy Gateway), not here.
+//	internalServer — :{server.internal_port}, optional. No rate-limit,
 //	                 no RWA auth. Hosts /metrics. Reached only from inside the
 //	                 cluster via a ClusterIP Service + NetworkPolicy.
 //
@@ -167,14 +168,14 @@ func configureGinMode(cfg *config.Config) {
 }
 
 // buildPublicEngine returns the engine used for the external-facing listener:
-// full middleware stack, CORS allowlist, optional inbound rate limit.
+// full middleware stack and optional inbound rate limit. CORS is handled at the
+// edge (Envoy Gateway SecurityPolicy), not in the app.
 func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
 	router.Use(logging.RequestIDMiddleware(""))
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())
 	router.Use(gin.Recovery())
-	router.Use(httpmw.CORS(cfg.Server.CORS))
 	router.Use(httpmw.RateLimit(cfg.Server.RateLimit))
 	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
 		router.Use(httpmw.HandlerTimeout(to))
@@ -186,8 +187,8 @@ func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 }
 
 // buildInternalEngine returns the engine used for the intra-cluster listener.
-// CORS and rate-limit are stripped: callers are trusted pods inside the cluster,
-// not browsers or external clients. Logging, prometheus, recovery and per-handler
+// Rate-limit is stripped: callers are trusted pods inside the cluster, not
+// browsers or external clients. Logging, prometheus, recovery and per-handler
 // timeout stay — they protect against runaway internal callers and keep metrics
 // consistent.
 func buildInternalEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {

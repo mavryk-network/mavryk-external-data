@@ -2,20 +2,24 @@ package config
 
 // EquiteezConfig holds Equiteez indexer (GraphQL/Hasura) client settings.
 //
+// Auth lives in the equiteez Cloudflare worker fronting the indexer: it injects
+// the Hasura admin-secret itself and authorizes deployed (in-cluster) callers by
+// origin/domain, so the backend sends no secret there. IndexerPassword is a
+// LOCAL/CI-only bypass: when set, the client appends it to the request URL as
+// `?bypass=<secret>` (the worker accepts that in place of an allowed origin). Leave
+// it empty in deployed envs. See interactions/equiteez/client.go.
+//
 // RateLimit is independent from the CoinGecko one — the two services share no
-// quota. Hasura admin-secret endpoints usually have no per-IP limit, so this
-// defaults to 0 (disabled). Set equiteez.rate_limit.rps > 0 only if you know
-// your indexer enforces a quota.
+// quota. The worker endpoint usually has no per-IP limit, so this defaults to 0
+// (disabled). Set equiteez.rate_limit.rps > 0 only if you know it enforces a quota.
 //
 // Backfill controls the one-shot historical fetch from `orderbook_order` events
 // — see jobs/equiteez_backfill.go and ADR-0014.
 type EquiteezConfig struct {
-	IndexerURL           string                 `yaml:"indexer_url"`
-	IndexerPassword      string                 `yaml:"indexer_password"`
-	TokenIndexerURL      string                 `yaml:"token_indexer_url"`
-	TokenIndexerPassword string                 `yaml:"token_indexer_password"`
-	RateLimit            RateLimitConfig        `yaml:"rate_limit"`
-	Backfill             EquiteezBackfillConfig `yaml:"backfill"`
+	IndexerURL      string                 `yaml:"indexer_url"`
+	IndexerPassword string                 `yaml:"indexer_password"` // local/CI only: passed as ?bypass=<secret>
+	RateLimit       RateLimitConfig        `yaml:"rate_limit"`
+	Backfill        EquiteezBackfillConfig `yaml:"backfill"`
 }
 
 // EquiteezBackfillConfig controls the historical orderbook_order ingester.

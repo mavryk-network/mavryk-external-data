@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"quotes/internal/config"
@@ -18,12 +19,9 @@ import (
 const serviceName = "equiteez"
 
 type Client struct {
-	indexerURL           string
-	tokenIndexerURL      string
-	indexerPassword      string
-	tokenIndexerPassword string
-	httpClient           *http.Client
-	logger               *zerolog.Logger
+	indexerURL string
+	httpClient *http.Client
+	logger     *zerolog.Logger
 }
 
 // NewClient builds an Equiteez GraphQL/Hasura HTTP client (rate limit + retry/CB
@@ -52,10 +50,7 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	}
 	rt = httpclient.WrapRateLimited(rt, rl)
 	return &Client{
-		indexerURL:           eq.IndexerURL,
-		tokenIndexerURL:      eq.TokenIndexerURL,
-		indexerPassword:      eq.IndexerPassword,
-		tokenIndexerPassword: eq.TokenIndexerPassword,
+		indexerURL: indexerRequestURL(eq.IndexerURL, eq.IndexerPassword),
 		httpClient: &http.Client{
 			Timeout:   timeout,
 			Transport: rt,
@@ -64,18 +59,28 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	}
 }
 
-func (c *Client) headersForURL(url string) map[string]string {
-	var password string
-	switch url {
-	case c.indexerURL:
-		password = c.indexerPassword
-	case c.tokenIndexerURL:
-		password = c.tokenIndexerPassword
+// indexerRequestURL builds the URL used for every indexer GraphQL request.
+//
+// Auth lives in the equiteez Cloudflare worker (e.g. basenet.api.equiteez.com): it
+// injects the Hasura admin-secret itself and authorizes deployed callers by
+// origin/domain, so the backend sends NO x-hasura-admin-secret header.
+//
+// Local dev and CI tests have no allowed origin, so the worker also accepts a
+// `?bypass=<secret>` query param in place of the header. When the password is set
+// (local/CI only) we append it once here; in deployed (in-cluster) envs it is empty
+// and the URL is used as-is.
+func indexerRequestURL(rawURL, password string) string {
+	if password == "" {
+		return rawURL
 	}
-	if password != "" {
-		return map[string]string{"x-hasura-admin-secret": password}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
 	}
-	return nil
+	q := u.Query()
+	q.Set("bypass", password)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // GetAllowlistedTokensAndOrderbooks discovers active RWA pairs from the indexer:
@@ -109,7 +114,7 @@ func (c *Client) GetAllowlistedTokensAndOrderbooks(ctx context.Context) ([]Token
 			}
 		}
 	`
-	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, nil, c.headersForURL(c.indexerURL))
+	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +165,7 @@ func (c *Client) GetTokensWithOrderbooks(ctx context.Context, addresses []string
 		"addresses": addresses,
 	}
 
-	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, variables, c.headersForURL(c.indexerURL))
+	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, variables, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +264,7 @@ func (c *Client) GetFilledOrderbookOrders(
 		`
 		variables["start_from"] = startFrom.UTC().Format(time.RFC3339)
 	}
-	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, variables, c.headersForURL(c.indexerURL))
+	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, variables, nil)
 	if err != nil {
 		return nil, err
 	}

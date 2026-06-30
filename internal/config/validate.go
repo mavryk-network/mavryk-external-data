@@ -87,9 +87,6 @@ func (c *Config) validateServer() error {
 	if err := validateGinMode(c.Server.GinMode); err != nil {
 		return err
 	}
-	if err := validateCORSOrigins(c.Server.CORS.AllowedOrigins); err != nil {
-		return err
-	}
 	if c.Server.RateLimit.RPS < 0 {
 		return fmt.Errorf("server.rate_limit.rps must be >= 0")
 	}
@@ -347,25 +344,6 @@ func validateGinMode(mode string) error {
 	default:
 		return fmt.Errorf("server.gin_mode must be one of debug, release, test, or empty, got %q", mode)
 	}
-}
-
-func validateCORSOrigins(origins []string) error {
-	if len(origins) == 0 {
-		return fmt.Errorf("server.cors.allowed_origins must contain at least one origin")
-	}
-	for _, raw := range origins {
-		o := strings.TrimSpace(raw)
-		if o == "" {
-			return fmt.Errorf("server.cors.allowed_origins: empty entry is not allowed")
-		}
-		if o == "*" {
-			return fmt.Errorf("server.cors.allowed_origins: wildcard '*' is not allowed; list explicit http(s) origins")
-		}
-		if !strings.HasPrefix(o, "http://") && !strings.HasPrefix(o, "https://") {
-			return fmt.Errorf("server.cors.allowed_origins: origin %q must start with http:// or https://", o)
-		}
-	}
-	return nil
 }
 
 func validateOneToken(name string, tc TokenConfig) error {

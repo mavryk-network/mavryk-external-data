@@ -46,7 +46,6 @@ type ServerConfig struct {
 	// returns them with is_stale=true. /distribution always excludes stale
 	// rows regardless of caller flag. 0 means use the in-code default (1h).
 	TickerStaleAfter DurationYAML `yaml:"ticker_stale_after"`
-	CORS             CORSConfig   `yaml:"cors"`
 }
 
 // ServerRateLimitConfig controls inbound HTTP throttling.
