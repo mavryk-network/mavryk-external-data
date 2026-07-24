@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 // stubChangeRepo satisfies apiprices.ChangeRepository for handler tests.
 type stubChangeRepo struct {
+	mu    sync.Mutex // guards mutable fields for concurrent-handler tests (overview)
 	res   apiprices.ChangeRepoResult
 	err   error
 	calls int
@@ -25,12 +27,15 @@ type stubChangeRepo struct {
 }
 
 func (s *stubChangeRepo) GetChange(_ context.Context, q apiprices.ChangeQuery) (apiprices.ChangeRepoResult, error) {
+	s.mu.Lock()
 	s.calls++
 	s.gotQ = q
-	if s.err != nil {
-		return apiprices.ChangeRepoResult{}, s.err
+	res, err := s.res, s.err
+	s.mu.Unlock()
+	if err != nil {
+		return apiprices.ChangeRepoResult{}, err
 	}
-	return s.res, nil
+	return res, nil
 }
 
 func newChangeEngine(_ *testing.T, deps ChangeDeps) *gin.Engine {

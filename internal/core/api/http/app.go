@@ -263,14 +263,17 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 	// `?in=<currency>` close-of-bucket FX (see ADR-0015 / ADR-0013); when
 	// FXConverter is nil at the AppDeps level (e.g. CoinGecko key absent
 	// in dev) the chart handler 400s on `?in=` cleanly via preflight.
+	// Shared RWA chart service — reused by the per-symbol chart handlers AND the
+	// /v1/rwa overview list so they hit the same instance.
+	rwaChartService := &apiprices.ChartService{
+		Repo:      deps.RWAPriceRepo,
+		Converter: deps.FXConverter,
+		Caps:      apiprices.DefaultCaps(),
+		MaxLimit:  cfg.Server.MaxQueryLimit,
+		Kind:      "rwa",
+	}
 	rwaChartsDeps := handlers.RWAChartDeps{
-		Charts: &apiprices.ChartService{
-			Repo:      deps.RWAPriceRepo,
-			Converter: deps.FXConverter,
-			Caps:      apiprices.DefaultCaps(),
-			MaxLimit:  cfg.Server.MaxQueryLimit,
-			Kind:      "rwa",
-		},
+		Charts:        rwaChartService,
 		Lookup:        deps.Lookup,
 		DefaultSource: prices.SourceEquiteez,
 		MaxLimit:      cfg.Server.MaxQueryLimit,
@@ -281,17 +284,20 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 	// stay disambiguated. Service composes ChangeRepository + cache + singleflight.
 	// Converter (Decision #19, post-FX-fix) enables `?in=usd,eur,...` on the
 	// RWA change endpoint with at-or-before FX semantics.
+	// Shared RWA change service — reused by /change and the /v1/rwa overview list
+	// (which reads `now` + the 24h anchor from it) so they share its cache.
+	rwaChangeService := &apiprices.ChangeService{
+		Repo:  deps.RWAChangeRepo,
+		Cache: apiprices.NewChangeCache(),
+		Kind:  "rwa",
+	}
 	changeDeps := handlers.ChangeDeps{
 		FTService: &apiprices.ChangeService{
 			Repo:  deps.TokenChangeRepo,
 			Cache: apiprices.NewChangeCache(),
 			Kind:  "fa",
 		},
-		RWAService: &apiprices.ChangeService{
-			Repo:  deps.RWAChangeRepo,
-			Cache: apiprices.NewChangeCache(),
-			Kind:  "rwa",
-		},
+		RWAService:      rwaChangeService,
 		Lookup:          deps.Lookup,
 		Converter:       deps.FXConverter,
 		DefaultSource:   prices.SourceCoinGecko,
@@ -299,6 +305,17 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
 	rwaPairsDeps := handlers.RWAPairsDeps{Lookup: deps.Lookup}
+	// GET /v1/rwa — market-overview list. Composes the shared RWA change + chart
+	// services and the enabled-pair catalog. 5s response cache amortises the
+	// per-asset fan-out across dashboard polls.
+	rwaOverviewDeps := handlers.NewRWAOverviewDeps(
+		deps.Lookup,
+		rwaChangeService,
+		rwaChartService,
+		deps.FXConverter,
+		prices.SourceEquiteez,
+		5*time.Second,
+	)
 	tickerDeps := handlers.TickerDeps{
 		Service:          deps.TickerQuery,
 		Converter:        deps.FXConverter,
@@ -324,6 +341,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		RWAPrice:      rwaDeps,
 		RWACharts:     rwaChartsDeps,
 		RWAPairs:      rwaPairsDeps,
+		RWAOverview:   rwaOverviewDeps,
 		Change:        changeDeps,
 		LegacyQuotes:  legacyQuotesDeps,
 		Ticker:        tickerDeps,

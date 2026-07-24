@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,18 +19,22 @@ import (
 // stubCandleRepo is a CandleRepository test double. Captures the last query
 // for assertions and returns canned candles or err.
 type stubCandleRepo struct {
+	mu      sync.Mutex // guards mutable fields for concurrent-handler tests (overview)
 	candles []apiprices.Candle
 	err     error
 	seen    apiprices.CandleQuery
 }
 
 func (s *stubCandleRepo) QueryCandles(_ context.Context, q apiprices.CandleQuery) ([]apiprices.Candle, error) {
+	s.mu.Lock()
 	s.seen = q
-	if s.err != nil {
-		return nil, s.err
+	candles, err := s.candles, s.err
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
 	}
-	out := make([]apiprices.Candle, len(s.candles))
-	copy(out, s.candles)
+	out := make([]apiprices.Candle, len(candles))
+	copy(out, candles)
 	return out, nil
 }
 
