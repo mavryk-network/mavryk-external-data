@@ -3,13 +3,19 @@ package httpclient
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/sony/gobreaker"
+	"golang.org/x/time/rate"
 
 	"quotes/internal/metrics"
 )
@@ -90,11 +96,25 @@ func retryableErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	// Deterministic/permanent failures: retrying only adds latency and pads
+	// outbound_http_retries_total while a misconfiguration persists.
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
 		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return false
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		msg := urlErr.Err.Error()
+		if strings.Contains(msg, "unsupported protocol scheme") || strings.Contains(msg, "no Host in request URL") {
+			return false
+		}
 	}
 	return true
 }
@@ -113,6 +133,47 @@ func waitContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// limiterWait blocks until the shared limiter grants a token (no-op when lim is
+// nil, i.e. rate limiting disabled for the component). Records the wait so the
+// retry-side throttling is visible in the same metric as the request-side wait.
+func limiterWait(ctx context.Context, lim *rate.Limiter, comp string) error {
+	if lim == nil {
+		return nil
+	}
+	start := time.Now()
+	if err := lim.Wait(ctx); err != nil {
+		return err
+	}
+	if comp != "" {
+		metrics.OutboundHTTPRateLimitWaitSeconds.WithLabelValues(comp).Observe(time.Since(start).Seconds())
+	}
+	return nil
+}
+
+// retryAfter parses a Retry-After response header (RFC 7231): either delta-seconds
+// or an HTTP-date. Returns 0 when absent, malformed, or in the past.
+func retryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	v := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
 type retryTransport struct {
 	next http.RoundTripper
 	s    ResilienceSettings
@@ -128,6 +189,13 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if attempts < 1 {
 		attempts = 1
 	}
+	// The outer WrapRateLimited charges one token for the logical request
+	// (attempt 1). Retries happen below it and would otherwise bypass the
+	// limiter — turning one call into RetryMaxAttempts unthrottled network hits
+	// exactly when the upstream is returning 429. Charge a token before each
+	// RETRY so total attempts never exceed the configured RPS. nil = limiter
+	// disabled for this component.
+	lim := lookupSharedLimiter(comp)
 
 	var snapshot []byte
 	if req.Body != nil && req.Body != http.NoBody {
@@ -170,17 +238,29 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if werr := waitContext(req.Context(), bo.NextBackOff()); werr != nil {
 				return nil, werr
 			}
+			if werr := limiterWait(req.Context(), lim, comp); werr != nil {
+				return nil, werr
+			}
 			continue
 		}
 		if shouldRetryHTTPStatus(resp.StatusCode) {
 			if attempt >= attempts {
 				return resp, nil
 			}
+			// Honor Retry-After (delta-seconds or HTTP-date) on 429/503 instead
+			// of blind exponential backoff; fall back to backoff when absent.
+			wait := bo.NextBackOff()
+			if ra := retryAfter(resp); ra > 0 {
+				wait = ra
+			}
 			_ = resp.Body.Close()
 			if comp != "" {
 				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
 			}
-			if werr := waitContext(req.Context(), bo.NextBackOff()); werr != nil {
+			if werr := waitContext(req.Context(), wait); werr != nil {
+				return nil, werr
+			}
+			if werr := limiterWait(req.Context(), lim, comp); werr != nil {
 				return nil, werr
 			}
 			continue
@@ -239,15 +319,33 @@ func cbStateValue(s gobreaker.State) float64 {
 	}
 }
 
+// errUpstream5xx is an internal sentinel: the callback returns it alongside a
+// real 5xx response so gobreaker records a failure, then RoundTrip unwraps it and
+// hands the caller the real response. Without this the breaker only ever sees
+// transport-level errors and never opens against an upstream that is hard-down
+// but still answering 500/503.
+var errUpstream5xx = errors.New("upstream returned 5xx (counted as circuit-breaker failure)")
+
 func (c *circuitBreakerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if c.next == nil {
 		c.next = http.DefaultTransport
 	}
 	v, err := c.cb.Execute(func() (interface{}, error) {
-		return c.next.RoundTrip(req)
+		resp, rerr := c.next.RoundTrip(req)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if resp.StatusCode >= 500 {
+			// Count as a failure but preserve the response in the returned value.
+			return resp, errUpstream5xx
+		}
+		return resp, nil
 	})
 	if err != nil {
-		return nil, err
+		if errors.Is(err, errUpstream5xx) {
+			return v.(*http.Response), nil // deliver the real 5xx to the caller
+		}
+		return nil, err // transport error, or ErrOpenState/ErrTooManyRequests
 	}
 	return v.(*http.Response), nil
 }

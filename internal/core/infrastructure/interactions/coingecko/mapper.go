@@ -1,6 +1,7 @@
 package coingecko
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -8,6 +9,10 @@ import (
 
 	"github.com/shopspring/decimal"
 )
+
+// minValidMillis is 2010-01-01T00:00:00Z in epoch milliseconds — the floor for
+// an accepted CoinGecko sample timestamp (no crypto price data predates it).
+const minValidMillis = 1262304000000
 
 // MapToPricePoints converts the CoinGecko market_chart/range response (one per
 // currency) into long-format []PricePoint rows for token_prices. The forward-fill
@@ -34,8 +39,26 @@ func MapToPricePoints(
 			if len(point) < 2 {
 				continue
 			}
-			ts := time.UnixMilli(int64(point[0])).UTC()
-			price := decimal.NewFromFloat(point[1])
+			// Skip non-positive or non-finite samples. CoinGecko occasionally
+			// emits a 0.0 (or garbage) price during an upstream glitch; persisting
+			// it would overwrite a good price at the same (token,currency,ts) and
+			// — because token_prices doubles as the FX source — make every ?in=
+			// conversion in that minute bucket resolve to a rate of 0.
+			v := point[1]
+			if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+				continue
+			}
+			// Bounds-check the timestamp before the float→int64 conversion: an
+			// out-of-range float (e.g. 1e300 in a corrupted-but-valid-JSON payload)
+			// converts to implementation-defined garbage (min-int64 on amd64), a
+			// nonsense pre-1970 row that passes NOT NULL and pollutes range queries.
+			tsMillis := point[0]
+			maxMillis := float64(time.Now().Add(24 * time.Hour).UnixMilli())
+			if tsMillis < minValidMillis || tsMillis > maxMillis {
+				continue
+			}
+			ts := time.UnixMilli(int64(tsMillis)).UTC()
+			price := decimal.NewFromFloat(v)
 			out = append(out, prices.PricePoint{
 				Source:    source,
 				EntityKey: tokenSymbol,

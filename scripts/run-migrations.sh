@@ -30,8 +30,19 @@ echo "Database: ${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}"
 echo "Migrations directory: ${MIGRATIONS_DIR}"
 
 echo "Waiting for database to be ready..."
+attempts=0
+max_attempts="${DB_WAIT_MAX_ATTEMPTS:-60}"
 until psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DATABASE}" -c '\q' 2>/dev/null; do
-  echo "Database is unavailable - sleeping"
+  attempts=$((attempts + 1))
+  if [ "$attempts" -ge "$max_attempts" ]; then
+    # Bounded wait: a wrong host/credentials fails identically every second, so
+    # without a cap the whole stack hangs forever (app depends_on this service).
+    # Surface the real psql error (auth vs connection refused) on the way out.
+    echo "Database still unavailable after ${max_attempts} attempts; last psql error:" >&2
+    psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DATABASE}" -c '\q' >&2 || true
+    exit 1
+  fi
+  echo "Database is unavailable - sleeping (${attempts}/${max_attempts})"
   sleep 1
 done
 
@@ -44,7 +55,12 @@ fi
 
 for f in $(ls "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort); do
   echo "Executing migration: $(basename "$f")"
-  if psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DATABASE}" -f "$f"; then
+  # -v ON_ERROR_STOP=1: without it psql runs past a failed statement and still
+  # exits 0, so a half-applied migration would be reported as success. We do NOT
+  # add --single-transaction: the CAGG/policy files (0006-0010) call
+  # add_continuous_aggregate_policy / add_*_policy, which cannot run inside a
+  # transaction block. ON_ERROR_STOP alone still aborts the whole run on any error.
+  if psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DATABASE}" -f "$f"; then
     echo "✓ Migration $(basename "$f") completed successfully"
   else
     echo "✗ Migration $(basename "$f") failed" >&2

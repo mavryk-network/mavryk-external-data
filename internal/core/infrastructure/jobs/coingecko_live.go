@@ -95,7 +95,7 @@ func (j *CoinGeckoLiveJob) Start(ctx context.Context) {
 
 		interval := j.cfg.GetTokenInterval(name)
 		safeGo(&j.wg, j.logger, "live:"+name, func() {
-			runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, func(c context.Context) {
+			runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "live", func(c context.Context) {
 				j.collectOnce(c, col)
 			})
 		})

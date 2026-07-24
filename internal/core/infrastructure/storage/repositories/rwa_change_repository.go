@@ -47,7 +47,10 @@ func NewRWAChangeRepository(db *gorm.DB) *RWAChangeRepository {
 // Each branch returns at most one row (`side` is pinned to a single
 // value, ts ordering does the rest).
 func (r *RWAChangeRepository) GetChange(ctx context.Context, q apiprices.ChangeQuery) (apiprices.ChangeRepoResult, error) {
-	if len(q.Currencies) == 0 || len(q.Periods) == 0 {
+	if len(q.Currencies) == 0 {
+		// Empty Periods is legitimate: the service issues a "now-only" refresh
+		// when just the 'now' cache slot expired. buildRWAChangeSQL emits only the
+		// 'now' branch then, so we require currencies (metadata) but not periods.
 		return apiprices.ChangeRepoResult{}, nil
 	}
 	if len(q.Currencies) != 1 {

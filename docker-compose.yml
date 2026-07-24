@@ -4,19 +4,36 @@ services:
   # Override with e.g. TIMESCALEDB_IMAGE=timescale/timescaledb:2.16.1-pg16 for a pinned build.
   # If you switch from plain postgres: wipe the volume once: `docker compose down -v` (data loss).
   postgres:
-    image: ${TIMESCALEDB_IMAGE:-timescale/timescaledb:latest-pg16}
+    # Pinned tag (not latest-pg16): a floating tag can pull a newer TimescaleDB
+    # binary against an old catalog on volume reuse and refuse to start until
+    # `ALTER EXTENSION timescaledb UPDATE`. Override via TIMESCALEDB_IMAGE.
+    image: ${TIMESCALEDB_IMAGE:-timescale/timescaledb:2.26.3-pg16}
     container_name: mavryk-external-data-postgres
     restart: unless-stopped
+    # Bound memory so a runaway query can't take the whole host (and with it the
+    # app container) via the OOM killer. shm_size gives Postgres room for parallel
+    # query/sort work that would otherwise fault on the default 64m.
+    mem_limit: 1g
+    shm_size: 256m
     environment:
       POSTGRES_DB: ${POSTGRES_DATABASE:-quotes}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Fail fast if unset rather than silently booting a superuser DB with the
+      # well-known default password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Bind to loopback only. Docker's published ports bypass host firewalls, so
+      # "5432:5432" would expose Postgres to the whole network. The app reaches it
+      # over the internal bridge by service name; host publishing is dev-only.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
+      # NOTE: the ./migrations initdb bind-mount was removed. It shadowed the
+      # image's own timescaledb init script and re-ran every migration under a
+      # stricter psql regime (double execution). The dedicated `migration`
+      # service is the single migration path (it gates the app via
+      # service_completed_successfully).
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     networks:
       - mavryk-external-data-network
     healthcheck:
@@ -40,7 +57,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DATABASE: ${POSTGRES_DATABASE:-quotes}
     networks:
       - mavryk-external-data-network
@@ -52,6 +69,9 @@ services:
       target: production
     container_name: mavryk-external-data-app
     restart: unless-stopped
+    # Cap app memory: background jobs + in-process caches + up to 10k-row queries
+    # shouldn't be able to starve the host into a restart loop.
+    mem_limit: 512m
     ports:
       - "${SERVER_PORT:-3010}:3010"
     environment:
@@ -59,11 +79,17 @@ services:
       SERVER_PORT: ${SERVER_PORT:-3010}
       SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
 
+      # Auth: the image ships auth ON by default. This is a local-dev stack, so
+      # disable MBIO JWT verification explicitly here (dev/CI convenience). Do NOT
+      # carry this into a production deploy — leave AUTH_ENABLED unset there so the
+      # RWA routes require a token on the public listener.
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+
       # Database Configuration
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DATABASE: ${POSTGRES_DATABASE:-quotes}
       POSTGRES_SSL: ${POSTGRES_SSL:-disable}
       POSTGRES_LOGGING: ${POSTGRES_LOGGING:-false}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"quotes/internal/logging"
+	"quotes/internal/metrics"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -20,8 +21,9 @@ import (
 // each job otherwise duplicates (immediate first call, ticker, ctx-aware exit,
 // per-tick correlation id).
 //
-// jitter (when > 0) randomizes the FIRST sleep up to ±jitter — good practice for
-// multi-replica deployments to avoid synchronized hammering of upstream.
+// jitter (when > 0) delays the FIRST tick by a random duration in [0, jitter) —
+// good practice for multi-replica deployments to avoid synchronized hammering of
+// upstream on a coordinated restart.
 //
 // Each tick gets a fresh `tick_id` (uuid) propagated via context so all log
 // lines emitted while the tick is running can be correlated post-hoc.
@@ -30,10 +32,13 @@ func runTickerLoop(
 	stopCh <-chan struct{},
 	interval, jitter time.Duration,
 	logger *zerolog.Logger,
+	name string,
 	tick func(ctx context.Context),
 ) {
 	if jitter > 0 {
-		offset := time.Duration(rand.Int63n(int64(jitter)*2)) - jitter //nolint:gosec // not security-sensitive
+		// [0, jitter): a ±jitter offset around a common start point collapsed to
+		// zero delay ~half the time, defeating the anti-thundering-herd purpose.
+		offset := time.Duration(rand.Int63n(int64(jitter))) //nolint:gosec // not security-sensitive
 		select {
 		case <-time.After(offset):
 		case <-ctx.Done():
@@ -43,7 +48,7 @@ func runTickerLoop(
 		}
 	}
 
-	runTickWithCorrelation(ctx, tick)
+	runTickWithCorrelation(ctx, logger, name, tick)
 
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -60,18 +65,31 @@ func runTickerLoop(
 			}
 			return
 		case <-t.C:
-			runTickWithCorrelation(ctx, tick)
+			runTickWithCorrelation(ctx, logger, name, tick)
 		}
 	}
 }
 
 // runTickWithCorrelation injects a fresh tick_id into ctx (re-using the
 // request_id key so logging.RequestLogger and HTTPTransport pick it up
-// transparently). Cheap (~one uuid alloc per tick) and gives free correlation
-// across all log lines from a single iteration.
-func runTickWithCorrelation(ctx context.Context, tick func(context.Context)) {
+// transparently) and recovers from a panic in the tick.
+//
+// The recover MUST live here, per-tick, not only in safeGo: a panic that
+// unwinds past this frame terminates the whole ticker goroutine, silently
+// stopping the job (for the shared backfill goroutine, ALL tokens/pairs) until
+// process restart. Recovering per tick logs + counts the panic and lets the
+// loop keep running; safeGo's recover stays as a last resort.
+func runTickWithCorrelation(ctx context.Context, logger *zerolog.Logger, name string, tick func(context.Context)) {
 	tickID := "tick-" + uuid.NewString()
 	tickCtx := logging.WithRequestID(ctx, tickID)
+	defer func() {
+		if r := recover(); r != nil {
+			metrics.JobTickPanicsTotal.WithLabelValues(name).Inc()
+			if logger != nil {
+				logger.Error().Interface("panic", r).Str("job", name).Str("tick_id", tickID).Msg("job_tick_panic_recovered")
+			}
+		}
+	}()
 	tick(tickCtx)
 }
 

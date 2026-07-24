@@ -41,6 +41,10 @@ func (s TransportSettings) Normalized() TransportSettings {
 func NewPooledTransport(s TransportSettings) *http.Transport {
 	s = s.Normalized()
 	return &http.Transport{
+		// Honor HTTP(S)_PROXY / NO_PROXY like http.DefaultTransport does. Custom
+		// transports don't set this implicitly, so in proxy-only egress clusters
+		// every outbound call would otherwise fail with opaque dial timeouts.
+		Proxy:               http.ProxyFromEnvironment,
 		MaxIdleConns:        s.MaxIdleConns,
 		MaxIdleConnsPerHost: s.MaxIdleConnsPerHost,
 		MaxConnsPerHost:     s.MaxConnsPerHost,

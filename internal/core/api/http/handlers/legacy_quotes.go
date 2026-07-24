@@ -113,10 +113,12 @@ func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 
 		rows, err := d.Repo.QueryWide(c.Request.Context(), d.TokenSymbol, d.SourceCode, from, to, limit)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "Failed to get quotes",
-				"details": err.Error(),
-			})
+			// Never leak the raw repository/pgx error (SQL fragments, table/column
+			// names, connection diagnostics) to unauthenticated callers on the
+			// public listener. Attach it for server-side logging and return a
+			// static message, matching common.RespondError's non-leaking behavior.
+			_ = c.Error(err)
+			legacyError(c, http.StatusInternalServerError, "Failed to get quotes")
 			return
 		}
 

@@ -87,6 +87,14 @@ func BindPriceQuery(c *gin.Context, opts QueryOptions) (PriceQuery, error) {
 	if !useWindow && q.Limit == 0 && opts.DefaultLatestLimit > 0 {
 		q.Limit = opts.DefaultLatestLimit
 	}
+	// Window mode with no explicit ?limit: apply the hard server cap so a caller
+	// cannot force an unbounded full-range scan (e.g. from=1970 → millions of
+	// minute-cadence rows materialized in memory and JSON-serialized). The
+	// repositories add a SQL LIMIT only when q.Limit > 0, so leaving it at 0 here
+	// means "no LIMIT" — an unauthenticated DoS on the public list endpoints.
+	if useWindow && q.Limit == 0 && opts.MaxLimit > 0 {
+		q.Limit = opts.MaxLimit
+	}
 
 	if opts.MetricParam != "" {
 		if raw := strings.TrimSpace(c.Query(opts.MetricParam)); raw != "" {

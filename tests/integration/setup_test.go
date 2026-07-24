@@ -33,7 +33,10 @@ const (
 
 	// timescaleImage matches docker-compose.yml default. Pinning to a major
 	// version (pg16) keeps the test parity with prod baseline.
-	timescaleImage = "timescale/timescaledb:latest-pg16"
+	// Pinned (not latest-pg16): a moving tag silently upgrades TimescaleDB under
+	// CI, which can change hypertable/continuous-aggregate semantics the repos
+	// rely on. Keep in sync with docker-compose.yml's default.
+	timescaleImage = "timescale/timescaledb:2.26.3-pg16"
 )
 
 // pgDSN is the DSN every integration test connects with — populated by

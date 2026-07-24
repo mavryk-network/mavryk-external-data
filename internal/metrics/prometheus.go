@@ -105,6 +105,17 @@ var (
 		[]string{"job", "source", "entity", "reason"},
 	)
 
+	// JobTickPanicsTotal — counter of panics recovered inside a single job tick.
+	// A non-zero value means a tick paniced but the loop survived (see
+	// runTickerLoop); alert on any increase.
+	JobTickPanicsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "job_tick_panics_total",
+			Help: "Panics recovered within a background-job tick (loop kept running).",
+		},
+		[]string{"job"},
+	)
+
 	// JobRowsAffectedTotal — total rows written by a job (Save() return).
 	JobRowsAffectedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{

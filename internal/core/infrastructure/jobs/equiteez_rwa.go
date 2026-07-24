@@ -93,7 +93,7 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 		Msg("rwa_job_starting")
 
 	safeGo(&j.wg, j.logger, "rwa", func() {
-		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, func(c context.Context) {
+		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "rwa", func(c context.Context) {
 			j.collectOnce(c, enabled)
 		})
 	})

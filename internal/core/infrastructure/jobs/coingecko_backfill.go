@@ -96,7 +96,7 @@ func (j *CoinGeckoBackfillJob) Start(ctx context.Context) {
 		Msg("backfill_job_starting")
 
 	safeGo(&j.wg, j.logger, "backfill", func() {
-		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, func(c context.Context) {
+		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, "backfill", func(c context.Context) {
 			j.tickAllTokens(c)
 		})
 	})
@@ -235,6 +235,14 @@ func (j *CoinGeckoBackfillJob) stepToken(ctx context.Context, info prices.TokenI
 			Int("batch_size", len(points)).
 			Int64("rows_affected", n).
 			Msg("backfill_saved")
+		// Materialize the just-written chunk into the token_prices_* continuous
+		// aggregates. Their refresh policies only cover a recent window
+		// (start_offset), so without this backfilled history stays invisible to
+		// chart/ATH reads (QueryCandles reads only the CAs). Best-effort: a
+		// refresh failure must not fail or retry the backfill step.
+		if rErr := j.tokenRO.RefreshCandleAggregates(ctx, from, to); rErr != nil {
+			logger.Debug().Err(rErr).Msg("backfill_cagg_refresh_failed")
+		}
 	} else {
 		logger.Info().Msg("backfill_empty_window")
 	}

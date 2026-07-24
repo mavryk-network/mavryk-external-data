@@ -18,6 +18,16 @@ import (
 // collapses to ~1 DB hit.
 const fxCacheTTL = 60 * time.Second
 
+// maxFXCacheEntries bounds the rate cache. Keys partition by (source, token,
+// target, minute-bucket-of-ts), so historical `?in=` ranges would otherwise
+// accumulate one immortal entry per minute-bucket forever (a slow memory leak
+// under normal dashboard traffic). Expired entries are swept periodically and
+// whenever the map grows past this cap.
+const maxFXCacheEntries = 50_000
+
+// fxCacheSweepEvery triggers an opportunistic expired-entry sweep every N writes.
+const fxCacheSweepEvery = 512
+
 // HistoricalFXSource returns the freshest FX rate row for
 // (source, token, currency) whose timestamp is at or before `at`.
 // Replaces the previous "always-latest" contract (Decision #19 in the
@@ -63,8 +73,9 @@ type tokenFXConverter struct {
 	maxStaleness time.Duration
 	fxSource     prices.Source
 
-	mu    sync.RWMutex
-	cache map[fxCacheKey]fxCacheEntry
+	mu     sync.RWMutex
+	cache  map[fxCacheKey]fxCacheEntry
+	writes int // write counter driving the opportunistic sweep
 }
 
 type fxCacheKey struct {
@@ -78,6 +89,7 @@ type fxCacheEntry struct {
 	expires time.Time
 	rate    decimal.Decimal
 	rateTS  time.Time
+	found   bool // false = negative cache (no usable rate at-or-before ts)
 }
 
 // Convert implements PriceConverter.
@@ -151,6 +163,9 @@ func (c *tokenFXConverter) lookupRate(
 	entry, ok := c.cache[key]
 	c.mu.RUnlock()
 	if ok && time.Now().Before(entry.expires) {
+		if !entry.found {
+			return decimal.Decimal{}, time.Time{}, ErrNoFXRate
+		}
 		return entry.rate, entry.rateTS, nil
 	}
 
@@ -158,16 +173,38 @@ func (c *tokenFXConverter) lookupRate(
 	if err != nil {
 		return decimal.Decimal{}, time.Time{}, err
 	}
-	if !found {
+	// Treat missing OR non-positive rates as "no rate". A zero/negative stored
+	// price (a known CoinGecko glitch class) would otherwise become an FX rate of
+	// 0 and silently zero out every ?in= conversion. Negative-cache the miss so a
+	// range that predates the FX backfill costs one query per minute-bucket per
+	// TTL instead of a full ~10k-query scan on every request.
+	if !found || !point.Price.IsPositive() {
+		c.store(key, fxCacheEntry{expires: time.Now().Add(fxCacheTTL), found: false})
 		return decimal.Decimal{}, time.Time{}, ErrNoFXRate
 	}
 
-	c.mu.Lock()
-	c.cache[key] = fxCacheEntry{
+	c.store(key, fxCacheEntry{
 		expires: time.Now().Add(fxCacheTTL),
 		rate:    point.Price,
 		rateTS:  point.Timestamp,
+		found:   true,
+	})
+	return point.Price, point.Timestamp, nil
+}
+
+// store writes an entry under the write lock and opportunistically evicts expired
+// entries so the minute-bucketed key space cannot grow without bound.
+func (c *tokenFXConverter) store(key fxCacheKey, entry fxCacheEntry) {
+	c.mu.Lock()
+	c.cache[key] = entry
+	c.writes++
+	if c.writes%fxCacheSweepEvery == 0 || len(c.cache) > maxFXCacheEntries {
+		now := time.Now()
+		for k, e := range c.cache {
+			if !now.Before(e.expires) {
+				delete(c.cache, k)
+			}
+		}
 	}
 	c.mu.Unlock()
-	return point.Price, point.Timestamp, nil
 }

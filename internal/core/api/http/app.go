@@ -112,6 +112,7 @@ func NewApp(deps AppDeps) (*App, error) {
 		ReadTimeout:       cfg.Server.ReadTimeout.D(),
 		WriteTimeout:      cfg.Server.WriteTimeout.D(),
 		IdleTimeout:       cfg.Server.IdleTimeout.D(),
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
 	app := &App{
@@ -123,9 +124,16 @@ func NewApp(deps AppDeps) (*App, error) {
 
 	internalPort := strings.TrimSpace(cfg.Server.InternalPort)
 	if internalPort == "" {
-		// Single-port mode (local dev). /metrics stays on the public engine for
-		// scrape continuity; the security note in app docs applies.
-		publicEngine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+		// Single-port mode. Exposing /metrics on the PUBLIC engine leaks internal
+		// operational detail (token symbols, FX pairs, pool gauges, error classes)
+		// to anonymous callers. Allow it only outside release mode (local dev,
+		// where the Grafana stack scrapes it); a release-mode single-port deploy
+		// must set SERVER_INTERNAL_PORT to get metrics on the private listener.
+		if gin.Mode() == gin.ReleaseMode {
+			appLogger.Warn().Msg("metrics_not_exposed_public_release_single_port_set_internal_port")
+		} else {
+			publicEngine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+		}
 		return app, nil
 	}
 
@@ -143,9 +151,15 @@ func NewApp(deps AppDeps) (*App, error) {
 		ReadTimeout:       cfg.Server.ReadTimeout.D(),
 		WriteTimeout:      cfg.Server.WriteTimeout.D(),
 		IdleTimeout:       cfg.Server.IdleTimeout.D(),
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 	return app, nil
 }
+
+// maxHeaderBytes bounds total request header size (net/http default is 1 MiB).
+// Caps the attacker-controlled bytes that can be forced into every log line via
+// oversized X-Request-ID / User-Agent headers.
+const maxHeaderBytes = 64 << 10 // 64 KiB
 
 func configureGinMode(cfg *config.Config) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Server.GinMode)) {
@@ -172,6 +186,13 @@ func configureGinMode(cfg *config.Config) {
 // edge (Envoy Gateway SecurityPolicy), not in the app.
 func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
+	// Trust no proxies: gin's default trusts everything, so c.ClientIP() would
+	// honor a client-supplied X-Forwarded-For and let an attacker spoof a fresh
+	// IP per request — bypassing the per-IP rate limiter and growing its map. With
+	// no trusted proxies ClientIP() is the direct peer. A deployment that fronts
+	// this with a known LB and wants real per-IP limiting should instead configure
+	// that LB's CIDR here.
+	_ = router.SetTrustedProxies(nil)
 	router.Use(logging.RequestIDMiddleware(""))
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())
@@ -193,6 +214,7 @@ func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 // consistent.
 func buildInternalEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
+	_ = router.SetTrustedProxies(nil) // see buildPublicEngine — never trust client XFF
 	router.Use(logging.RequestIDMiddleware(""))
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())

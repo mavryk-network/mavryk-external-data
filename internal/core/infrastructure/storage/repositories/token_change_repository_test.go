@@ -184,3 +184,36 @@ func TestBuildTokenChangeSQL_EmptyShortCircuit(t *testing.T) {
 	}()
 	_, _, _ = buildTokenChangeSQL(q)
 }
+
+func TestBuildTokenChangeSQL_NowOnly_EmptyPeriods(t *testing.T) {
+	// Regression: a "now-only" refresh (only the now cache slot expired) reaches
+	// the repo with Currencies set but Periods empty. buildTokenChangeSQL must
+	// emit just the 'now' branch, and GetChange must run it rather than
+	// early-return — otherwise /change renders now=null (and every change_pct
+	// null) each time the now-TTL lapses inside the anchor TTLs.
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	q := apiprices.ChangeQuery{
+		Source:     prices.SourceCoinGecko,
+		EntityKey:  "mvrk",
+		Currencies: []string{"usd", "eur"},
+		Periods:    nil,
+		Now:        now,
+	}
+	sql, args, err := buildTokenChangeSQL(q)
+	if err != nil {
+		t.Fatalf("buildTokenChangeSQL: %v", err)
+	}
+	if strings.Contains(sql, "UNION ALL") {
+		t.Errorf("now-only SQL must contain no UNION ALL branch:\n%s", sql)
+	}
+	if got := strings.Count(sql, "FROM token_prices"); got != 1 {
+		t.Errorf("FROM token_prices count = %d, want 1 (now branch only)", got)
+	}
+	if !strings.Contains(sql, "'now'::text") {
+		t.Errorf("now branch missing:\n%s", sql)
+	}
+	// Args: entity, source, then one per currency. No period/window args.
+	if want := 2 + len(q.Currencies); len(args) != want {
+		t.Errorf("len(args) = %d, want %d", len(args), want)
+	}
+}

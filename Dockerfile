@@ -24,12 +24,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # =========================
 # Migration stage
 # =========================
-FROM alpine:3.19 AS migration
+FROM alpine:3.22 AS migration
 
 WORKDIR /app
 
-# Install postgresql-client for running migrations
-RUN apk add --no-cache postgresql-client
+# Install postgresql-client for running migrations, and create an unprivileged
+# user — nothing in the migration flow needs root.
+RUN apk add --no-cache postgresql-client && \
+    addgroup -g 1001 -S app && \
+    adduser -S app -u 1001
 
 COPY migrations ./migrations
 
@@ -37,13 +40,15 @@ COPY migrations ./migrations
 COPY scripts/run-migrations.sh ./run-migrations.sh
 RUN chmod +x ./run-migrations.sh
 
+USER app
+
 # Default command: run migration script
 CMD ["./run-migrations.sh"]
 
 # =========================
 # Production stage
 # =========================
-FROM alpine:3.19 AS production
+FROM alpine:3.22 AS production
 
 RUN apk --no-cache add ca-certificates tzdata dumb-init && \
     addgroup -g 1001 -S app && \

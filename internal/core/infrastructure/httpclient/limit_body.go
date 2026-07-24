@@ -38,7 +38,11 @@ func (t *maxBytesTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	resp.Body = &limitedReadCloser{
 		body: resp.Body,
-		left: t.maxBytes,
+		// +1 sentinel byte: a body of exactly maxBytes must be allowed. We only
+		// error once we have actually read MORE than maxBytes, so a legal
+		// exactly-maxBytes chunked response (whose final Read returns (n, nil)
+		// then (0, EOF)) no longer fails spuriously.
+		left: t.maxBytes + 1,
 	}
 	return resp, nil
 }
@@ -58,6 +62,7 @@ func (l *limitedReadCloser) Read(p []byte) (int, error) {
 	n, err := l.body.Read(p)
 	l.left -= int64(n)
 	if err == nil && l.left <= 0 {
+		// Consumed maxBytes+1 bytes with the body not yet at EOF → too large.
 		return n, ErrResponseTooLarge
 	}
 	return n, err

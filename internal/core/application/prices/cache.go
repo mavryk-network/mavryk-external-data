@@ -2,6 +2,7 @@ package prices
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,8 +83,11 @@ func (c *CachedRepository) invalidate(points []prices.PricePoint) {
 }
 
 func keyFor(q prices.Query) string {
-	// Order: source | entity | metrics-joined-sorted | limit
-	return string(q.Source) + "|" + q.EntityKey + "|" + joinSorted(q.Metrics) + "|" + itoa(q.Limit)
+	// Order: source | entity | metrics-joined-sorted | limit.
+	// strconv.Itoa (not the package itoa, which collapses >99 to "other" — it was
+	// written for bounded metric labels): limits 100..10000 must not share a key,
+	// or a cached N-row response could be served for a different ?limit.
+	return string(q.Source) + "|" + q.EntityKey + "|" + joinSorted(q.Metrics) + "|" + strconv.Itoa(q.Limit)
 }
 
 func joinSorted(in []string) string {

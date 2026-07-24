@@ -43,10 +43,16 @@ func NewTokenChangeRepository(db *gorm.DB) *TokenChangeRepository {
 // All filter values flow through prepared-statement parameters; no
 // user-controlled string ever touches the SQL body.
 func (r *TokenChangeRepository) GetChange(ctx context.Context, q apiprices.ChangeQuery) (apiprices.ChangeRepoResult, error) {
-	if len(q.Currencies) == 0 || len(q.Periods) == 0 {
-		// Defensive: ChangeService.preflight rejects these. If we get here
-		// it's a programming error; return an empty result rather than
-		// blowing up SQL with `quote_currency IN ()`.
+	if len(q.Currencies) == 0 {
+		// Defensive: ChangeService.preflight rejects an empty currency set. If we
+		// get here it's a programming error; return empty rather than blowing up
+		// SQL with `quote_currency IN ()`.
+		//
+		// NOTE: an empty Periods slice is legitimate — the service issues a
+		// "now-only" refresh (Currencies non-empty, Periods empty) when only the
+		// 'now' cache slot expired. buildTokenChangeSQL emits just the 'now'
+		// branch in that case, so we must NOT early-return here (doing so returned
+		// no 'now' row and rendered now=null every time the now-TTL lapsed).
 		return apiprices.ChangeRepoResult{}, nil
 	}
 

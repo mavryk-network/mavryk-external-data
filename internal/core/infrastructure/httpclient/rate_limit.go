@@ -69,6 +69,19 @@ func sharedLimiter(component string, rps float64, burst int) *rate.Limiter {
 	return l
 }
 
+// lookupSharedLimiter returns the process-wide limiter registered for a
+// component, or nil when rate limiting is disabled for it. The retry layer uses
+// it to charge a token per retry attempt (see retryTransport) so retries do not
+// blow past the configured RPS during a 429 storm.
+func lookupSharedLimiter(component string) *rate.Limiter {
+	if component == "" {
+		return nil
+	}
+	sharedLimitersMu.Lock()
+	defer sharedLimitersMu.Unlock()
+	return sharedLimiters[component]
+}
+
 // ResetSharedLimiters drops every entry from the shared limiter registry.
 // Test helper. Production code never calls this.
 func ResetSharedLimiters() {
@@ -79,13 +92,16 @@ func ResetSharedLimiters() {
 	}
 }
 
-// WrapRateLimited wraps next with a token-bucket limiter. Stack order (outer first):
+// WrapRateLimited wraps next with a token-bucket limiter as the OUTERMOST layer.
+// Actual assembled stack (outer → inner):
 //
-//	circuit breaker → rate limiter → retry → base
+//	rate limiter → logging → circuit breaker → retry → counter → base
 //
-// The limiter sits outside retry so retries do not consume extra tokens. Per-component
-// limiters are shared process-wide so that additional HTTP clients (new tokens, backfill
-// workers) do not multiply the RPS actually sent to the upstream API.
+// The limiter charges one token for the logical request (attempt 1). Retries live
+// below it inside retryTransport, which charges a token per retry via
+// lookupSharedLimiter so a 429 storm cannot exceed the configured RPS. Per-component
+// limiters are shared process-wide so that additional HTTP clients (new tokens,
+// backfill workers) do not multiply the RPS actually sent to the upstream API.
 func WrapRateLimited(next http.RoundTripper, s RateLimitSettings) http.RoundTripper {
 	if next == nil {
 		next = http.DefaultTransport

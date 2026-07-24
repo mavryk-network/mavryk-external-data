@@ -123,8 +123,11 @@ tickers:
 # MBIO JWT verification for the public listener's RWA routes (/v1/rwa/*,
 # /v1/pairs/rwa). Internal listener traffic skips this entirely.
 #
-# - enabled: false here is a local-dev convenience. Production must keep it on
-#   (omit / true). The flag does not affect the internal listener.
+# - enabled: unset here means default-ON (verify). This file is baked into the
+#   production image, so it must NOT ship `enabled: false` — that would flip the
+#   secure default off in the deployed artifact. Disable auth for local dev / CI
+#   only via the AUTH_ENABLED=false env var (see .env / .env.example), never here.
+#   The flag does not affect the internal listener.
 # - mbio_jwt_issuer: required when enabled. MBIO uses the plain string
 #   "mbio-api-gateway", not a URL.
 # - mbio_jwt_audience: optional. MBIO does not currently mint `aud`, so leaving
@@ -132,7 +135,7 @@ tickers:
 # - jwt_local_verify_public_key: base64-PEM of an RSA public key for local /
 #   CI verification. When set the middleware skips the JWKS fetch entirely.
 auth:
-  enabled: false
+  # enabled: <intentionally unset — defaults to true/verify; disable via AUTH_ENABLED=false env>
   mbio_jwt_base_url: ""
   mbio_jwt_issuer: "mbio-api-gateway"
   mbio_jwt_audience: ""
