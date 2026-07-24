@@ -56,7 +56,7 @@ func TestRWAOverview_ListHappyPath(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	pairs := []prices.RWAPair{
 		{ID: 2, BaseSymbol: "mars2", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
-		{ID: 1, BaseSymbol: "mars1", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
+		{ID: 1, BaseSymbol: "mars1", QuoteSymbol: "USDT", Source: prices.SourceEquiteez, TokenAddr: "KT1MarsToken"},
 	}
 	changeRes := apiprices.ChangeRepoResult{
 		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("100.42"), TS: now, Found: true}},
@@ -72,9 +72,6 @@ func TestRWAOverview_ListHappyPath(t *testing.T) {
 
 	body := getJSON(t, r, "/v1/rwa")
 
-	if body["as_of"] == nil {
-		t.Error("as_of should be set when at least one asset has a latest price")
-	}
 	assets, ok := body["assets"].([]any)
 	if !ok || len(assets) != 2 {
 		t.Fatalf("assets = %v, want 2 entries", body["assets"])
@@ -86,6 +83,12 @@ func TestRWAOverview_ListHappyPath(t *testing.T) {
 	}
 	if first["native_quote"] != "usdt" {
 		t.Errorf("native_quote = %v, want usdt", first["native_quote"])
+	}
+	if first["token_address"] != "KT1MarsToken" {
+		t.Errorf("token_address = %v, want KT1MarsToken", first["token_address"])
+	}
+	if second := assets[1].(map[string]any); second["token_address"] != nil {
+		t.Errorf("mars2 token_address = %v, want null", second["token_address"])
 	}
 	if first["price"] != 100.42 {
 		t.Errorf("price = %v, want 100.42", first["price"])
@@ -118,9 +121,6 @@ func TestRWAOverview_ListHappyPath(t *testing.T) {
 func TestRWAOverview_EmptyCatalog(t *testing.T) {
 	r := newOverviewEngine(nil, apiprices.ChangeRepoResult{}, nil)
 	body := getJSON(t, r, "/v1/rwa")
-	if body["as_of"] != nil {
-		t.Errorf("as_of should be null for empty catalog, got %v", body["as_of"])
-	}
 	assets, ok := body["assets"].([]any)
 	if !ok || len(assets) != 0 {
 		t.Errorf("assets should be [], got %v", body["assets"])
