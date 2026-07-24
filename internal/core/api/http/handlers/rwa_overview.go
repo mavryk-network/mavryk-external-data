@@ -86,7 +86,8 @@ func (d RWAOverviewDeps) maxAssets() int {
 // List — GET /v1/rwa
 //
 // Returns the list of enabled RWA assets with dynamic data. Empty catalog
-// returns `{ "as_of": null, "assets": [] }`, not 404.
+// returns `{ "assets": [] }`, not 404. Each asset carries its own `price_as_of`;
+// `token_address` is the on-chain RWA token contract (null when not synced yet).
 //
 // Query params:
 //   - limit (optional) — cap the number of assets; clamped to the server cap.
@@ -148,33 +149,24 @@ func (d RWAOverviewDeps) assemble(ctx context.Context, limit int, in []prices.Cu
 
 	now := time.Now()
 	assets := make([]rwaOverviewAsset, len(filtered))
-	latestTS := make([]time.Time, len(filtered))
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(overviewConcurrency)
 	for i := range filtered {
 		i, pair := i, filtered[i]
 		g.Go(func() error {
-			asset, ts, err := d.buildAsset(gctx, pair, now, in)
+			asset, err := d.buildAsset(gctx, pair, now, in)
 			if err != nil {
 				return err
 			}
 			assets[i] = asset
-			latestTS[i] = ts
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return rwaOverviewDTO{}, err
 	}
-
-	var newest time.Time
-	for _, ts := range latestTS {
-		if ts.After(newest) {
-			newest = ts
-		}
-	}
-	return rwaOverviewDTO{AsOf: nullableRFC3339(newest), Assets: assets}, nil
+	return rwaOverviewDTO{Assets: assets}, nil
 }
 
 // overviewCacheKey partitions cached responses by the params that shape them:
@@ -192,17 +184,17 @@ func overviewCacheKey(limit int, in []prices.Currency) string {
 	return b.String()
 }
 
-// buildAsset assembles one asset's dynamic block. Returns the asset plus the
-// latest-price timestamp (for the top-level `as_of` = max over assets). Missing
-// data renders as nulls/empty series — the asset still appears in the list.
-func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, now time.Time, in []prices.Currency) (rwaOverviewAsset, time.Time, error) {
+// buildAsset assembles one asset's dynamic block. Missing data renders as
+// nulls / empty series — the asset still appears in the list.
+func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, now time.Time, in []prices.Currency) (rwaOverviewAsset, error) {
 	nativeQuote := strings.ToLower(pair.QuoteSymbol)
 	asset := rwaOverviewAsset{
-		Symbol:      overviewSymbol(pair),
-		Base:        strings.ToLower(pair.BaseSymbol),
-		Quote:       nativeQuote,
-		NativeQuote: nativeQuote,
-		Series:      seriesMiniDTO{Interval: string(overviewSeriesInterval), Points: []SeriesPointDTO{}},
+		Symbol:       overviewSymbol(pair),
+		Base:         strings.ToLower(pair.BaseSymbol),
+		Quote:        nativeQuote,
+		NativeQuote:  nativeQuote,
+		TokenAddress: nilIfEmpty(pair.TokenAddr),
+		Series:       seriesMiniDTO{Interval: string(overviewSeriesInterval), Points: []SeriesPointDTO{}},
 	}
 
 	// Latest price + 24h change in one call (cached + singleflight).
@@ -215,16 +207,14 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 		Now:        now,
 	})
 	if err != nil {
-		return rwaOverviewAsset{}, time.Time{}, err
+		return rwaOverviewAsset{}, err
 	}
-	var latestTS time.Time
 	if cur, ok := res.Currencies[nativeQuote]; ok {
 		if cur.NowFound {
 			p := newNum6(cur.Now)
-			ts := cur.NowTS.UTC().Format("2006-01-02T15:04:05Z")
+			ts := formatRFC3339(cur.NowTS)
 			asset.Price = &p
 			asset.PriceAsOf = &ts
-			latestTS = cur.NowTS
 			if len(in) > 0 && d.Converter != nil {
 				if quoteToken, resolved := promoteQuoteToken(pair.QuoteSymbol); resolved {
 					asset.Converted = convertNowFlat(ctx, d.Converter, quoteToken, in, cur.Now, cur.NowTS)
@@ -256,19 +246,28 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 		SourceToken: sourceToken,
 	}, seriesIn)
 	if err != nil {
-		return rwaOverviewAsset{}, time.Time{}, err
+		return rwaOverviewAsset{}, err
 	}
 	points := make([]SeriesPointDTO, len(s.Points))
 	for i, p := range s.Points {
 		points[i] = SeriesPointDTO{
-			T:    p.T.UTC().Format("2006-01-02T15:04:05Z"),
+			T:    formatRFC3339(p.T),
 			P:    newNum6(p.P),
 			Conv: renderSeriesConv(p.Conv),
 		}
 	}
 	asset.Series.Points = points
 
-	return asset, latestTS, nil
+	return asset, nil
+}
+
+// nilIfEmpty returns nil for an empty string so JSON renders `null` instead of
+// "" (e.g. an RWA pair synced without a token address yet).
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // overviewSymbol renders a pair as the canonical lower-cased `{base}-{quote}`.
@@ -279,7 +278,6 @@ func overviewSymbol(p prices.RWAPair) string {
 // --- DTOs ---
 
 type rwaOverviewDTO struct {
-	AsOf   *string            `json:"as_of"`
 	Assets []rwaOverviewAsset `json:"assets"`
 }
 
@@ -287,23 +285,25 @@ type rwaOverviewDTO struct {
 // price inline as flat top-level numeric keys (3-letter ISO codes never collide
 // with the reserved field names), matching /v1/rwa/:symbol/latest.
 type rwaOverviewAsset struct {
-	Symbol      string
-	Base        string
-	Quote       string
-	NativeQuote string
-	Price       *num6 // null until a `last` tick exists
-	PriceAsOf   *string
-	Change24h   change24hDTO
-	Series      seriesMiniDTO
-	Converted   map[string]num6 // ?in= per-target latest price; nil when absent
+	Symbol       string
+	Base         string
+	Quote        string
+	NativeQuote  string
+	TokenAddress *string // on-chain RWA token contract; null when not synced yet
+	Price        *num6   // null until a `last` tick exists
+	PriceAsOf    *string
+	Change24h    change24hDTO
+	Series       seriesMiniDTO
+	Converted    map[string]num6 // ?in= per-target latest price; nil when absent
 }
 
 func (a rwaOverviewAsset) MarshalJSON() ([]byte, error) {
-	out := make(map[string]any, 8+len(a.Converted))
+	out := make(map[string]any, 9+len(a.Converted))
 	out["symbol"] = a.Symbol
 	out["base"] = a.Base
 	out["quote"] = a.Quote
 	out["native_quote"] = a.NativeQuote
+	out["token_address"] = a.TokenAddress
 	out["price"] = a.Price
 	out["price_as_of"] = a.PriceAsOf
 	out["change_24h"] = a.Change24h
