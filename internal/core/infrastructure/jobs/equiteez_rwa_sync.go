@@ -61,6 +61,7 @@ func SyncRWAPairs(
 	now := time.Now().UTC()
 	keepIDs := make([]int64, 0, len(tokens))
 	source := prices.SourceEquiteez
+	upsertFailed := 0
 
 	for _, tok := range tokens {
 		if !tok.InAllowlist {
@@ -90,6 +91,7 @@ func SyncRWAPairs(
 			}
 			id, err := lookup.UpsertRWAPair(ctx, pair, now)
 			if err != nil {
+				upsertFailed++
 				log.Error().
 					Err(err).
 					Str("token_addr", tok.Address).
@@ -101,18 +103,46 @@ func SyncRWAPairs(
 		}
 	}
 
-	disabled, err := lookup.DisableMissingRWAPairs(ctx, source, keepIDs)
-	if err != nil {
-		return 0, fmt.Errorf("disable missing pairs: %w", err)
+	// Soft-disable pairs missing from the allowlist ONLY when we have a complete,
+	// non-empty view. An empty allowlist (indexer mid-resync, upstream flag flip)
+	// or any failed upsert makes keepIDs an unreliable "keep" set: passing it to
+	// DisableMissingRWAPairs would disable every enabled pair, and since
+	// UpsertRWAPair never re-enables existing rows, a later correct sync would NOT
+	// undo it — one bad response permanently halts all RWA collection.
+	var disabled int64
+	if shouldDisableMissingPairs(len(tokens), len(keepIDs), upsertFailed) {
+		disabled, err = lookup.DisableMissingRWAPairs(ctx, source, keepIDs)
+		if err != nil {
+			return 0, fmt.Errorf("disable missing pairs: %w", err)
+		}
+	} else {
+		log.Warn().
+			Int("token_count", len(tokens)).
+			Int("upserted", len(keepIDs)).
+			Int("upsert_failed", upsertFailed).
+			Msg("rwa_pair_sync_skipping_disable_incomplete_view")
 	}
 
 	log.Info().
 		Int("upserted", len(keepIDs)).
 		Int64("disabled_missing", disabled).
 		Int("token_count", len(tokens)).
+		Int("upsert_failed", upsertFailed).
 		Msg("rwa_pair_sync_completed")
 
 	return len(keepIDs), nil
+}
+
+// shouldDisableMissingPairs reports whether the sync has a complete enough view
+// of the Equiteez allowlist to safely soft-disable pairs no longer present.
+//
+// It refuses when the fetched allowlist was empty (tokenCount == 0), when nothing
+// upserted successfully (keepCount == 0), or when any per-pair upsert failed
+// (upsertFailed > 0). In all three cases keepIDs under-represents the true set of
+// live pairs, so disabling "everything not in keepIDs" would over-disable —
+// permanently, because enabled is never re-set by a later sync.
+func shouldDisableMissingPairs(tokenCount, keepCount, upsertFailed int) bool {
+	return tokenCount > 0 && keepCount > 0 && upsertFailed == 0
 }
 
 // deriveBaseSymbol extracts a human label for the base asset.

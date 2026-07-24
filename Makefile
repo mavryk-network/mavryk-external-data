@@ -14,7 +14,9 @@ POSTGRES_PASSWORD ?= qwerty
 POSTGRES_DATABASE ?= quotes
 export PGPASSWORD=$(POSTGRES_PASSWORD)
 
-PSQL = psql -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DATABASE)
+# -v ON_ERROR_STOP=1 so a failed statement aborts the run with a non-zero exit
+# instead of psql plowing on and reporting success on a half-applied migration.
+PSQL = psql -v ON_ERROR_STOP=1 -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DATABASE)
 MIGRATIONS_DIR ?= $(CURDIR)/migrations
 
 # --------------------------

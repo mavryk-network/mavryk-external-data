@@ -125,6 +125,12 @@ config.local.yaml
 config.production.yaml
 secrets.yaml
 
+# Private keys / JWT signing material — never commit. secret.key is the RS256
+# private key cmd/jwtgen uses; keep it (and any *.key/*.pem) out of git.
+secret.key
+*.key
+*.pem
+
 # Backup files
 *.bak
 *.backup

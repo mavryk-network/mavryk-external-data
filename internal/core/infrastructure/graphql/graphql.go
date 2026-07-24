@@ -53,7 +53,7 @@ func Execute(ctx context.Context, client *http.Client, serviceName, url, query s
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("graphql request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("graphql request failed: status %d: %s", resp.StatusCode, truncateForError(string(body)))
 	}
 
 	var envelope struct {
@@ -64,10 +64,24 @@ func Execute(ctx context.Context, client *http.Client, serviceName, url, query s
 		return nil, fmt.Errorf("decode graphql response: %w", err)
 	}
 	if len(envelope.Errors) > 0 {
-		return nil, fmt.Errorf("graphql returned errors: %s", string(bytes.TrimSpace(envelope.Errors[0])))
+		return nil, fmt.Errorf("graphql returned errors: %s", truncateForError(string(bytes.TrimSpace(envelope.Errors[0]))))
 	}
 	if len(envelope.Data) == 0 {
 		return nil, fmt.Errorf("graphql response has empty data")
 	}
 	return []byte(envelope.Data), nil
+}
+
+// maxErrorBodyLen bounds how much upstream body we embed in an error string.
+// The body can be up to the outbound size cap (16 MiB); un-truncated it produces
+// multi-megabyte single log lines that break log pipelines and can inject
+// arbitrary content into structured logs.
+const maxErrorBodyLen = 2048
+
+func truncateForError(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxErrorBodyLen {
+		return s[:maxErrorBodyLen] + "…(truncated)"
+	}
+	return s
 }

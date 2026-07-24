@@ -60,9 +60,16 @@ BEGIN
             WITH NO DATA
         $sql$;
 
+        -- end_offset 1 hour (not 1 day): with a 1-day end_offset a completed
+        -- daily bucket [D, D+1d) is only refreshed once now >= D+2d, so
+        -- yesterday's candle is absent from token_prices_1d for up to ~2 days.
+        -- 1 hour materializes it shortly after midnight (matches rwa_quote_prices_1d).
+        -- NOTE: this IF-NOT-EXISTS block only runs on FIRST creation; existing DBs
+        -- need `SELECT remove_continuous_aggregate_policy('token_prices_1d');` then
+        -- re-add with the same args (see docs/security-review runbook).
         PERFORM add_continuous_aggregate_policy('token_prices_1d',
             start_offset      => INTERVAL '30 days',
-            end_offset        => INTERVAL '1 day',
+            end_offset        => INTERVAL '1 hour',
             schedule_interval => INTERVAL '1 hour');
     END IF;
 END $$ LANGUAGE plpgsql;

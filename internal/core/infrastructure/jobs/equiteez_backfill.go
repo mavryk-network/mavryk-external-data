@@ -100,7 +100,7 @@ func (j *EquiteezBackfillJob) Start(ctx context.Context) {
 		Msg("equiteez_backfill_starting")
 
 	safeGo(&j.wg, j.logger, "equiteez_backfill", func() {
-		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, func(c context.Context) {
+		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, "equiteez_backfill", func(c context.Context) {
 			j.tickAllPairs(c)
 		})
 	})
@@ -228,6 +228,15 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 			Int("points", len(points)).
 			Int64("rows_affected", n).
 			Msg("equiteez_backfill_saved")
+		// Materialize the batch's time span into the rwa_quote_prices_* continuous
+		// aggregates so backfilled RWA history shows on charts / ATH. The batch is
+		// walked by order id, not time, so bound the refresh by the points' min/max
+		// ts. Best-effort — a refresh failure must not fail or retry the step.
+		if lo, hi := pointsTimeSpan(points); !lo.IsZero() {
+			if rErr := j.lookup.RefreshRWACandleAggregates(ctx, lo, hi.Add(time.Second)); rErr != nil {
+				logger.Debug().Err(rErr).Msg("equiteez_backfill_cagg_refresh_failed")
+			}
+		}
 	} else {
 		// All orders in this batch had non-positive prices (defensive — shouldn't
 		// happen with the fulfilled_amount > 0 filter, but the mapping function
@@ -375,6 +384,21 @@ func ordersToLastPoints(pair prices.RWAPair, orders []equiteez.OrderbookOrder, q
 		out = append(out, pt)
 	}
 	return out
+}
+
+// pointsTimeSpan returns the min and max Timestamp across points (both zero when
+// points is empty). Used to bound the continuous-aggregate refresh window for a
+// batch that was walked by order id rather than by time.
+func pointsTimeSpan(points []prices.PricePoint) (min, max time.Time) {
+	for i, p := range points {
+		if i == 0 || p.Timestamp.Before(min) {
+			min = p.Timestamp
+		}
+		if i == 0 || p.Timestamp.After(max) {
+			max = p.Timestamp
+		}
+	}
+	return min, max
 }
 
 // maxOrderID returns the maximum orderbook_order.id in the batch. Caller has

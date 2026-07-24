@@ -32,9 +32,16 @@ type AuthConfig struct {
 	MBIOJWTIssuer string `yaml:"mbio_jwt_issuer"`
 
 	// MBIOJWTAudience — expected `aud` claim; passed to jwt.WithAudience.
-	// Required in this service (unlike rwa-backend, which warns and continues
-	// when unset). Without it any MBIO-issued token for a sibling service would
-	// be accepted on RWA data — see Validate.
+	//
+	// OPTIONAL. MBIO currently mints tokens with only iss/sub/exp/iat (no aud),
+	// so requiring it would reject every real token; validateAuth therefore does
+	// not enforce it. When set, the middleware DOES verify aud (WithAudience);
+	// when empty, aud is not checked and a one-shot startup warn-log is emitted.
+	//
+	// SECURITY NOTE: with aud unset, the only gates are signature + issuer +
+	// non-empty sub, so any token minted by the same MBIO gateway (iss=
+	// mbio-api-gateway) for a sibling service is accepted on these RWA routes.
+	// If MBIO begins minting a service-scoped aud, set this to close that gap.
 	MBIOJWTAudience string `yaml:"mbio_jwt_audience"`
 
 	// JWKSCacheTTL — how long the keyfunc cache holds JWKS before refresh

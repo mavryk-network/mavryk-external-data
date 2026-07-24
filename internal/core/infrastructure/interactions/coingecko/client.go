@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"quotes/internal/config"
@@ -71,19 +74,44 @@ func maxBytes(api *config.APIConfig) int64 {
 	return api.OutboundMaxResponseBytes
 }
 
+// setAPIKeyHeader attaches the API key under the header CoinGecko expects for the
+// configured host: the Pro host uses x-cg-pro-api-key, the free/demo host uses
+// x-cg-demo-api-key. Sending the pro header to the demo host (the default
+// api.coingecko.com) is rejected, and demo keys were previously unusable.
+func (c *Client) setAPIKeyHeader(req *http.Request) {
+	if c.apiKey == "" {
+		return
+	}
+	header := "x-cg-demo-api-key"
+	if strings.Contains(c.baseURL, "pro-api.coingecko.com") {
+		header = "x-cg-pro-api-key"
+	}
+	req.Header.Set(header, c.apiKey)
+}
+
 // GetMarketChartRange fetches one (coin, vs_currency) pair window.
 func (c *Client) GetMarketChartRange(ctx context.Context, coinID, vsCurrency string, from, to int64) (*MarketChartRangeResponse, error) {
-	url := fmt.Sprintf("%s/coins/%s/market_chart/range?vs_currency=%s&from=%d&to=%d",
-		c.baseURL, coinID, vsCurrency, from, to)
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid coingecko base url %q: %w", c.baseURL, err)
+	}
+	// Escape path/query segments: coinID comes from tokens.cg_id (operator data
+	// today, but any admin/seed tooling could write it). Unescaped, a value with
+	// `/`, `?`, `#` or an authority would rewrite the request path/query sent with
+	// the API-key header attached.
+	u.Path = strings.TrimRight(u.Path, "/") + "/coins/" + url.PathEscape(coinID) + "/market_chart/range"
+	q := u.Query()
+	q.Set("vs_currency", vsCurrency)
+	q.Set("from", strconv.FormatInt(from, 10))
+	q.Set("to", strconv.FormatInt(to, 10))
+	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("User-Agent", "mavryk-external-data/1.0")
-	if c.apiKey != "" {
-		req.Header.Set("x-cg-pro-api-key", c.apiKey)
-	}
+	c.setAPIKeyHeader(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

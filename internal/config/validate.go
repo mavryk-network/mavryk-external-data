@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ func (c *Config) Validate() error {
 		c.validateCoinGecko,
 		c.validateBackfill,
 		c.validateEquiteezBackfill,
+		c.validateEquiteez,
 		c.validateTokens,
 		c.validateRWA,
 		c.validateTickers,
@@ -232,6 +234,25 @@ func (c *Config) validateEquiteezBackfill() error {
 	return nil
 }
 
+// validateEquiteez checks the Equiteez indexer connection settings that apply
+// beyond backfill (the sync and live jobs use the same client). When a bypass
+// password is configured, the indexer URL must parse — otherwise
+// indexerRequestURL silently drops the credential and every GraphQL call fails
+// unauthenticated with a misleading error.
+func (c *Config) validateEquiteez() error {
+	if strings.TrimSpace(c.Equiteez.IndexerPassword) == "" {
+		return nil
+	}
+	raw := strings.TrimSpace(c.Equiteez.IndexerURL)
+	if raw == "" {
+		return fmt.Errorf("equiteez.indexer_password is set but equiteez.indexer_url is empty")
+	}
+	if _, err := url.Parse(raw); err != nil {
+		return fmt.Errorf("equiteez.indexer_url must be a valid URL when a bypass password is set: %w", err)
+	}
+	return nil
+}
+
 func (c *Config) validateTickers() error {
 	t := c.Tickers
 	if !t.Enabled {
@@ -298,18 +319,53 @@ func (c *Config) validateAuth() error {
 		// build time — keeps validate.go free of the JWT dep.
 		return nil
 	}
-	if strings.TrimSpace(a.MBIOJWTBaseURL) == "" && strings.TrimSpace(a.MBIOAPIGatewayBaseURL) == "" {
+	base := strings.TrimSpace(a.MBIOJWTBaseURL)
+	if base == "" {
+		base = strings.TrimSpace(a.MBIOAPIGatewayBaseURL)
+	}
+	if base == "" {
 		return fmt.Errorf("auth.mbio_jwt_base_url or auth.mbio_api_gateway_base_url is required when AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY is unset; set one of AUTH_MBIO_JWT_BASE_URL / AUTH_MBIO_API_GATEWAY_BASE_URL, or provide a base64 PEM in AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY for local RS256 verification")
+	}
+	// JWKS (signing keys) must be fetched over TLS: an http:// base lets an
+	// on-path attacker substitute their own key set and forge accepted tokens —
+	// a full auth bypass. Allow http only for explicit localhost dev.
+	if err := requireSecureJWKSBase(base); err != nil {
+		return err
+	}
+	return nil
+}
+
+// requireSecureJWKSBase rejects a non-https JWKS base URL unless it targets
+// localhost/127.0.0.1 (local dev).
+func requireSecureJWKSBase(base string) error {
+	u, err := url.Parse(base)
+	if err != nil {
+		return fmt.Errorf("auth JWKS base URL is not a valid URL: %w", err)
+	}
+	host := u.Hostname()
+	isLocal := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	if u.Scheme != "https" && !isLocal {
+		return fmt.Errorf("auth JWKS base URL must use https (got %q); an http endpoint allows MITM key injection and full auth bypass", u.Scheme)
 	}
 	return nil
 }
 
 // validateProductionSafety refuses to start in release mode with well-known
-// default credentials. Caught at config-load so the operator sees a clear
-// error instead of a deploy that silently leaks behind a default password.
+// default credentials or with RWA auth disabled. Caught at config-load so the
+// operator sees a clear error instead of a deploy that silently leaks behind a
+// default password or serves RWA data on the public listener with no token.
 func (c *Config) validateProductionSafety() error {
 	if !strings.EqualFold(strings.TrimSpace(c.Server.GinMode), "release") {
 		return nil
+	}
+	// Auth off on the public listener in release mode exposes every /v1/rwa/*
+	// and /v1/pairs/rwa route without a token. Disabling auth is a dev/CI-only
+	// convenience (AUTH_ENABLED=false); refuse it when the operator has
+	// explicitly declared production via gin_mode=release.
+	if !c.Auth.JWTVerificationEnabled() {
+		return fmt.Errorf("auth is disabled (auth.enabled=false / AUTH_ENABLED=false) while server.gin_mode=release; " +
+			"RWA routes would be served unauthenticated on the public listener. Enable auth (unset AUTH_ENABLED or set it true) " +
+			"or run a non-release gin_mode for dev/CI")
 	}
 	insecure := map[string]bool{
 		"postgres": true,

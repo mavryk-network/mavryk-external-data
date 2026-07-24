@@ -36,6 +36,13 @@ func overrideWithEnv(config *Config) error {
 		}
 		config.Server.MaxQueryLimit = val
 	}
+	if v := os.Getenv("SERVER_LATEST_QUOTE_CACHE_TTL_SECONDS"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("SERVER_LATEST_QUOTE_CACHE_TTL_SECONDS: invalid int %q: %w", v, err)
+		}
+		config.Server.LatestQuoteCacheTTLSeconds = val
+	}
 	for _, e := range []struct {
 		env string
 		dst *DurationYAML
@@ -44,6 +51,7 @@ func overrideWithEnv(config *Config) error {
 		{"SERVER_WRITE_TIMEOUT", &config.Server.WriteTimeout},
 		{"SERVER_READ_HEADER_TIMEOUT", &config.Server.ReadHeaderTimeout},
 		{"SERVER_IDLE_TIMEOUT", &config.Server.IdleTimeout},
+		{"SERVER_HANDLER_TIMEOUT", &config.Server.HandlerTimeout},
 		{"SERVER_TICKER_STALE_AFTER", &config.Server.TickerStaleAfter},
 	} {
 		if v := os.Getenv(e.env); v != "" {
@@ -101,6 +109,13 @@ func overrideWithEnv(config *Config) error {
 			return fmt.Errorf("API_TIMEOUT_SECONDS: invalid int %q: %w", v, err)
 		}
 		config.API.TimeoutSeconds = val
+	}
+	if v := os.Getenv("OUTBOUND_MAX_RESPONSE_BYTES"); v != "" {
+		val, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("OUTBOUND_MAX_RESPONSE_BYTES: invalid int %q: %w", v, err)
+		}
+		config.API.OutboundMaxResponseBytes = val
 	}
 	for _, e := range []struct {
 		env string

@@ -55,7 +55,11 @@ func setDefaults(config *Config) {
 		config.Database.Name = "quotes"
 	}
 	if config.Database.SSLMode == "" {
-		config.Database.SSLMode = "disable"
+		// Secure-by-default: "prefer" negotiates TLS when the server offers it and
+		// transparently falls back to plaintext for a local/compose Postgres that
+		// has none — so a managed/remote DB is encrypted without an explicit opt-in,
+		// while local dev keeps working. Set POSTGRES_SSL=require to enforce.
+		config.Database.SSLMode = "prefer"
 	}
 
 	if config.Job.IntervalSeconds == 0 {
@@ -64,6 +68,13 @@ func setDefaults(config *Config) {
 
 	if config.API.TimeoutSeconds == 0 {
 		config.API.TimeoutSeconds = 30
+	}
+	if config.API.OutboundMaxResponseBytes == 0 {
+		// Cap outbound response bodies at 16 MiB by default so a misbehaving or
+		// compromised upstream (or a huge Cloudflare error page) can't stream
+		// gigabytes into memory via graphql.Execute's io.ReadAll. A negative value
+		// is treated as an explicit "disabled" escape hatch (MaxBytesReader).
+		config.API.OutboundMaxResponseBytes = 16 << 20
 	}
 
 	if config.CoinGecko.BaseURL == "" {

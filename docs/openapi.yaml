@@ -362,6 +362,8 @@ paths:
         keys per row. Targets that fail conversion are silently omitted;
         the row is still returned with the native `price`.
       operationId: listRWAPrices
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/From"
@@ -404,6 +406,8 @@ paths:
         rate. Cap = 1 — multiple comma-separated values
         return 400.
       operationId: rwaSeries
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/Interval"
@@ -448,6 +452,8 @@ paths:
         One rate per candle keeps the converted candle
         valid (`l ≤ o,c ≤ h`).
       operationId: rwaOHLC
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/Interval"
@@ -499,6 +505,8 @@ paths:
         mislead the frontend. DTO shape is fixed (`OHLCVResponse`) so
         the frontend can build against this URL today.
       operationId: rwaOHLCV
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/Symbol"
       responses:
@@ -536,6 +544,8 @@ paths:
         same rate as the top-level price), for whichever currencies were
         requested in `?in=`.
       operationId: latestRWASnapshot
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/InFilter"
@@ -588,6 +598,8 @@ paths:
         - Period anchors come from raw `rwa_quote_prices` via PK index
           seek, same data source as `now` for symmetry.
       operationId: rwaChange
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/Periods"
@@ -756,6 +768,8 @@ paths:
         Order is stable: `(source, base, quote)` ascending. Disabled pairs
         are never returned. Empty database returns `[]` (200), not 404.
       operationId: listRWAPairs
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Array of pair catalog entries.
@@ -770,6 +784,16 @@ paths:
         "500": { $ref: "#/components/responses/Internal" }
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        MBIO API-Gateway RS256 JWT (Bearer). Required on /v1/rwa/* and
+        /v1/pairs/rwa when they are served on the PUBLIC listener; the internal
+        listener serves these routes without auth. A missing or invalid token
+        returns 401 UNAUTHORIZED.
   parameters:
     Token:
       name: token

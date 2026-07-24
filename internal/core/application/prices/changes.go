@@ -19,6 +19,11 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// changeRepoTimeout bounds the detached singleflight repo call (see GetChange).
+// Generous relative to a single indexed-seek query, but finite so a stuck DB
+// connection cannot pin the flight forever.
+const changeRepoTimeout = 15 * time.Second
+
 // ChangeQuery is the application-layer parameter object for fetching
 // price-change anchors. The repository decides how to interpret EntityKey
 // and AuxKey:
@@ -161,7 +166,16 @@ func (s *ChangeService) GetChange(ctx context.Context, q ChangeQuery) (ChangeRes
 		// share one repo round-trip.
 		sfKey := singleflightKey(q.Source, q.EntityKey, q.AuxKey, repoQ.Currencies, repoQ.Periods)
 		v, err, shared := s.sf.Do(sfKey, func() (any, error) {
-			return s.Repo.GetChange(ctx, repoQ)
+			// Detach from the leader's request context. singleflight collapses N
+			// concurrent callers onto one repo call; if that call ran on the
+			// leader's ctx, the leader disconnecting (mobile nav-away, LB timeout)
+			// would cancel the shared query and fail every waiter with a 500 even
+			// though their own clients are still connected. WithoutCancel keeps
+			// ctx values (request id) but drops cancellation; we bound it with our
+			// own timeout instead.
+			callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), changeRepoTimeout)
+			defer cancel()
+			return s.Repo.GetChange(callCtx, repoQ)
 		})
 		if shared {
 			s.observeCache("singleflight_collapsed")
