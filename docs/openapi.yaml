@@ -349,6 +349,88 @@ paths:
                 code: OHLCV_NOT_IMPLEMENTED
                 message: "OHLCV is not yet available;"
 
+  /v1/rwa:
+    get:
+      tags: [prices-rwa]
+      summary: RWA market overview (list of assets with dynamic data)
+      description: |
+        Returns every enabled RWA asset with its latest price, 24h change, and a
+        short 1-day close-price series (last 24h at 15m buckets, reusing the
+        `/series` point shape `{t,p}`). Empty catalog returns
+        `{ "as_of": null, "assets": [] }`, not 404. Auth applies on the public
+        listener (see securitySchemes).
+      operationId: listRWAOverview
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: Cap the number of assets returned; clamped to the server cap.
+        - name: in
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Single FX target currency (e.g. `usd`). Converts the latest price
+            (flat top-level key per asset) and each mini-series point. More than
+            one currency → 400, mirroring the chart endpoints.
+      responses:
+        "200":
+          description: List of RWA assets with latest price, 24h change and a 1d series.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  as_of: { type: string, format: date-time, nullable: true }
+                  assets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        symbol: { type: string, example: mars1-usdt }
+                        base: { type: string, example: mars1 }
+                        quote: { type: string, example: usdt }
+                        native_quote: { type: string, example: usdt }
+                        price: { type: number, nullable: true, example: 100.42 }
+                        price_as_of: { type: string, format: date-time, nullable: true }
+                        change_24h:
+                          type: object
+                          properties:
+                            delta_abs: { type: number, nullable: true, example: 1.2 }
+                            change_pct: { type: number, nullable: true, example: 1.21 }
+                        series_1d:
+                          type: object
+                          properties:
+                            interval: { type: string, example: 15m }
+                            points:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  t: { type: string, format: date-time }
+                                  p: { type: number }
+              example:
+                as_of: "2026-07-24T12:00:00Z"
+                assets:
+                  - symbol: mars1-usdt
+                    base: mars1
+                    quote: usdt
+                    native_quote: usdt
+                    price: 100.42
+                    price_as_of: "2026-07-24T11:59:30Z"
+                    change_24h: { delta_abs: 1.2, change_pct: 1.21 }
+                    series_1d:
+                      interval: 15m
+                      points:
+                        - { t: "2026-07-23T12:00:00Z", p: 99.1 }
+                        - { t: "2026-07-24T11:45:00Z", p: 100.42 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
   /v1/rwa/{symbol}:
     get:
       tags: [prices-rwa]

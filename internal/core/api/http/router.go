@@ -27,6 +27,7 @@ type RouterDeps struct {
 	RWAPrice      handlers.RWAPriceDeps
 	RWACharts     handlers.RWAChartDeps
 	RWAPairs      handlers.RWAPairsDeps
+	RWAOverview   handlers.RWAOverviewDeps
 	Change        handlers.ChangeDeps
 	LegacyQuotes  handlers.LegacyQuotesDeps
 	Ticker        handlers.TickerDeps
@@ -95,6 +96,13 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			rwa.Use(deps.RWAAuth)
 		}
 		{
+			// GET /v1/rwa — market-overview list (latest + 24h change + 1d/15m
+			// mini-series per asset). Registered on the group root; does not
+			// conflict with /:symbol (a static node vs its param child). It must
+			// live inside the /rwa group to inherit the RWAAuth middleware —
+			// unlike /v1/pairs/rwa, whose STATIC segment would collide with
+			// /:symbol and so lives outside the group.
+			rwa.GET("", deps.RWAOverview.List())
 			rwa.GET("/:symbol", deps.RWAPrice.ListBySymbol())
 			rwa.GET("/:symbol/latest", deps.RWAPrice.LatestBySymbol())
 			rwa.GET("/:symbol/change", deps.Change.ChangeRWA())
