@@ -10,13 +10,22 @@ BEGIN
     END IF;
 
     -- token_prices: compress chunks older than 14 days.
-    EXECUTE $sql$
-        ALTER TABLE token_prices SET (
-            timescaledb.compress,
-            timescaledb.compress_segmentby = 'token_symbol, quote_currency, source_code',
-            timescaledb.compress_orderby   = 'ts DESC'
-        )
-    $sql$;
+    -- Guard the ALTER: re-running `SET (timescaledb.compress, ...)` once any
+    -- chunk is compressed errors with "cannot change configuration on already
+    -- compressed chunks". The settings are fixed at first run, so on an existing
+    -- DB (compression already configured) we skip the ALTER and keep them.
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.compression_settings
+        WHERE hypertable_name = 'token_prices'
+    ) THEN
+        EXECUTE $sql$
+            ALTER TABLE token_prices SET (
+                timescaledb.compress,
+                timescaledb.compress_segmentby = 'token_symbol, quote_currency, source_code',
+                timescaledb.compress_orderby   = 'ts DESC'
+            )
+        $sql$;
+    END IF;
     BEGIN
         PERFORM add_compression_policy('token_prices', INTERVAL '14 days');
     EXCEPTION WHEN duplicate_object THEN
@@ -28,14 +37,20 @@ BEGIN
         RAISE NOTICE 'retention policy on token_prices already exists';
     END;
 
-    -- rwa_quote_prices: compress chunks older than 7 days.
-    EXECUTE $sql$
-        ALTER TABLE rwa_quote_prices SET (
-            timescaledb.compress,
-            timescaledb.compress_segmentby = 'pair_id, side',
-            timescaledb.compress_orderby   = 'ts DESC'
-        )
-    $sql$;
+    -- rwa_quote_prices: compress chunks older than 7 days. Same idempotency
+    -- guard as token_prices above.
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.compression_settings
+        WHERE hypertable_name = 'rwa_quote_prices'
+    ) THEN
+        EXECUTE $sql$
+            ALTER TABLE rwa_quote_prices SET (
+                timescaledb.compress,
+                timescaledb.compress_segmentby = 'pair_id, side',
+                timescaledb.compress_orderby   = 'ts DESC'
+            )
+        $sql$;
+    END IF;
     BEGIN
         PERFORM add_compression_policy('rwa_quote_prices', INTERVAL '7 days');
     EXCEPTION WHEN duplicate_object THEN
