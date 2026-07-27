@@ -20,6 +20,25 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// caughtUpRecheckInterval is how long a pair rests after the forward walk
+// reaches the newest indexed fill. Short enough that post-downtime gaps and a
+// brand-new pair's first trades land promptly; long enough that idle pairs cost
+// ~one cheap indexed query per interval instead of one per tick.
+const caughtUpRecheckInterval = 5 * time.Minute
+
+// pauseUntilNextFill parks a caught-up pair without disabling it: the walk
+// resumes from the persisted CursorID after caughtUpRecheckInterval. Error
+// bookkeeping is reset because reaching the head of the log is a success, not a
+// failure. Pure (no I/O) so the decision is unit-testable.
+func pauseUntilNextFill(st *repositories.BackfillState, now time.Time) {
+	next := now.Add(caughtUpRecheckInterval)
+	st.NextAttemptAt = &next
+	st.Disabled = false
+	st.DisabledReason = ""
+	st.ErrorCount = 0
+	st.LastError = ""
+}
+
 // EquiteezBackfillJob ingests historical orderbook fills from the Equiteez
 // indexer's `orderbook_order` event log and writes one `last`-side
 // PricePoint per filled order into rwa_quote_prices.
@@ -84,6 +103,16 @@ func (j *EquiteezBackfillJob) Start(ctx context.Context) {
 	if j.cfg.Equiteez.IndexerURL == "" {
 		j.logger.Warn().Msg("equiteez_backfill_no_indexer_url_skipping")
 		return
+	}
+
+	// Self-heal: earlier builds permanently disabled a pair on catch-up
+	// (disabled_reason=caught_up), so any pair frozen by that behaviour would
+	// stay dead across deploys. Resume them from their persisted cursor.
+	// Operator/terminal disables (manual, auto_disabled, reached_floor) survive.
+	if resumed, err := j.state.ClearCaughtUp(ctx, prices.SourceEquiteez); err != nil {
+		j.logger.Warn().Err(err).Msg("equiteez_backfill_clear_caught_up_failed")
+	} else if resumed > 0 {
+		j.logger.Info().Int64("pairs", resumed).Msg("equiteez_backfill_resumed_caught_up_pairs")
 	}
 
 	tick := time.Duration(j.cfg.Equiteez.Backfill.TickSeconds) * time.Second
@@ -208,11 +237,19 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		return j.recordError(ctx, &logger, st, err)
 	}
 	if len(orders) == 0 {
-		// Forward cursor caught up to the latest event; live collector now
-		// owns this pair. Sticky disable; operator can clear it manually to
-		// re-walk (e.g. after a long downtime).
-		return j.markDisabled(ctx, &logger, st, repositories.BackfillDisabledReasonCaughtUp,
-			"no more orderbook_order events to backfill")
+		// Caught up with the indexer — but a forward walk has NO terminal state:
+		// new fills keep arriving. Pause until the next re-check instead of
+		// disabling the pair, otherwise (a) fills that land during any downtime
+		// are never ingested (the live collector snapshots bid/ask/last, it does
+		// not replay orderbook_order) and (b) a pair that has not traded yet
+		// would be killed on its very first tick and never pick up its first
+		// trades. The re-check costs one indexed query returning zero rows.
+		pauseUntilNextFill(st, time.Now().UTC())
+		logger.Debug().Time("retry_at", *st.NextAttemptAt).Msg("equiteez_backfill_caught_up_paused")
+		if err := j.state.Upsert(ctx, st); err != nil {
+			return fmt.Errorf("persist caught-up pause: %w", err)
+		}
+		return nil
 	}
 
 	points := ordersToLastPoints(pair, orders, quoteDecimals)

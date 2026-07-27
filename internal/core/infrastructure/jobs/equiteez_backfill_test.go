@@ -6,6 +6,7 @@ import (
 
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/interactions/equiteez"
+	"quotes/internal/core/infrastructure/storage/repositories"
 )
 
 func TestOrdersToLastPoints_NormalizesPriceAndTimestamp(t *testing.T) {
@@ -143,5 +144,51 @@ func TestFilterBackfillablePairs(t *testing.T) {
 	}
 	if out[0].ID != 2 || out[1].ID != 3 {
 		t.Errorf("order = [%d, %d], want [2, 3]", out[0].ID, out[1].ID)
+	}
+}
+
+// TestPauseUntilNextFill pins the fix for the sticky `caught_up` disable: a
+// forward-walking backfill that reaches the head of the log must PAUSE, never
+// disable. Disabling was permanent (backfill_state survives restarts), so fills
+// arriving during downtime were never ingested and a pair that had not traded
+// yet was killed on its first tick.
+func TestPauseUntilNextFill(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	cursor := int64(4242)
+	st := &repositories.BackfillState{
+		Source:    prices.SourceEquiteez,
+		EntityKey: "7",
+		CursorID:  &cursor,
+		// Simulated leftovers from an earlier transient failure.
+		ErrorCount: 3,
+		LastError:  "boom",
+	}
+
+	pauseUntilNextFill(st, now)
+
+	if st.Disabled {
+		t.Error("catching up must not disable the pair (forward walk has no terminal state)")
+	}
+	if st.DisabledReason != "" {
+		t.Errorf("DisabledReason = %q, want empty", st.DisabledReason)
+	}
+	if st.NextAttemptAt == nil {
+		t.Fatal("NextAttemptAt must be set so the pair is re-checked")
+	}
+	if want := now.Add(caughtUpRecheckInterval); !st.NextAttemptAt.Equal(want) {
+		t.Errorf("NextAttemptAt = %v, want %v", *st.NextAttemptAt, want)
+	}
+	if st.NextAttemptAt.Before(now) {
+		t.Error("NextAttemptAt must be in the future, otherwise the pause is a no-op")
+	}
+	// Reaching the head of the log is success — error bookkeeping resets so the
+	// pair cannot drift into the auto-disable threshold while merely idle.
+	if st.ErrorCount != 0 || st.LastError != "" {
+		t.Errorf("error bookkeeping not reset: count=%d last=%q", st.ErrorCount, st.LastError)
+	}
+	// The cursor must survive: resuming re-walks from where we stopped rather
+	// than replaying the whole history.
+	if st.CursorID == nil || *st.CursorID != 4242 {
+		t.Errorf("CursorID = %v, want 4242 preserved", st.CursorID)
 	}
 }

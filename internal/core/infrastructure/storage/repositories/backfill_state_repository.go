@@ -38,9 +38,12 @@ const (
 	BackfillDisabledReasonReachedFloor = "reached_floor"
 	BackfillDisabledReasonAutoDisabled = "auto_disabled"
 	BackfillDisabledReasonManual       = "manual"
-	// BackfillDisabledReasonCaughtUp marks a forward-walking backfill as done:
-	// no more events upstream. Distinct from auto_disabled (which signals
-	// errors) so dashboards can render "successful completion" clearly.
+	// BackfillDisabledReasonCaughtUp is LEGACY: earlier builds used it to
+	// permanently disable a forward-walking backfill once it reached the latest
+	// upstream event. That was wrong — a forward walk has no terminal state
+	// (new fills keep arriving), so catching up is a pause, not completion.
+	// Jobs now set NextAttemptAt instead; the constant remains so
+	// ClearCaughtUp can resume rows written by older builds.
 	BackfillDisabledReasonCaughtUp = "caught_up"
 )
 
@@ -68,6 +71,37 @@ func (r *BackfillStateRepository) Get(ctx context.Context, source prices.Source,
 		return nil, fmt.Errorf("get backfill_state: %w", res.Error)
 	}
 	return entityToState(&e), nil
+}
+
+// ClearCaughtUp re-enables every row for `source` that a previous build parked
+// with disabled_reason='caught_up', returning how many were resumed.
+//
+// `cursor_id` is deliberately left intact so the walk resumes exactly where it
+// stopped instead of replaying history. Rows disabled for a genuinely terminal
+// or operator-owned reason (reached_floor, auto_disabled, manual) are untouched.
+//
+// Called at job start so a deploy self-heals pairs frozen by the old sticky
+// behaviour — no ops SQL required.
+func (r *BackfillStateRepository) ClearCaughtUp(ctx context.Context, source prices.Source) (int64, error) {
+	if source == "" {
+		return 0, fmt.Errorf("source is required")
+	}
+	res := r.db.WithContext(ctx).
+		Model(&entities.BackfillStateEntity{}).
+		Where("source_code = ? AND disabled = ? AND disabled_reason = ?",
+			string(source), true, BackfillDisabledReasonCaughtUp).
+		Updates(map[string]any{
+			"disabled":        false,
+			"disabled_reason": "",
+			"next_attempt_at": nil,
+			"error_count":     0,
+			"last_error":      "",
+			"updated_at":      time.Now().UTC(),
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("clear caught_up backfill_state: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // Upsert writes the current state, creating the row on first call. updated_at is
