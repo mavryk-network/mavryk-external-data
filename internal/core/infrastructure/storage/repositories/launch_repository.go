@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -99,6 +100,25 @@ func (r *LaunchRepository) EnabledLaunches(ctx context.Context, source prices.So
 	return out, nil
 }
 
+// LaunchBySymbol resolves a `{base}-{quote}` symbol to its enabled launch.
+// Comparison is case-insensitive to match the URL parsing, which lowercases.
+// found=false (not an error) when the symbol is not a primary-market asset, so
+// the caller can keep its own 404.
+func (r *LaunchRepository) LaunchBySymbol(ctx context.Context, source prices.Source, base, quote string) (prices.RWALaunch, bool, error) {
+	var e entities.RWALaunchEntity
+	err := r.db.WithContext(ctx).
+		Where("source_code = ? AND enabled AND lower(base_symbol) = lower(?) AND lower(quote_symbol) = lower(?)",
+			string(source), base, quote).
+		Take(&e).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return prices.RWALaunch{}, false, nil
+		}
+		return prices.RWALaunch{}, false, fmt.Errorf("lookup rwa_launch by symbol: %w", err)
+	}
+	return entityToLaunch(e), true, nil
+}
+
 func entityToLaunch(e entities.RWALaunchEntity) prices.RWALaunch {
 	return prices.RWALaunch{
 		Source:          prices.Source(e.SourceCode),
@@ -117,6 +137,7 @@ func entityToLaunch(e entities.RWALaunchEntity) prices.RWALaunch {
 		SaleStart:       e.SaleStart,
 		SaleEnd:         e.SaleEnd,
 		SaleClosed:      e.SaleClosed,
+		LastSyncedAt:    e.LastSyncedAt,
 		Enabled:         e.Enabled,
 	}
 }

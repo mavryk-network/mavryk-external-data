@@ -174,6 +174,15 @@ func launchLister(r *repositories.LaunchRepository) handlers.RWALaunchLister {
 	return r
 }
 
+// launchResolver adapts an optional *LaunchRepository to the per-symbol lookup
+// interface, translating a typed-nil pointer to a nil interface (see launchLister).
+func launchResolver(r *repositories.LaunchRepository) handlers.RWALaunchResolver {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
 func configureGinMode(cfg *config.Config) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Server.GinMode)) {
 	case "debug":
@@ -271,6 +280,9 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 		// ath + price-one-year-ago for /latest; same concrete repo as charts.
 		Stats: deps.RWAPriceRepo,
+		// Lets /v1/rwa/{symbol} and /latest serve primary-market assets, which
+		// have no orderbook pair and would otherwise 404.
+		Launches: launchResolver(deps.LaunchRepo),
 	}
 	// RWA chart service runs over RWAPriceRepository. Converter enables
 	// `?in=<currency>` close-of-bucket FX (see ADR-0015 / ADR-0013); when

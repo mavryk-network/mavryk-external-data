@@ -234,6 +234,7 @@ func (d RWAOverviewDeps) primaryIssuanceAssets(ctx context.Context, existing []r
 // two; series/change stay empty because no trades exist yet.
 func launchToAsset(l prices.RWALaunch) rwaOverviewAsset {
 	price := newNum6(l.Price)
+	priceAsOf := nullableRFC3339(l.LastSyncedAt)
 	asset := rwaOverviewAsset{
 		Symbol:       l.Symbol(),
 		Base:         strings.ToLower(l.BaseSymbol),
@@ -242,6 +243,7 @@ func launchToAsset(l prices.RWALaunch) rwaOverviewAsset {
 		TokenAddress: nilIfEmpty(l.TokenAddr),
 		Market:       marketPrimary,
 		Price:        &price,
+		PriceAsOf:    priceAsOf,
 		Series:       seriesMiniDTO{Interval: string(overviewSeriesInterval), Points: []SeriesPointDTO{}},
 		Issuance: &primaryIssuanceDTO{
 			LaunchID:        l.LaunchID,

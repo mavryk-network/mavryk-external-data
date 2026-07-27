@@ -62,6 +62,11 @@ type RWALaunch struct {
 	SaleEnd    *time.Time
 	SaleClosed *time.Time
 
+	// LastSyncedAt is when the launchpad was last read. A sale price is a fixed
+	// quote rather than a market observation, so this is the honest "as of" to
+	// surface: it tells the client how fresh our copy is.
+	LastSyncedAt time.Time
+
 	Enabled bool
 }
 

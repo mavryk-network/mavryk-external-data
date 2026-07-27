@@ -500,6 +500,13 @@ paths:
         `?in=usd,eur,...` adds converted prices as flat top-level numeric
         keys per row. Targets that fail conversion are silently omitted;
         the row is still returned with the native `price`.
+
+        **Primary-market assets.** A token still in primary issuance has no
+        orderbook, so it is resolved from the launchpad catalog instead of
+        `rwa_pairs`: `market` is `primary`, `price` is the fixed base-tier sale
+        price, and a `primary_issuance` block carries sale progress. Such an
+        asset has no trade history — the list endpoint returns `[]` for a
+        from/to window and the single sale price in latest mode.
       operationId: listRWAPrices
       security:
         - bearerAuth: []
@@ -682,6 +689,12 @@ paths:
         per-currency keys, converted at the snapshot's current FX rate (the
         same rate as the top-level price), for whichever currencies were
         requested in `?in=`.
+        **Primary-market assets.** A token still in primary issuance has no
+        orderbook, so it is resolved from the launchpad catalog instead of
+        `rwa_pairs`: `market` is `primary`, `price` is the fixed base-tier sale
+        price, and a `primary_issuance` block carries sale progress. Such an
+        asset has no trade history — the list endpoint returns `[]` for a
+        from/to window and the single sale price in latest mode.
       operationId: latestRWASnapshot
       security:
         - bearerAuth: []
