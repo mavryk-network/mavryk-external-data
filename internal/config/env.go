@@ -279,6 +279,13 @@ func overrideWithEnv(config *Config) error {
 		}
 		config.RWA.IntervalSeconds = val
 	}
+	if v := os.Getenv("RWA_PAIR_SYNC_INTERVAL_SECONDS"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("RWA_PAIR_SYNC_INTERVAL_SECONDS: invalid int %q: %w", v, err)
+		}
+		config.RWA.PairSyncIntervalSeconds = val
+	}
 	if v := os.Getenv("RWA_CONCURRENCY"); v != "" {
 		val, err := strconv.Atoi(v)
 		if err != nil {

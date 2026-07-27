@@ -72,6 +72,33 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 		return
 	}
 
+	interval := time.Duration(j.cfg.RWA.IntervalSeconds) * time.Second
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	j.logger.Info().
+		Dur("interval", interval).
+		Msg("rwa_job_starting")
+
+	// NOTE: the ticker starts even when rwa_pairs is currently empty. Pairs are
+	// resolved per tick (see collectTick), so a pair discovered later — by the
+	// periodic RWAPairSyncJob or by an operator — is picked up without a restart.
+	safeGo(&j.wg, j.logger, "rwa", func() {
+		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "rwa", func(c context.Context) {
+			j.collectTick(c)
+		})
+	})
+}
+
+// collectTick reloads the enabled pair list and collects one round.
+//
+// Reloading every tick (the shape EquiteezBackfillJob.tickAllPairs already uses)
+// is what makes `rwa_pairs` changes take effect live: a newly listed asset starts
+// being polled, and an operator setting enabled=false actually stops the writes.
+// Previously the list was snapshotted at Start and frozen for the process
+// lifetime, so both required a restart. The reload is one indexed SELECT per
+// tick, negligible next to the outbound GraphQL round-trip that follows.
+func (j *EquiteezRWAJob) collectTick(ctx context.Context) {
 	pairs, err := j.lookup.RWAPairs(ctx)
 	if err != nil {
 		j.logger.Error().Err(err).Msg("rwa_load_pairs_failed")
@@ -79,24 +106,10 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 	}
 	enabled := filterEnabledPairs(pairs, prices.SourceEquiteez)
 	if len(enabled) == 0 {
-		j.logger.Info().Msg("rwa_no_enabled_pairs")
+		j.logger.Debug().Msg("rwa_no_enabled_pairs")
 		return
 	}
-
-	interval := time.Duration(j.cfg.RWA.IntervalSeconds) * time.Second
-	if interval <= 0 {
-		interval = 60 * time.Second
-	}
-	j.logger.Info().
-		Dur("interval", interval).
-		Int("pairs", len(enabled)).
-		Msg("rwa_job_starting")
-
-	safeGo(&j.wg, j.logger, "rwa", func() {
-		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "rwa", func(c context.Context) {
-			j.collectOnce(c, enabled)
-		})
-	})
+	j.collectOnce(ctx, enabled)
 }
 
 // Stop signals the goroutine and waits.

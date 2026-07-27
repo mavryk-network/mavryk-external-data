@@ -106,6 +106,10 @@ rwa:
   enabled: false
   interval_seconds: 60
   concurrency: 4
+  # How often the Equiteez allowlist is re-read into rwa_pairs. Bounds how long
+  # a newly listed asset stays invisible; the collector re-reads rwa_pairs every
+  # tick, so no restart is involved. 0 = in-code default (3600).
+  pair_sync_interval_seconds: 3600
 
 # Per-exchange ticker collector. Polls CoinGecko /coins/{id}/tickers on a fixed
 # cadence and serves /v1/tickers/:token/latest + /distribution.
