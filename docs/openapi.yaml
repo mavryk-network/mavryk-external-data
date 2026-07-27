@@ -362,14 +362,14 @@ paths:
 
         `market` discriminates two kinds of asset:
 
-          * `orderbook` — trades on an Equiteez orderbook. `price` is the latest
+          * `secondary` — trades on an Equiteez orderbook. `price` is the latest
             `last` quote; `change_24h` and `series_1d` are populated.
-          * `primary_issuance` — sold on the launchpad, no orderbook yet. `price`
-            is the fixed **base-tier** (undiscounted) sale price and the
+          * `primary` — sold on the launchpad, no orderbook yet. `price` is the
+            fixed **base-tier** (undiscounted) sale price and the
             `primary_issuance` block carries sale progress. No trades exist, so
             `change_24h` is null and `series_1d.points` is empty.
 
-        A token that trades on an orderbook is listed once, as `orderbook` —
+        A token that trades on an orderbook is listed once, as `secondary` —
         the live market price wins over the issuance price.
 
         Auth applies on the public listener (see securitySchemes).
@@ -410,8 +410,8 @@ paths:
                         token_address: { type: string, nullable: true, example: KT1MarsToken }
                         market:
                           type: string
-                          enum: [orderbook, primary_issuance]
-                          example: orderbook
+                          enum: [secondary, primary]
+                          example: secondary
                         price: { type: number, nullable: true, example: 100.42 }
                         price_as_of: { type: string, format: date-time, nullable: true }
                         change_24h:
@@ -433,7 +433,7 @@ paths:
                         primary_issuance:
                           type: object
                           description: >
-                            Present only when market=primary_issuance. Amounts are
+                            Present only when market=primary. Amounts are
                             raw on-chain nat strings (supply-scale values overflow
                             float64; divide by the token's decimals client-side).
                             progress_percent is computed server-side because the
@@ -457,7 +457,7 @@ paths:
                     quote: usdt
                     native_quote: usdt
                     token_address: KT1MarsToken
-                    market: orderbook
+                    market: secondary
                     price: 100.42
                     price_as_of: "2026-07-24T11:59:30Z"
                     change_24h: { delta_abs: 1.2, change_pct: 1.21 }
@@ -471,7 +471,7 @@ paths:
                     quote: usdt
                     native_quote: usdt
                     token_address: KT1FBJnqyY3EHB8dpwZ51gZqHBAXZifxwDnc
-                    market: primary_issuance
+                    market: primary
                     price: 100
                     price_as_of: null
                     change_24h: { delta_abs: null, change_pct: null }

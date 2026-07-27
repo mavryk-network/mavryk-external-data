@@ -241,8 +241,8 @@ func TestRWAOverview_PrimaryIssuanceAssets(t *testing.T) {
 	if a["symbol"] != "khbe-usdt" {
 		t.Errorf("symbol = %v, want khbe-usdt", a["symbol"])
 	}
-	if a["market"] != "primary_issuance" {
-		t.Errorf("market = %v, want primary_issuance", a["market"])
+	if a["market"] != "primary" {
+		t.Errorf("market = %v, want primary", a["market"])
 	}
 	if a["price"] != 100.0 {
 		t.Errorf("price = %v, want 100 (base tier)", a["price"])
@@ -289,8 +289,8 @@ func TestRWAOverview_LaunchNotDuplicatedWhenOrderbookExists(t *testing.T) {
 		t.Fatalf("assets = %d, want 1 (orderbook row wins, launch skipped)", len(assets))
 	}
 	a := assets[0].(map[string]any)
-	if a["market"] != "orderbook" {
-		t.Errorf("market = %v, want orderbook", a["market"])
+	if a["market"] != "secondary" {
+		t.Errorf("market = %v, want secondary", a["market"])
 	}
 	if a["price"] != 42.0 {
 		t.Errorf("price = %v, want the live orderbook price 42", a["price"])

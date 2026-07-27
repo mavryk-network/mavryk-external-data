@@ -30,10 +30,10 @@ const (
 	overviewConcurrency = 8
 
 	// market discriminates how an asset is priced, so a client knows which block
-	// to expect: a live orderbook quote (+ series/change) or a fixed launchpad
-	// sale price (+ issuance progress).
-	marketOrderbook       = "orderbook"
-	marketPrimaryIssuance = "primary_issuance"
+	// to expect: a live secondary-market (orderbook) quote (+ series/change) or a
+	// fixed primary-market launchpad sale price (+ issuance progress).
+	marketSecondary = "secondary"
+	marketPrimary   = "primary"
 )
 
 // RWAOverviewDeps wires GET /v1/rwa — the market-overview list of enabled RWA
@@ -240,7 +240,7 @@ func launchToAsset(l prices.RWALaunch) rwaOverviewAsset {
 		Quote:        strings.ToLower(l.QuoteSymbol),
 		NativeQuote:  strings.ToLower(l.QuoteSymbol),
 		TokenAddress: nilIfEmpty(l.TokenAddr),
-		Market:       marketPrimaryIssuance,
+		Market:       marketPrimary,
 		Price:        &price,
 		Series:       seriesMiniDTO{Interval: string(overviewSeriesInterval), Points: []SeriesPointDTO{}},
 		Issuance: &primaryIssuanceDTO{
@@ -292,7 +292,7 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 		Quote:        nativeQuote,
 		NativeQuote:  nativeQuote,
 		TokenAddress: nilIfEmpty(pair.TokenAddr),
-		Market:       marketOrderbook,
+		Market:       marketSecondary,
 		Series:       seriesMiniDTO{Interval: string(overviewSeriesInterval), Points: []SeriesPointDTO{}},
 	}
 
