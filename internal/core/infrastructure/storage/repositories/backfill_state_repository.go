@@ -15,14 +15,17 @@ import (
 
 // BackfillState is the domain-facing view of one (source, entity_key) cursor.
 //
-// CursorID is the integer-cursor companion to OldestTs; sources whose natural
-// pagination key is a monotonic ID (Equiteez orderbook_order.id) populate it,
-// while CoinGecko backfill leaves it nil.
+// CursorTs + CursorID are the keyset cursor for forward-walking sources:
+// Equiteez resumes filled orders strictly after (ended_at, id), i.e. by FILL
+// time with the creation-time id only as a tie-break. CursorTs == nil means the
+// walk restarts from start_from. CoinGecko backfill (a backward walk bounded by
+// OldestTs) leaves both nil.
 type BackfillState struct {
 	Source         prices.Source
 	EntityKey      string
 	OldestTs       *time.Time
 	CursorID       *int64
+	CursorTs       *time.Time
 	Disabled       bool
 	DisabledReason string
 	ErrorCount     int
@@ -138,6 +141,7 @@ func (r *BackfillStateRepository) Upsert(ctx context.Context, s *BackfillState) 
 		DoUpdates: clause.AssignmentColumns([]string{
 			"oldest_ts",
 			"cursor_id",
+			"cursor_ts",
 			"disabled",
 			"disabled_reason",
 			"error_count",
@@ -161,6 +165,7 @@ func entityToState(e *entities.BackfillStateEntity) *BackfillState {
 		EntityKey:      e.EntityKey,
 		OldestTs:       cloneTimePtr(e.OldestTs),
 		CursorID:       cloneInt64Ptr(e.CursorID),
+		CursorTs:       cloneTimePtr(e.CursorTs),
 		Disabled:       e.Disabled,
 		DisabledReason: e.DisabledReason,
 		ErrorCount:     e.ErrorCount,
@@ -177,6 +182,7 @@ func stateToEntity(s *BackfillState) entities.BackfillStateEntity {
 		EntityKey:      s.EntityKey,
 		OldestTs:       cloneTimePtr(s.OldestTs),
 		CursorID:       cloneInt64Ptr(s.CursorID),
+		CursorTs:       cloneTimePtr(s.CursorTs),
 		Disabled:       s.Disabled,
 		DisabledReason: s.DisabledReason,
 		ErrorCount:     s.ErrorCount,

@@ -107,28 +107,63 @@ func TestOrdersToLastPoints_NoNormalizationWhenDecimalsZero(t *testing.T) {
 	}
 }
 
-func TestMaxOrderID(t *testing.T) {
-	cases := []struct {
-		name string
-		ids  []int64
-		want int64
-	}{
-		{"single", []int64{42}, 42},
-		{"ascending", []int64{1, 2, 3, 5, 8}, 8},
-		{"descending", []int64{8, 5, 3, 2, 1}, 8},
-		{"random", []int64{3, 1, 9, 4, 1, 5}, 9},
+// TestAdvanceOrderCursor pins the keyset cursor: the walk must resume by FILL
+// time (ended_at) with id only as the tie-break. Advancing by id alone let a
+// resting limit order that filled after the cursor passed its creation-time id
+// be skipped forever.
+func TestAdvanceOrderCursor(t *testing.T) {
+	mk := func(id int64, endedAt string) equiteez.OrderbookOrder {
+		return equiteez.OrderbookOrder{ID: id, EndedAt: endedAt}
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			orders := make([]equiteez.OrderbookOrder, len(c.ids))
-			for i, id := range c.ids {
-				orders[i] = equiteez.OrderbookOrder{ID: id}
-			}
-			if got := maxOrderID(orders); got != c.want {
-				t.Errorf("maxOrderID = %d, want %d", got, c.want)
-			}
+
+	t.Run("picks latest ended_at, not the largest id", func(t *testing.T) {
+		// id 900 was CREATED late but filled first; id 100 is the resting limit
+		// order that filled last — it must own the cursor.
+		got, ok := advanceOrderCursor([]equiteez.OrderbookOrder{
+			mk(900, "2026-07-27T10:00:00Z"),
+			mk(100, "2026-07-27T12:00:00Z"),
 		})
-	}
+		if !ok {
+			t.Fatal("ok = false, want a cursor")
+		}
+		want := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+		if !got.EndedAt.Equal(want) {
+			t.Errorf("EndedAt = %v, want %v", got.EndedAt, want)
+		}
+		if got.ID != 100 {
+			t.Errorf("ID = %d, want 100 (the row owning the latest ended_at)", got.ID)
+		}
+	})
+
+	t.Run("id breaks ties within the same fill instant", func(t *testing.T) {
+		got, ok := advanceOrderCursor([]equiteez.OrderbookOrder{
+			mk(7, "2026-07-27T12:00:00Z"),
+			mk(9, "2026-07-27T12:00:00Z"),
+			mk(8, "2026-07-27T12:00:00Z"),
+		})
+		if !ok || got.ID != 9 {
+			t.Errorf("ID = %d (ok=%v), want 9", got.ID, ok)
+		}
+	})
+
+	t.Run("unparseable rows are skipped, not fatal", func(t *testing.T) {
+		got, ok := advanceOrderCursor([]equiteez.OrderbookOrder{
+			mk(1, "not-a-timestamp"),
+			mk(2, "2026-07-27T09:30:00Z"),
+		})
+		if !ok || got.ID != 2 {
+			t.Errorf("ID = %d (ok=%v), want 2", got.ID, ok)
+		}
+	})
+
+	t.Run("no parseable row -> ok=false so the caller cannot skip the batch", func(t *testing.T) {
+		if _, ok := advanceOrderCursor([]equiteez.OrderbookOrder{mk(1, "bad"), mk(2, "")}); ok {
+			t.Error("ok = true, want false when nothing could be parsed")
+		}
+		if _, ok := advanceOrderCursor(nil); ok {
+			t.Error("ok = true for an empty batch, want false")
+		}
+	})
 }
 
 func TestFilterBackfillablePairs(t *testing.T) {

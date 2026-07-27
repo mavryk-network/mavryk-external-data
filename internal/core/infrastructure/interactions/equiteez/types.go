@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // FlexibleFloat unmarshals JSON numbers or quoted numeric strings (Hasura /
@@ -105,6 +106,22 @@ type TokenWithOrderbooks struct {
 // Numeric fields come back as JSON-quoted strings for bigint columns and as
 // bare numbers for ints; FlexibleFloat normalizes both. Timestamps are RFC3339
 // (Hasura default).
+// OrderCursor is the keyset position of a forward walk over filled orders: the
+// (ended_at, id) of the last row already ingested. A zero EndedAt means "no
+// cursor yet" — the caller starts from its configured floor.
+//
+// Fill time leads and id is only the tie-break for orders that filled in the
+// same instant. Ordering by id alone is unsafe: id is assigned at order
+// CREATION, so a resting limit order that fills long after the cursor passed its
+// id would never be returned.
+type OrderCursor struct {
+	EndedAt time.Time
+	ID      int64
+}
+
+// Set reports whether the cursor holds a real position.
+func (c OrderCursor) Set() bool { return !c.EndedAt.IsZero() }
+
 type OrderbookOrder struct {
 	ID               int64         `json:"id"`
 	OrderType        int           `json:"order_type"`

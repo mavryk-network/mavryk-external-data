@@ -182,87 +182,109 @@ func (c *Client) GetTokensWithOrderbooks(ctx context.Context, addresses []string
 }
 
 // GetFilledOrderbookOrders returns up to `limit` filled orders for the given
-// orderbook, ordered by id ascending and starting strictly after `sinceID`.
-// Used by the Equiteez backfill job.
+// orderbook in FILL order — `ended_at ASC, id ASC` — resuming strictly after
+// `cursor`. Used by the Equiteez backfill job.
 //
 // Filters:
-//   - orderbook_id  = $orderbook_id
-//   - id            > $since_id        (forward cursor; 0 = start of history)
-//   - fulfilled_amount > 0              (skip never-matched orders)
-//   - ended_at IS NOT NULL              (skip still-open orders; live collector covers them)
-//   - ended_at      >= $start_from     (only when startFrom is non-zero — operator-imposed floor)
+//   - orderbook_id     = $orderbook_id
+//   - fulfilled_amount > 0             (skip never-matched orders)
+//   - ended_at IS NOT NULL             (skip still-open orders; live collector covers them)
+//   - keyset resume, or ended_at >= $start_from on a cold start (operator floor)
 //
-// We forward-walk by `id ASC` because:
-//   - id is monotonic.
-//   - ended_at can have ties at second-level resolution within a single block.
-//   - Using id avoids pagination tie-breaker logic.
+// Why (ended_at, id) and not id alone: `orderbook_order.id` is assigned when the
+// order is CREATED, not when it fills. A resting limit order created early can
+// fill long after the walk passed its id, and an id-only cursor
+// (`id > $since_id`) would exclude it forever — its trade would never reach
+// rwa_quote_prices, and the live collector cannot recover it because it
+// snapshots bid/ask/last rather than replaying the event log. Walking by fill
+// time cannot miss it: its ended_at is necessarily >= the cursor when it fills.
+// `id` remains only as the tie-break for orders sharing an ended_at (same block),
+// which keeps pagination stable across a batch boundary inside such a group.
 //
-// orderbookID and sinceID are passed as int64 in Go (defensive — int32 would
-// suffice today since the indexer exposes both `orderbook.id` and
-// `orderbook_order.id` as the `Int` GraphQL scalar). Values fit comfortably;
-// JSON encoding handles the narrowing on the wire. startFrom may be the zero
-// time.Time to disable the ended_at floor.
+// orderbookID and cursor.ID are int64 in Go (defensive — the indexer exposes
+// both ids as the `Int` GraphQL scalar); JSON encoding handles the narrowing.
+// startFrom may be the zero time.Time to disable the ended_at floor; it applies
+// only on a cold start, since a live cursor already implies the floor.
 func (c *Client) GetFilledOrderbookOrders(
 	ctx context.Context,
 	orderbookID int64,
-	sinceID int64,
+	cursor OrderCursor,
 	startFrom time.Time,
 	limit int,
 ) ([]OrderbookOrder, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("limit must be positive: %d", limit)
 	}
+	const orderFields = `
+					id
+					order_type
+					price_per_rwa_token
+					fulfilled_amount
+					ended_at
+					operation_hash`
+
 	var query string
 	variables := map[string]interface{}{
 		"orderbook_id": orderbookID,
-		"since_id":     sinceID,
 		"limit":        limit,
 	}
-	if startFrom.IsZero() {
-		query = `
-			query filledOrderbookOrders($orderbook_id: Int!, $since_id: Int!, $limit: Int!) {
+	switch {
+	case cursor.Set():
+		// Keyset resume: everything that filled after the cursor instant, plus
+		// the remainder of the group that shares the cursor's ended_at.
+		// RFC3339Nano keeps sub-second precision — truncating could re-fetch
+		// (harmless, writes are idempotent) or skip (data loss).
+		variables["since_ts"] = cursor.EndedAt.UTC().Format(time.RFC3339Nano)
+		variables["since_id"] = cursor.ID
+		query = fmt.Sprintf(`
+			query filledOrderbookOrders($orderbook_id: Int!, $since_ts: timestamptz!, $since_id: Int!, $limit: Int!) {
 				orderbook_order(
 					where: {
 						orderbook_id:     { _eq: $orderbook_id }
-						id:               { _gt: $since_id }
 						fulfilled_amount: { _gt: "0" }
 						ended_at:         { _is_null: false }
+						_or: [
+							{ ended_at: { _gt: $since_ts } }
+							{ _and: [ { ended_at: { _eq: $since_ts } }, { id: { _gt: $since_id } } ] }
+						]
 					}
-					order_by: { id: asc }
+					order_by: [{ ended_at: asc }, { id: asc }]
 					limit:    $limit
-				) {
-					id
-					order_type
-					price_per_rwa_token
-					fulfilled_amount
-					ended_at
-					operation_hash
+				) {%s
 				}
 			}
-		`
-	} else {
-		query = `
-			query filledOrderbookOrders($orderbook_id: Int!, $since_id: Int!, $start_from: timestamptz!, $limit: Int!) {
+		`, orderFields)
+	case !startFrom.IsZero():
+		variables["start_from"] = startFrom.UTC().Format(time.RFC3339)
+		query = fmt.Sprintf(`
+			query filledOrderbookOrders($orderbook_id: Int!, $start_from: timestamptz!, $limit: Int!) {
 				orderbook_order(
 					where: {
 						orderbook_id:     { _eq: $orderbook_id }
-						id:               { _gt: $since_id }
 						fulfilled_amount: { _gt: "0" }
 						ended_at:         { _gte: $start_from }
 					}
-					order_by: { id: asc }
+					order_by: [{ ended_at: asc }, { id: asc }]
 					limit:    $limit
-				) {
-					id
-					order_type
-					price_per_rwa_token
-					fulfilled_amount
-					ended_at
-					operation_hash
+				) {%s
 				}
 			}
-		`
-		variables["start_from"] = startFrom.UTC().Format(time.RFC3339)
+		`, orderFields)
+	default:
+		query = fmt.Sprintf(`
+			query filledOrderbookOrders($orderbook_id: Int!, $limit: Int!) {
+				orderbook_order(
+					where: {
+						orderbook_id:     { _eq: $orderbook_id }
+						fulfilled_amount: { _gt: "0" }
+						ended_at:         { _is_null: false }
+					}
+					order_by: [{ ended_at: asc }, { id: asc }]
+					limit:    $limit
+				) {%s
+				}
+			}
+		`, orderFields)
 	}
 	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, variables, nil)
 	if err != nil {

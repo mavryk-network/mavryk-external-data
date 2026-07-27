@@ -134,7 +134,40 @@ beyond the cursor.
   histogram + `equiteez_backfill_saved` log lines already give ops
   enough signal).
 
+## Amendment (2026-07): cursor is `(ended_at, id)`, catch-up is a pause
+
+Two decisions above turned out to be wrong in production and are superseded.
+
+**1. Paginating by `id` alone silently loses fills.** The reasoning above
+("`id` is monotonic … tie-free cursor") missed that `orderbook_order.id` is
+assigned when an order is **created**, not when it **fills**. A resting limit
+order created at id=100 that fills after the walk passed id=200 can never be
+returned by `id > $since_id` — its trade never reaches `rwa_quote_prices`, and
+the live collector cannot recover it because it snapshots bid/ask/last rather
+than replaying the event log. The loss is systematic for any orderbook with
+resting limit orders.
+
+The walk now orders by `ended_at ASC, id ASC` and resumes with a keyset
+predicate (`ended_at > $ts OR (ended_at = $ts AND id > $id)`). Fill time cannot
+run backwards relative to the cursor, so a late fill is always picked up; `id`
+survives only as the tie-break for orders filling in the same instant, which
+also keeps pagination stable when a batch boundary splits such a group.
+State gained `cursor_ts` (migration 0015); `cursor_id` keeps the tie-break.
+A NULL `cursor_ts` means "restart from `start_from`", so the first run after
+deploy re-walks by fill time and thereby recovers the previously skipped
+orders — safe because `rwa_quote_prices` upserts on `(pair_id, side, ts)`.
+
+**2. `caught_up` was a terminal state; it is now a pause.** A forward walk has
+no completion: new fills keep arriving. Disabling the pair on an empty batch
+(sticky, since `backfill_state` survives restarts) meant fills landing during
+any downtime were never ingested, and a pair that had not traded yet was
+disabled on its very first tick. Catching up now sets `next_attempt_at`
+(~5 min) and leaves the pair enabled; `ClearCaughtUp` at job start resumes
+pairs frozen by the old behaviour. `reached_floor` / `auto_disabled` /
+`manual` remain genuinely terminal.
+
 ## References
+
 
 - [0008](0008-backfill-state-composite-key.md) — composite-key state repo
 - [0012](0012-rwa-pair-discovery-and-normalization.md) — RWA pair discovery
