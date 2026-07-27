@@ -89,6 +89,7 @@ func run() int {
 	// Change repos for /change endpoints. Read-only; share the GORM handle.
 	tokenChangeRepo := repositories.NewTokenChangeRepository(db.DB)
 	rwaChangeRepo := repositories.NewRWAChangeRepository(db.DB)
+	launchRepo := repositories.NewLaunchRepository(db.DB)
 	// Ticker repo + cache decorator. Two TTLs because /latest and /distribution
 	// have different cost / call-rate profiles (see ADR-0007 / Q1).
 	tickerRepo := repositories.NewTickerRepository(db.DB).WithBatchSize(batch)
@@ -127,6 +128,7 @@ func run() int {
 		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
 		Lookup:          lookup,
+		LaunchRepo:      launchRepo,
 		TickerQuery:     tickerAppRepo,
 	})
 	if err != nil {
@@ -138,7 +140,7 @@ func run() int {
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
-	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, logger)
+	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, launchRepo, logger)
 	tickersJob := jobs.NewCoinGeckoTickersJob(cfg, tickerAppRepo, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -358,8 +358,21 @@ paths:
         short 1-day close-price series (last 24h at 15m buckets, reusing the
         `/series` point shape `{t,p}`). Empty catalog returns `{ "assets": [] }`,
         not 404. Each asset carries its own `price_as_of`; `token_address` is the
-        on-chain RWA token contract (null when the pair has not been synced with
-        one yet). Auth applies on the public listener (see securitySchemes).
+        on-chain RWA token contract (null when not synced yet).
+
+        `market` discriminates two kinds of asset:
+
+          * `orderbook` — trades on an Equiteez orderbook. `price` is the latest
+            `last` quote; `change_24h` and `series_1d` are populated.
+          * `primary_issuance` — sold on the launchpad, no orderbook yet. `price`
+            is the fixed **base-tier** (undiscounted) sale price and the
+            `primary_issuance` block carries sale progress. No trades exist, so
+            `change_24h` is null and `series_1d.points` is empty.
+
+        A token that trades on an orderbook is listed once, as `orderbook` —
+        the live market price wins over the issuance price.
+
+        Auth applies on the public listener (see securitySchemes).
       operationId: listRWAOverview
       security:
         - bearerAuth: []
@@ -395,6 +408,10 @@ paths:
                         quote: { type: string, example: usdt }
                         native_quote: { type: string, example: usdt }
                         token_address: { type: string, nullable: true, example: KT1MarsToken }
+                        market:
+                          type: string
+                          enum: [orderbook, primary_issuance]
+                          example: orderbook
                         price: { type: number, nullable: true, example: 100.42 }
                         price_as_of: { type: string, format: date-time, nullable: true }
                         change_24h:
@@ -413,6 +430,26 @@ paths:
                                 properties:
                                   t: { type: string, format: date-time }
                                   p: { type: number }
+                        primary_issuance:
+                          type: object
+                          description: >
+                            Present only when market=primary_issuance. Amounts are
+                            raw on-chain nat strings (supply-scale values overflow
+                            float64; divide by the token's decimals client-side).
+                            progress_percent is computed server-side because the
+                            indexer does not expose it.
+                          properties:
+                            launch_id: { type: integer, example: 6 }
+                            name: { type: string, example: KHBE-issuance-v2 }
+                            status:
+                              type: string
+                              enum: [active, inactive, paused, closed]
+                            active: { type: boolean, description: purchasable right now }
+                            total_bought: { type: string, example: "6667" }
+                            max_amount_cap: { type: string, example: "2500000000000" }
+                            progress_percent: { type: number, example: 2.667e-7 }
+                            sale_start: { type: string, format: date-time, nullable: true }
+                            sale_end: { type: string, format: date-time, nullable: true }
               example:
                 assets:
                   - symbol: mars1-usdt
@@ -420,6 +457,7 @@ paths:
                     quote: usdt
                     native_quote: usdt
                     token_address: KT1MarsToken
+                    market: orderbook
                     price: 100.42
                     price_as_of: "2026-07-24T11:59:30Z"
                     change_24h: { delta_abs: 1.2, change_pct: 1.21 }
@@ -428,6 +466,24 @@ paths:
                       points:
                         - { t: "2026-07-23T12:00:00Z", p: 99.1 }
                         - { t: "2026-07-24T11:45:00Z", p: 100.42 }
+                  - symbol: khbe-usdt
+                    base: khbe
+                    quote: usdt
+                    native_quote: usdt
+                    token_address: KT1FBJnqyY3EHB8dpwZ51gZqHBAXZifxwDnc
+                    market: primary_issuance
+                    price: 100
+                    price_as_of: null
+                    change_24h: { delta_abs: null, change_pct: null }
+                    series_1d: { interval: 15m, points: [] }
+                    primary_issuance:
+                      launch_id: 6
+                      name: KHBE-issuance-v2
+                      status: active
+                      active: true
+                      total_bought: "6667"
+                      max_amount_cap: "2500000000000"
+                      progress_percent: 2.667e-7
         "400": { $ref: "#/components/responses/BadRequest" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }

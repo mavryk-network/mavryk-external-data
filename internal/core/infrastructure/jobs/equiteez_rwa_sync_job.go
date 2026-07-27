@@ -28,25 +28,32 @@ const defaultPairSyncInterval = time.Hour
 // runTickerLoop fires the first tick immediately, so this also covers the
 // startup sync that main.go used to perform inline.
 type RWAPairSyncJob struct {
-	cfg    *config.Config
-	lookup *repositories.LookupRepository
-	logger *zerolog.Logger
+	cfg      *config.Config
+	lookup   *repositories.LookupRepository
+	launches *repositories.LaunchRepository
+	logger   *zerolog.Logger
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
-func NewRWAPairSyncJob(cfg *config.Config, lookup *repositories.LookupRepository, log *zerolog.Logger) *RWAPairSyncJob {
+func NewRWAPairSyncJob(
+	cfg *config.Config,
+	lookup *repositories.LookupRepository,
+	launches *repositories.LaunchRepository,
+	log *zerolog.Logger,
+) *RWAPairSyncJob {
 	if log == nil {
 		nop := zerolog.Nop()
 		log = &nop
 	}
 	return &RWAPairSyncJob{
-		cfg:    cfg,
-		lookup: lookup,
-		logger: logging.WithComponent(log, "rwa_pair_sync_job"),
-		stopCh: make(chan struct{}),
+		cfg:      cfg,
+		lookup:   lookup,
+		launches: launches,
+		logger:   logging.WithComponent(log, "rwa_pair_sync_job"),
+		stopCh:   make(chan struct{}),
 	}
 }
 
@@ -95,7 +102,20 @@ func (j *RWAPairSyncJob) syncOnce(ctx context.Context) {
 	enabled, err := SyncRWAPairs(syncCtx, j.cfg, j.lookup, j.logger)
 	if err != nil {
 		j.logger.Error().Err(err).Msg("rwa_pair_sync_failed")
-		return
+		// Fall through: launches are an independent catalog. An orderbook-side
+		// failure must not also hide every primary-issuance asset.
+	} else {
+		j.logger.Debug().Int("enabled_pairs", enabled).Msg("rwa_pair_sync_ok")
 	}
-	j.logger.Debug().Int("enabled_pairs", enabled).Msg("rwa_pair_sync_ok")
+
+	// Primary issuance: tokens sold on the launchpad have no orderbook, so they
+	// never produce an rwa_pairs row and would otherwise be absent from GET /v1/rwa.
+	if j.launches != nil {
+		stored, lErr := SyncRWALaunches(syncCtx, j.cfg, j.launches, j.logger)
+		if lErr != nil {
+			j.logger.Error().Err(lErr).Msg("rwa_launch_sync_failed")
+			return
+		}
+		j.logger.Debug().Int("launches", stored).Msg("rwa_launch_sync_ok")
+	}
 }

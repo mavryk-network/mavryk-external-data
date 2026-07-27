@@ -40,6 +40,9 @@ type AppDeps struct {
 	// When either field is nil the handler rejects `?in=` with 400.
 	FXConverter apiprices.PriceConverter
 	Lookup      *repositories.LookupRepository
+	// LaunchRepo surfaces primary-issuance (launchpad) assets on GET /v1/rwa.
+	// Optional: nil simply omits them from the catalog.
+	LaunchRepo *repositories.LaunchRepository
 	// TickerQuery powers /v1/tickers/:token/latest and /distribution. Nil
 	// disables the routes silently (no handlers mounted).
 	TickerQuery apitickers.QueryService
@@ -160,6 +163,16 @@ func NewApp(deps AppDeps) (*App, error) {
 // Caps the attacker-controlled bytes that can be forced into every log line via
 // oversized X-Request-ID / User-Agent headers.
 const maxHeaderBytes = 64 << 10 // 64 KiB
+
+// launchLister adapts an optional *LaunchRepository to the handler interface.
+// A typed-nil pointer stored in an interface is non-nil, which would make the
+// handler call a nil receiver — so translate nil to a nil interface explicitly.
+func launchLister(r *repositories.LaunchRepository) handlers.RWALaunchLister {
+	if r == nil {
+		return nil
+	}
+	return r
+}
 
 func configureGinMode(cfg *config.Config) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Server.GinMode)) {
@@ -310,6 +323,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 	// per-asset fan-out across dashboard polls.
 	rwaOverviewDeps := handlers.NewRWAOverviewDeps(
 		deps.Lookup,
+		launchLister(deps.LaunchRepo),
 		rwaChangeService,
 		rwaChartService,
 		deps.FXConverter,

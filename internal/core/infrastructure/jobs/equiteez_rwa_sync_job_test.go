@@ -25,7 +25,7 @@ func TestRWAPairSyncJob_StartGuards(t *testing.T) {
 			cfg.RWA.Enabled = c.enabled
 			cfg.Equiteez.IndexerURL = c.indexerURL
 
-			j := NewRWAPairSyncJob(cfg, nil, nil)
+			j := NewRWAPairSyncJob(cfg, nil, nil, nil)
 			j.Start(context.Background())
 			done := make(chan struct{})
 			go func() { j.Stop(); close(done) }()
@@ -37,7 +37,7 @@ func TestRWAPairSyncJob_StartGuards(t *testing.T) {
 // TestRWAPairSyncJob_StopIdempotent guards the stopOnce contract — Stop is
 // called from the shutdown path and may race with a failed Start.
 func TestRWAPairSyncJob_StopIdempotent(t *testing.T) {
-	j := NewRWAPairSyncJob(&config.Config{}, nil, nil)
+	j := NewRWAPairSyncJob(&config.Config{}, nil, nil, nil)
 	j.Stop()
 	j.Stop()
 }
