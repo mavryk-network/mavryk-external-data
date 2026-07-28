@@ -369,8 +369,15 @@ paths:
             `primary_issuance` block carries sale progress. No trades exist, so
             `change_24h` is null and `series_1d.points` is empty.
 
-        A token that trades on an orderbook is listed once, as `secondary` —
-        the live market price wins over the issuance price.
+        The two are **facets, not alternatives**. An asset that trades on an
+        orderbook while still in primary issuance is listed **once**: `market`
+        stays `secondary` (a live quote outranks a fixed one for the top-level
+        `price`) and the `primary_issuance` block is present alongside, carrying
+        its own `price`. Assets are keyed by `{base}-{quote}`, so the same token
+        against two quote currencies is two distinct assets.
+
+        `limit` applies to the merged, symbol-sorted catalog — primary-market
+        assets are never starved by secondary ones.
 
         Auth applies on the public listener (see securitySchemes).
       operationId: listRWAOverview
@@ -441,6 +448,19 @@ paths:
                           properties:
                             launch_id: { type: integer, example: 6 }
                             name: { type: string, example: KHBE-issuance-v2 }
+                            price:
+                              type: number
+                              example: 100
+                              description: >
+                                Base-tier (undiscounted) sale price in the asset's
+                                quote currency. Present here as well as at the top
+                                level so it survives when a live secondary quote
+                                takes the top-level `price`.
+                            price_as_of:
+                              type: string
+                              format: date-time
+                              nullable: true
+                              description: When the launchpad was last read.
                             status:
                               type: string
                               enum: [active, inactive, paused, closed]
@@ -481,6 +501,8 @@ paths:
                       name: KHBE-issuance-v2
                       status: active
                       active: true
+                      price: 100
+                      price_as_of: "2026-07-27T09:00:00Z"
                       total_bought: "6667"
                       max_amount_cap: "2500000000000"
                       progress_percent: 2.667e-7
@@ -507,6 +529,12 @@ paths:
         price, and a `primary_issuance` block carries sale progress. Such an
         asset has no trade history — the list endpoint returns `[]` for a
         from/to window and the single sale price in latest mode.
+
+        An asset that trades AND is still in issuance carries both: the live
+        quote as `price` (`market: secondary`) plus a `primary_issuance` block.
+        On the list endpoint that block appears only in latest mode — a windowed
+        response is a time series of trades, and repeating asset-level metadata
+        on every row would bloat it.
       operationId: listRWAPrices
       security:
         - bearerAuth: []
@@ -695,6 +723,12 @@ paths:
         price, and a `primary_issuance` block carries sale progress. Such an
         asset has no trade history — the list endpoint returns `[]` for a
         from/to window and the single sale price in latest mode.
+
+        An asset that trades AND is still in issuance carries both: the live
+        quote as `price` (`market: secondary`) plus a `primary_issuance` block.
+        On the list endpoint that block appears only in latest mode — a windowed
+        response is a time series of trades, and repeating asset-level metadata
+        on every row would bloat it.
       operationId: latestRWASnapshot
       security:
         - bearerAuth: []

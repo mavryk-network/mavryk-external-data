@@ -272,9 +272,11 @@ func TestRWAOverview_PrimaryIssuanceAssets(t *testing.T) {
 	}
 }
 
-// TestRWAOverview_LaunchNotDuplicatedWhenOrderbookExists: a token that also
-// trades on an orderbook must appear once — the live market row wins.
-func TestRWAOverview_LaunchNotDuplicatedWhenOrderbookExists(t *testing.T) {
+// TestRWAOverview_OverlapKeepsBothFacets: an asset that trades on an orderbook
+// AND is still in primary issuance must appear ONCE carrying both facets. The
+// live quote wins the top-level price, but the sale price survives inside the
+// issuance block — an earlier version dropped the launch entirely here.
+func TestRWAOverview_OverlapKeepsBothFacets(t *testing.T) {
 	pairs := []prices.RWAPair{
 		{ID: 1, BaseSymbol: "khbe", QuoteSymbol: "USDT", Source: prices.SourceEquiteez, TokenAddr: "KT1KHBE"},
 	}
@@ -286,14 +288,77 @@ func TestRWAOverview_LaunchNotDuplicatedWhenOrderbookExists(t *testing.T) {
 
 	assets := body["assets"].([]any)
 	if len(assets) != 1 {
-		t.Fatalf("assets = %d, want 1 (orderbook row wins, launch skipped)", len(assets))
+		t.Fatalf("assets = %d, want 1 (one asset, two facets — not duplicated)", len(assets))
 	}
 	a := assets[0].(map[string]any)
 	if a["market"] != "secondary" {
-		t.Errorf("market = %v, want secondary", a["market"])
+		t.Errorf("market = %v, want secondary (live quote wins the price slot)", a["market"])
 	}
 	if a["price"] != 42.0 {
 		t.Errorf("price = %v, want the live orderbook price 42", a["price"])
+	}
+	pi, ok := a["primary_issuance"].(map[string]any)
+	if !ok {
+		t.Fatalf("issuance facet was dropped for an overlapping asset: %v", a)
+	}
+	if pi["price"] != 100.0 {
+		t.Errorf("primary_issuance.price = %v, want 100 — the sale price must survive", pi["price"])
+	}
+	if pi["total_bought"] != "6667" {
+		t.Errorf("issuance progress lost: %v", pi["total_bought"])
+	}
+}
+
+// A launch on the same token but a DIFFERENT quote is a different asset and must
+// not be collapsed into the orderbook row — the merge key is {base}-{quote}, not
+// the token address.
+func TestRWAOverview_SameTokenDifferentQuoteAreDistinctAssets(t *testing.T) {
+	pairs := []prices.RWAPair{
+		{ID: 1, BaseSymbol: "khbe", QuoteSymbol: "USDT", Source: prices.SourceEquiteez, TokenAddr: "KT1KHBE"},
+	}
+	eurl := khbeLaunch()
+	eurl.QuoteSymbol = "eurl" // same token, other currency
+	res := apiprices.ChangeRepoResult{
+		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("42"), TS: time.Now().UTC(), Found: true}},
+	}
+	r := overviewEngineWith(pairs, res, &stubLaunchLister{launches: []prices.RWALaunch{eurl}})
+	body := getJSON(t, r, "/v1/rwa")
+
+	assets := body["assets"].([]any)
+	if len(assets) != 2 {
+		t.Fatalf("assets = %d, want 2 (khbe-usdt and khbe-eurl are distinct)", len(assets))
+	}
+	got := []string{assets[0].(map[string]any)["symbol"].(string), assets[1].(map[string]any)["symbol"].(string)}
+	if got[0] != "khbe-eurl" || got[1] != "khbe-usdt" {
+		t.Errorf("symbols = %v, want [khbe-eurl khbe-usdt] (globally sorted)", got)
+	}
+}
+
+// limit must be applied to the MERGED, globally sorted catalog. Previously the
+// pairs were truncated first, so a primary asset could never appear once there
+// were `limit` orderbook pairs — whatever its symbol.
+func TestRWAOverview_LimitIsFairAcrossBothCatalogs(t *testing.T) {
+	pairs := []prices.RWAPair{
+		{ID: 1, BaseSymbol: "mars1", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
+		{ID: 2, BaseSymbol: "mars2", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
+	}
+	res := apiprices.ChangeRepoResult{
+		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("50"), TS: time.Now().UTC(), Found: true}},
+	}
+	// "khbe" sorts before both pairs, so with limit=2 it must make the cut.
+	r := overviewEngineWith(pairs, res, &stubLaunchLister{launches: []prices.RWALaunch{khbeLaunch()}})
+
+	body := getJSON(t, r, "/v1/rwa?limit=2")
+	assets := body["assets"].([]any)
+	if len(assets) != 2 {
+		t.Fatalf("assets = %d, want 2", len(assets))
+	}
+	first := assets[0].(map[string]any)
+	if first["symbol"] != "khbe-usdt" {
+		t.Errorf("first symbol = %v, want khbe-usdt — limit must not starve the primary catalog", first["symbol"])
+	}
+	if second := assets[1].(map[string]any); second["symbol"] != "mars1-usdt" {
+		t.Errorf("second symbol = %v, want mars1-usdt", second["symbol"])
 	}
 }
 

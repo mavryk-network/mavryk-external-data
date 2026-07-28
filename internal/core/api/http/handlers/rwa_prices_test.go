@@ -964,3 +964,73 @@ func TestRWA_PrimaryMarketFallbackBoundaries(t *testing.T) {
 		}
 	})
 }
+
+// An asset can trade on an orderbook AND still be in primary issuance. The
+// per-symbol endpoints must expose both facets: the live quote as the price,
+// the sale price inside the issuance block. An earlier version returned on the
+// first catalog hit and hid the issuance entirely.
+func TestRWA_OverlapExposesBothFacets(t *testing.T) {
+	pair := prices.RWAPair{ID: 7, BaseSymbol: "khbe", QuoteSymbol: "USDT", Source: prices.SourceEquiteez}
+	res := &stubLaunchResolver{launch: khbeLaunchFixture(), found: true}
+	deps := RWAPriceDeps{
+		Service: &stubQueryService{points: []prices.PricePoint{{
+			Source: prices.SourceEquiteez, EntityKey: "7", Metric: lastSide,
+			Price: decimal.RequireFromString("42"), Timestamp: time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
+		}}},
+		Lookup:        &stubLookup{pair: pair},
+		Launches:      res,
+		DefaultSource: prices.SourceEquiteez,
+	}
+	r := newRWAEngine(t, deps)
+
+	t.Run("latest carries both", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/khbe-usdt/latest", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if out["market"] != "secondary" || out["price"] != 42.0 {
+			t.Errorf("market/price = %v/%v, want secondary/42", out["market"], out["price"])
+		}
+		pi, ok := out["primary_issuance"].(map[string]any)
+		if !ok {
+			t.Fatalf("issuance facet missing on an overlapping asset: %v", out)
+		}
+		if pi["price"] != 100.0 {
+			t.Errorf("primary_issuance.price = %v, want 100 (sale price preserved)", pi["price"])
+		}
+	})
+
+	t.Run("list latest-mode carries it once; window mode omits it", func(t *testing.T) {
+		decode := func(path string) []map[string]any {
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: status = %d; body=%s", path, w.Code, w.Body.String())
+			}
+			var out []map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatalf("%s: decode: %v", path, err)
+			}
+			return out
+		}
+		rows := decode("/v1/rwa/khbe-usdt")
+		if len(rows) == 0 {
+			t.Fatal("latest mode returned no rows")
+		}
+		if _, ok := rows[0]["primary_issuance"]; !ok {
+			t.Error("latest mode should carry the issuance block")
+		}
+		// A windowed response is a time series of trades; repeating asset-level
+		// metadata on every row would bloat it for no gain.
+		for i, row := range decode("/v1/rwa/khbe-usdt?from=2026-07-01T00:00:00Z") {
+			if _, ok := row["primary_issuance"]; ok {
+				t.Errorf("row %d: window mode must not repeat the issuance block", i)
+			}
+		}
+	})
+}
