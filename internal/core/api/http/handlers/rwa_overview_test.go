@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -137,6 +138,7 @@ func TestRWAOverview_ResponseCache(t *testing.T) {
 	}
 	deps := NewRWAOverviewDeps(
 		lister,
+		nil,
 		&apiprices.ChangeService{Repo: &stubChangeRepo{res: changeRes}, Cache: apiprices.NewChangeCache(), Kind: "rwa"},
 		&apiprices.ChartService{Repo: &stubCandleRepo{}, Caps: apiprices.DefaultCaps(), MaxLimit: 1000, Kind: "rwa"},
 		nil, prices.SourceEquiteez, time.Minute,
@@ -178,5 +180,200 @@ func TestRWAOverview_LimitClamps(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa?limit=0", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("limit=0 should be 400, got %d", w.Code)
+	}
+}
+
+// stubLaunchLister satisfies RWALaunchLister for handler tests.
+type stubLaunchLister struct {
+	launches []prices.RWALaunch
+	err      error
+}
+
+func (s *stubLaunchLister) EnabledLaunches(_ context.Context, _ prices.Source) ([]prices.RWALaunch, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.launches, nil
+}
+
+func khbeLaunch() prices.RWALaunch {
+	return prices.RWALaunch{
+		Source: prices.SourceEquiteez, TokenAddr: "KT1KHBE", BaseSymbol: "khbe", QuoteSymbol: "usdt",
+		LaunchID: 6, Name: "KHBE-issuance-v2", Status: "active", Active: true,
+		Price:           dec("100"),
+		TotalBought:     dec("6667"),
+		MaxAmountCap:    dec("2500000000000"),
+		ProgressPercent: 2.667e-7,
+		Enabled:         true,
+	}
+}
+
+func overviewEngineWith(pairs []prices.RWAPair, res apiprices.ChangeRepoResult, launches RWALaunchLister) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	deps := RWAOverviewDeps{
+		Pairs:    &stubPairsLister{pairs: pairs},
+		Launches: launches,
+		Change: &apiprices.ChangeService{
+			Repo: &stubChangeRepo{res: res}, Cache: apiprices.NewChangeCache(), Kind: "rwa",
+		},
+		Charts: &apiprices.ChartService{
+			Repo: &stubCandleRepo{}, Caps: apiprices.DefaultCaps(), MaxLimit: 1000, Kind: "rwa",
+		},
+		Source: prices.SourceEquiteez,
+	}
+	r := gin.New()
+	r.GET("/v1/rwa", deps.List())
+	return r
+}
+
+// TestRWAOverview_PrimaryIssuanceAssets: a token sold on the launchpad has no
+// orderbook (so no rwa_pairs row) and must still appear in the catalog, priced
+// at its base tier with sale progress instead of a market quote.
+func TestRWAOverview_PrimaryIssuanceAssets(t *testing.T) {
+	r := overviewEngineWith(nil, apiprices.ChangeRepoResult{}, &stubLaunchLister{launches: []prices.RWALaunch{khbeLaunch()}})
+	body := getJSON(t, r, "/v1/rwa")
+
+	assets := body["assets"].([]any)
+	if len(assets) != 1 {
+		t.Fatalf("assets = %d, want 1", len(assets))
+	}
+	a := assets[0].(map[string]any)
+	if a["symbol"] != "khbe-usdt" {
+		t.Errorf("symbol = %v, want khbe-usdt", a["symbol"])
+	}
+	if a["market"] != "primary" {
+		t.Errorf("market = %v, want primary", a["market"])
+	}
+	if a["price"] != 100.0 {
+		t.Errorf("price = %v, want 100 (base tier)", a["price"])
+	}
+	pi, ok := a["primary_issuance"].(map[string]any)
+	if !ok {
+		t.Fatalf("primary_issuance block missing: %v", a)
+	}
+	if pi["total_bought"] != "6667" {
+		t.Errorf("total_bought = %v, want \"6667\" (raw string)", pi["total_bought"])
+	}
+	if pi["max_amount_cap"] != "2500000000000" {
+		t.Errorf("max_amount_cap = %v, want \"2500000000000\"", pi["max_amount_cap"])
+	}
+	if got, _ := pi["progress_percent"].(float64); got < 2.6e-7 || got > 2.7e-7 {
+		t.Errorf("progress_percent = %v, want ~2.667e-7 (must not collapse to 0)", pi["progress_percent"])
+	}
+	if pi["status"] != "active" || pi["active"] != true {
+		t.Errorf("status/active = %v/%v, want active/true", pi["status"], pi["active"])
+	}
+	// No trades exist yet: empty series, null change.
+	if pts := a["series_1d"].(map[string]any)["points"].([]any); len(pts) != 0 {
+		t.Errorf("series points = %d, want 0", len(pts))
+	}
+	if ch := a["change_24h"].(map[string]any); ch["delta_abs"] != nil {
+		t.Errorf("change_24h.delta_abs = %v, want null", ch["delta_abs"])
+	}
+}
+
+// TestRWAOverview_OverlapKeepsBothFacets: an asset that trades on an orderbook
+// AND is still in primary issuance must appear ONCE carrying both facets. The
+// live quote wins the top-level price, but the sale price survives inside the
+// issuance block — an earlier version dropped the launch entirely here.
+func TestRWAOverview_OverlapKeepsBothFacets(t *testing.T) {
+	pairs := []prices.RWAPair{
+		{ID: 1, BaseSymbol: "khbe", QuoteSymbol: "USDT", Source: prices.SourceEquiteez, TokenAddr: "KT1KHBE"},
+	}
+	res := apiprices.ChangeRepoResult{
+		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("42"), TS: time.Now().UTC(), Found: true}},
+	}
+	r := overviewEngineWith(pairs, res, &stubLaunchLister{launches: []prices.RWALaunch{khbeLaunch()}})
+	body := getJSON(t, r, "/v1/rwa")
+
+	assets := body["assets"].([]any)
+	if len(assets) != 1 {
+		t.Fatalf("assets = %d, want 1 (one asset, two facets — not duplicated)", len(assets))
+	}
+	a := assets[0].(map[string]any)
+	if a["market"] != "secondary" {
+		t.Errorf("market = %v, want secondary (live quote wins the price slot)", a["market"])
+	}
+	if a["price"] != 42.0 {
+		t.Errorf("price = %v, want the live orderbook price 42", a["price"])
+	}
+	pi, ok := a["primary_issuance"].(map[string]any)
+	if !ok {
+		t.Fatalf("issuance facet was dropped for an overlapping asset: %v", a)
+	}
+	if pi["price"] != 100.0 {
+		t.Errorf("primary_issuance.price = %v, want 100 — the sale price must survive", pi["price"])
+	}
+	if pi["total_bought"] != "6667" {
+		t.Errorf("issuance progress lost: %v", pi["total_bought"])
+	}
+}
+
+// A launch on the same token but a DIFFERENT quote is a different asset and must
+// not be collapsed into the orderbook row — the merge key is {base}-{quote}, not
+// the token address.
+func TestRWAOverview_SameTokenDifferentQuoteAreDistinctAssets(t *testing.T) {
+	pairs := []prices.RWAPair{
+		{ID: 1, BaseSymbol: "khbe", QuoteSymbol: "USDT", Source: prices.SourceEquiteez, TokenAddr: "KT1KHBE"},
+	}
+	eurl := khbeLaunch()
+	eurl.QuoteSymbol = "eurl" // same token, other currency
+	res := apiprices.ChangeRepoResult{
+		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("42"), TS: time.Now().UTC(), Found: true}},
+	}
+	r := overviewEngineWith(pairs, res, &stubLaunchLister{launches: []prices.RWALaunch{eurl}})
+	body := getJSON(t, r, "/v1/rwa")
+
+	assets := body["assets"].([]any)
+	if len(assets) != 2 {
+		t.Fatalf("assets = %d, want 2 (khbe-usdt and khbe-eurl are distinct)", len(assets))
+	}
+	got := []string{assets[0].(map[string]any)["symbol"].(string), assets[1].(map[string]any)["symbol"].(string)}
+	if got[0] != "khbe-eurl" || got[1] != "khbe-usdt" {
+		t.Errorf("symbols = %v, want [khbe-eurl khbe-usdt] (globally sorted)", got)
+	}
+}
+
+// limit must be applied to the MERGED, globally sorted catalog. Previously the
+// pairs were truncated first, so a primary asset could never appear once there
+// were `limit` orderbook pairs — whatever its symbol.
+func TestRWAOverview_LimitIsFairAcrossBothCatalogs(t *testing.T) {
+	pairs := []prices.RWAPair{
+		{ID: 1, BaseSymbol: "mars1", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
+		{ID: 2, BaseSymbol: "mars2", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
+	}
+	res := apiprices.ChangeRepoResult{
+		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("50"), TS: time.Now().UTC(), Found: true}},
+	}
+	// "khbe" sorts before both pairs, so with limit=2 it must make the cut.
+	r := overviewEngineWith(pairs, res, &stubLaunchLister{launches: []prices.RWALaunch{khbeLaunch()}})
+
+	body := getJSON(t, r, "/v1/rwa?limit=2")
+	assets := body["assets"].([]any)
+	if len(assets) != 2 {
+		t.Fatalf("assets = %d, want 2", len(assets))
+	}
+	first := assets[0].(map[string]any)
+	if first["symbol"] != "khbe-usdt" {
+		t.Errorf("first symbol = %v, want khbe-usdt — limit must not starve the primary catalog", first["symbol"])
+	}
+	if second := assets[1].(map[string]any); second["symbol"] != "mars1-usdt" {
+		t.Errorf("second symbol = %v, want mars1-usdt", second["symbol"])
+	}
+}
+
+// TestRWAOverview_LaunchListerErrorIsNotFatal: the orderbook side must still be
+// served when the launch catalog is unavailable.
+func TestRWAOverview_LaunchListerErrorIsNotFatal(t *testing.T) {
+	pairs := []prices.RWAPair{
+		{ID: 1, BaseSymbol: "mars1", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
+	}
+	res := apiprices.ChangeRepoResult{
+		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("50"), TS: time.Now().UTC(), Found: true}},
+	}
+	r := overviewEngineWith(pairs, res, &stubLaunchLister{err: context.DeadlineExceeded})
+	body := getJSON(t, r, "/v1/rwa")
+	if len(body["assets"].([]any)) != 1 {
+		t.Errorf("orderbook assets must survive a launch-lister failure, got %v", body["assets"])
 	}
 }

@@ -15,14 +15,17 @@ import (
 
 // BackfillState is the domain-facing view of one (source, entity_key) cursor.
 //
-// CursorID is the integer-cursor companion to OldestTs; sources whose natural
-// pagination key is a monotonic ID (Equiteez orderbook_order.id) populate it,
-// while CoinGecko backfill leaves it nil.
+// CursorTs + CursorID are the keyset cursor for forward-walking sources:
+// Equiteez resumes filled orders strictly after (ended_at, id), i.e. by FILL
+// time with the creation-time id only as a tie-break. CursorTs == nil means the
+// walk restarts from start_from. CoinGecko backfill (a backward walk bounded by
+// OldestTs) leaves both nil.
 type BackfillState struct {
 	Source         prices.Source
 	EntityKey      string
 	OldestTs       *time.Time
 	CursorID       *int64
+	CursorTs       *time.Time
 	Disabled       bool
 	DisabledReason string
 	ErrorCount     int
@@ -38,9 +41,12 @@ const (
 	BackfillDisabledReasonReachedFloor = "reached_floor"
 	BackfillDisabledReasonAutoDisabled = "auto_disabled"
 	BackfillDisabledReasonManual       = "manual"
-	// BackfillDisabledReasonCaughtUp marks a forward-walking backfill as done:
-	// no more events upstream. Distinct from auto_disabled (which signals
-	// errors) so dashboards can render "successful completion" clearly.
+	// BackfillDisabledReasonCaughtUp is LEGACY: earlier builds used it to
+	// permanently disable a forward-walking backfill once it reached the latest
+	// upstream event. That was wrong — a forward walk has no terminal state
+	// (new fills keep arriving), so catching up is a pause, not completion.
+	// Jobs now set NextAttemptAt instead; the constant remains so
+	// ClearCaughtUp can resume rows written by older builds.
 	BackfillDisabledReasonCaughtUp = "caught_up"
 )
 
@@ -68,6 +74,37 @@ func (r *BackfillStateRepository) Get(ctx context.Context, source prices.Source,
 		return nil, fmt.Errorf("get backfill_state: %w", res.Error)
 	}
 	return entityToState(&e), nil
+}
+
+// ClearCaughtUp re-enables every row for `source` that a previous build parked
+// with disabled_reason='caught_up', returning how many were resumed.
+//
+// `cursor_id` is deliberately left intact so the walk resumes exactly where it
+// stopped instead of replaying history. Rows disabled for a genuinely terminal
+// or operator-owned reason (reached_floor, auto_disabled, manual) are untouched.
+//
+// Called at job start so a deploy self-heals pairs frozen by the old sticky
+// behaviour — no ops SQL required.
+func (r *BackfillStateRepository) ClearCaughtUp(ctx context.Context, source prices.Source) (int64, error) {
+	if source == "" {
+		return 0, fmt.Errorf("source is required")
+	}
+	res := r.db.WithContext(ctx).
+		Model(&entities.BackfillStateEntity{}).
+		Where("source_code = ? AND disabled = ? AND disabled_reason = ?",
+			string(source), true, BackfillDisabledReasonCaughtUp).
+		Updates(map[string]any{
+			"disabled":        false,
+			"disabled_reason": "",
+			"next_attempt_at": nil,
+			"error_count":     0,
+			"last_error":      "",
+			"updated_at":      time.Now().UTC(),
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("clear caught_up backfill_state: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // Upsert writes the current state, creating the row on first call. updated_at is
@@ -104,6 +141,7 @@ func (r *BackfillStateRepository) Upsert(ctx context.Context, s *BackfillState) 
 		DoUpdates: clause.AssignmentColumns([]string{
 			"oldest_ts",
 			"cursor_id",
+			"cursor_ts",
 			"disabled",
 			"disabled_reason",
 			"error_count",
@@ -127,6 +165,7 @@ func entityToState(e *entities.BackfillStateEntity) *BackfillState {
 		EntityKey:      e.EntityKey,
 		OldestTs:       cloneTimePtr(e.OldestTs),
 		CursorID:       cloneInt64Ptr(e.CursorID),
+		CursorTs:       cloneTimePtr(e.CursorTs),
 		Disabled:       e.Disabled,
 		DisabledReason: e.DisabledReason,
 		ErrorCount:     e.ErrorCount,
@@ -143,6 +182,7 @@ func stateToEntity(s *BackfillState) entities.BackfillStateEntity {
 		EntityKey:      s.EntityKey,
 		OldestTs:       cloneTimePtr(s.OldestTs),
 		CursorID:       cloneInt64Ptr(s.CursorID),
+		CursorTs:       cloneTimePtr(s.CursorTs),
 		Disabled:       s.Disabled,
 		DisabledReason: s.DisabledReason,
 		ErrorCount:     s.ErrorCount,

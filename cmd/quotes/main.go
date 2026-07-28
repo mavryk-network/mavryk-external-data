@@ -89,6 +89,7 @@ func run() int {
 	// Change repos for /change endpoints. Read-only; share the GORM handle.
 	tokenChangeRepo := repositories.NewTokenChangeRepository(db.DB)
 	rwaChangeRepo := repositories.NewRWAChangeRepository(db.DB)
+	launchRepo := repositories.NewLaunchRepository(db.DB)
 	// Ticker repo + cache decorator. Two TTLs because /latest and /distribution
 	// have different cost / call-rate profiles (see ADR-0007 / Q1).
 	tickerRepo := repositories.NewTickerRepository(db.DB).WithBatchSize(batch)
@@ -127,6 +128,7 @@ func run() int {
 		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
 		Lookup:          lookup,
+		LaunchRepo:      launchRepo,
 		TickerQuery:     tickerAppRepo,
 	})
 	if err != nil {
@@ -138,6 +140,7 @@ func run() int {
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
+	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, launchRepo, logger)
 	tickersJob := jobs.NewCoinGeckoTickersJob(cfg, tickerAppRepo, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -162,15 +165,12 @@ func run() int {
 	liveJob.Start(ctx)
 	backfillJob.Start(ctx)
 
-	// Discovery: pull the current Equiteez allowlist into rwa_pairs before the
-	// collector reads from it. Failure here logs but doesn't block startup —
-	// the collector falls back to whatever is already in DB (operator's manual
-	// rows, previous sync). When `rwa.enabled=false` SyncRWAPairs is a no-op.
-	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
-	if _, err := jobs.SyncRWAPairs(syncCtx, cfg, lookup, logger); err != nil {
-		logger.Error().Err(err).Msg("rwa_pair_sync_failed_continuing")
-	}
-	syncCancel()
+	// Discovery: pull the Equiteez allowlist into rwa_pairs. Runs on a ticker
+	// (first tick fires immediately), so a newly listed asset is picked up
+	// without a restart and a transient indexer failure retries instead of
+	// leaving discovery dead for the process lifetime. The collector resolves
+	// pairs per tick, so it needs no ordering guarantee against this job.
+	rwaPairSyncJob.Start(ctx)
 
 	rwaJob.Start(ctx)
 	rwaBackfillJob.Start(ctx)
@@ -207,6 +207,7 @@ func run() int {
 	backfillJob.Stop()
 	rwaJob.Stop()
 	rwaBackfillJob.Stop()
+	rwaPairSyncJob.Stop()
 	tickersJob.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

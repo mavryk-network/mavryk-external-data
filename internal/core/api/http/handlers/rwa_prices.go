@@ -58,6 +58,68 @@ type RWAPriceDeps struct {
 	// nil those blocks are omitted (keeps the endpoint back-compatible and lets
 	// unit tests that don't exercise them stay minimal).
 	Stats RWAStatsReader
+	// Launches is optional; resolves a symbol that has no orderbook pair to its
+	// primary-market launch, so /v1/rwa/{symbol} and /latest serve issuance
+	// assets instead of 404ing. Nil keeps the previous pair-only behaviour.
+	Launches RWALaunchResolver
+}
+
+// RWALaunchResolver resolves one `{base}-{quote}` symbol to its primary-market
+// launch. found=false means "not a primary-market asset" and is not an error —
+// the caller keeps its own 404.
+type RWALaunchResolver interface {
+	LaunchBySymbol(ctx context.Context, source prices.Source, base, quote string) (prices.RWALaunch, bool, error)
+}
+
+// rwaTarget is what a `:symbol` resolves to. Both facets are independent: an
+// asset can trade on an orderbook, still be in primary issuance, or both at
+// once — so this is not an either/or.
+type rwaTarget struct {
+	Pair    prices.RWAPair
+	HasPair bool
+	Launch  *prices.RWALaunch
+}
+
+// resolveTargetFromPath resolves `:symbol` against BOTH catalogs.
+//
+// An asset that trades on an orderbook can still be in primary issuance, so a
+// successful pair lookup does not end the search — an earlier version returned
+// on the first hit and silently hid the issuance facet of such an asset.
+//
+// Error handling stays conservative: only a genuine "no such pair" miss lets a
+// launch answer the request, so a malformed symbol keeps its 400 and an
+// ambiguous pair its 409. A launch-catalog failure never escalates — it degrades
+// to "no issuance facet" (or to the pair's own 404 when there is no pair).
+func (d RWAPriceDeps) resolveTargetFromPath(c *gin.Context) (rwaTarget, error) {
+	pair, pairErr := d.resolvePairFromPath(c)
+	if pairErr != nil && !stderrors.Is(pairErr, prices.ErrPairNotFound) {
+		return rwaTarget{}, pairErr // 400 malformed / 409 ambiguous — never masked
+	}
+	target := rwaTarget{Pair: pair, HasPair: pairErr == nil}
+
+	if d.Launches != nil {
+		if base, quote, ok := parseRWASymbol(c.Param("symbol")); ok {
+			if l, found, err := d.Launches.LaunchBySymbol(c.Request.Context(), d.DefaultSource, base, quote); err == nil && found {
+				target.Launch = &l
+			}
+		}
+	}
+	if !target.HasPair && target.Launch == nil {
+		return rwaTarget{}, pairErr // keep the original 404
+	}
+	return target, nil
+}
+
+// launchPriceDTO renders a primary-market launch as a price snapshot: the fixed
+// base-tier sale price, stamped with when we last read the launchpad.
+func launchPriceDTO(l prices.RWALaunch) rwaPriceDTO {
+	return rwaPriceDTO{
+		Timestamp:   formatRFC3339(l.LastSyncedAt),
+		NativeQuote: strings.ToLower(l.QuoteSymbol),
+		Price:       newNum6(l.Price),
+		Market:      marketPrimary,
+		Issuance:    issuanceBlock(l),
+	}
 }
 
 // ListBySymbol — GET /v1/rwa/:symbol
@@ -68,14 +130,18 @@ type RWAPriceDeps struct {
 func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
+		HasPair   bool
+		Launch    *prices.RWALaunch
+		Window    bool // a from/to window was requested
 		Query     prices.Query
 		InTargets []prices.Currency
 	}
 	bind := func(c *gin.Context) (request, error) {
-		pair, err := d.resolvePairFromPath(c)
+		target, err := d.resolveTargetFromPath(c)
 		if err != nil {
 			return request{}, err
 		}
+		pair := target.Pair
 		// MetricParam: "" disables `?side=` parsing — only `last` is surfaced.
 		opts := common.QueryOptions{
 			MaxLimit:           d.MaxLimit,
@@ -90,7 +156,10 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 			return request{}, err
 		}
 		return request{
-			Pair: pair,
+			Pair:    pair,
+			HasPair: target.HasPair,
+			Launch:  target.Launch,
+			Window:  !pq.From.IsZero() || !pq.To.IsZero(),
 			Query: prices.Query{
 				Source:    d.DefaultSource,
 				EntityKey: pair.EntityKey(),
@@ -103,6 +172,16 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 		}, nil
 	}
 	action := func(ctx context.Context, req request) ([]rwaPriceDTO, error) {
+		if !req.HasPair {
+			// Primary-only asset: no trade history at all. A from/to window has
+			// genuinely no observations, so return [] rather than inventing a
+			// point at "now" (which would corrupt any chart drawn from it); in
+			// latest mode the fixed sale price IS the current quote.
+			if req.Window {
+				return []rwaPriceDTO{}, nil
+			}
+			return []rwaPriceDTO{launchPriceDTO(*req.Launch)}, nil
+		}
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
 			return nil, err
@@ -115,11 +194,19 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 				Timestamp:   p.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
 				NativeQuote: nativeQuote,
 				Price:       newNum6(p.Price),
+				Market:      marketSecondary,
 			}
 			if len(req.InTargets) > 0 {
 				row.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, p.Price, p.Timestamp)
 			}
 			out = append(out, row)
+		}
+		// The issuance facet is asset-level metadata, not a per-observation
+		// field: repeating it on every row of a windowed response (up to
+		// MaxLimit rows) would bloat the payload for no gain. Latest mode is the
+		// one shape that describes "the asset right now", so it carries it.
+		if req.Launch != nil && !req.Window && len(out) > 0 {
+			out[0].Issuance = issuanceBlock(*req.Launch)
 		}
 		return out, nil
 	}
@@ -133,20 +220,25 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
+		HasPair   bool
+		Launch    *prices.RWALaunch
 		Query     prices.Query
 		InTargets []prices.Currency
 	}
 	bind := func(c *gin.Context) (request, error) {
-		pair, err := d.resolvePairFromPath(c)
+		target, err := d.resolveTargetFromPath(c)
 		if err != nil {
 			return request{}, err
 		}
+		pair := target.Pair
 		inTargets, err := d.parseInQuery(c)
 		if err != nil {
 			return request{}, err
 		}
 		return request{
-			Pair: pair,
+			Pair:    pair,
+			HasPair: target.HasPair,
+			Launch:  target.Launch,
 			Query: prices.Query{
 				Source:    d.DefaultSource,
 				EntityKey: pair.EntityKey(),
@@ -158,6 +250,10 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 		}, nil
 	}
 	action := func(ctx context.Context, req request) (rwaPriceDTO, error) {
+		if !req.HasPair {
+			// Fixed sale price — no ath / price_one_year_ago (no trade history).
+			return launchPriceDTO(*req.Launch), nil
+		}
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
 			return rwaPriceDTO{}, err
@@ -171,11 +267,17 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 			Timestamp:   picked.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
 			NativeQuote: strings.ToLower(req.Pair.QuoteSymbol),
 			Price:       newNum6(picked.Price),
+			Market:      marketSecondary,
 		}
 		if len(req.InTargets) > 0 {
 			dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, picked.Price, picked.Timestamp)
 		}
 		d.enrichLatest(ctx, &dto, req.Pair, quoteToken, quoteResolved, req.InTargets, picked.Timestamp)
+		// Still in primary issuance while already trading: the live quote stays
+		// the top-level price, and the block carries the sale price alongside.
+		if req.Launch != nil {
+			dto.Issuance = issuanceBlock(*req.Launch)
+		}
 		return dto, nil
 	}
 	return common.Wrap(bind, action)
@@ -234,7 +336,12 @@ type rwaPriceDTO struct {
 	Timestamp   string
 	NativeQuote string
 	Price       num6
-	Converted   map[string]num6 // optional; one key per `?in=` target that succeeded
+	// Market discriminates a live secondary-market quote from a fixed
+	// primary-market sale price (see GET /v1/rwa).
+	Market string
+	// Issuance is present only for a primary-market asset.
+	Issuance  *primaryIssuanceDTO
+	Converted map[string]num6 // optional; one key per `?in=` target that succeeded
 	// Optional enrichment (only on /latest, only when a Stats reader is wired).
 	// `ath` / `price_one_year_ago` are nested objects (not flat currency keys)
 	// so they don't collide with the top-level converted-price currency keys.
@@ -243,10 +350,16 @@ type rwaPriceDTO struct {
 }
 
 func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
-	out := make(map[string]any, 3+len(d.Converted))
+	out := make(map[string]any, 5+len(d.Converted))
 	out["timestamp"] = d.Timestamp
 	out["native_quote"] = d.NativeQuote
 	out["price"] = d.Price
+	if d.Market != "" {
+		out["market"] = d.Market
+	}
+	if d.Issuance != nil {
+		out["primary_issuance"] = d.Issuance
+	}
 	for cur, v := range d.Converted {
 		out[cur] = v
 	}

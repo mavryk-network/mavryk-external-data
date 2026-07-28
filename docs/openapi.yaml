@@ -358,8 +358,28 @@ paths:
         short 1-day close-price series (last 24h at 15m buckets, reusing the
         `/series` point shape `{t,p}`). Empty catalog returns `{ "assets": [] }`,
         not 404. Each asset carries its own `price_as_of`; `token_address` is the
-        on-chain RWA token contract (null when the pair has not been synced with
-        one yet). Auth applies on the public listener (see securitySchemes).
+        on-chain RWA token contract (null when not synced yet).
+
+        `market` discriminates two kinds of asset:
+
+          * `secondary` — trades on an Equiteez orderbook. `price` is the latest
+            `last` quote; `change_24h` and `series_1d` are populated.
+          * `primary` — sold on the launchpad, no orderbook yet. `price` is the
+            fixed **base-tier** (undiscounted) sale price and the
+            `primary_issuance` block carries sale progress. No trades exist, so
+            `change_24h` is null and `series_1d.points` is empty.
+
+        The two are **facets, not alternatives**. An asset that trades on an
+        orderbook while still in primary issuance is listed **once**: `market`
+        stays `secondary` (a live quote outranks a fixed one for the top-level
+        `price`) and the `primary_issuance` block is present alongside, carrying
+        its own `price`. Assets are keyed by `{base}-{quote}`, so the same token
+        against two quote currencies is two distinct assets.
+
+        `limit` applies to the merged, symbol-sorted catalog — primary-market
+        assets are never starved by secondary ones.
+
+        Auth applies on the public listener (see securitySchemes).
       operationId: listRWAOverview
       security:
         - bearerAuth: []
@@ -395,6 +415,10 @@ paths:
                         quote: { type: string, example: usdt }
                         native_quote: { type: string, example: usdt }
                         token_address: { type: string, nullable: true, example: KT1MarsToken }
+                        market:
+                          type: string
+                          enum: [secondary, primary]
+                          example: secondary
                         price: { type: number, nullable: true, example: 100.42 }
                         price_as_of: { type: string, format: date-time, nullable: true }
                         change_24h:
@@ -413,6 +437,39 @@ paths:
                                 properties:
                                   t: { type: string, format: date-time }
                                   p: { type: number }
+                        primary_issuance:
+                          type: object
+                          description: >
+                            Present only when market=primary. Amounts are
+                            raw on-chain nat strings (supply-scale values overflow
+                            float64; divide by the token's decimals client-side).
+                            progress_percent is computed server-side because the
+                            indexer does not expose it.
+                          properties:
+                            launch_id: { type: integer, example: 6 }
+                            name: { type: string, example: KHBE-issuance-v2 }
+                            price:
+                              type: number
+                              example: 100
+                              description: >
+                                Base-tier (undiscounted) sale price in the asset's
+                                quote currency. Present here as well as at the top
+                                level so it survives when a live secondary quote
+                                takes the top-level `price`.
+                            price_as_of:
+                              type: string
+                              format: date-time
+                              nullable: true
+                              description: When the launchpad was last read.
+                            status:
+                              type: string
+                              enum: [active, inactive, paused, closed]
+                            active: { type: boolean, description: purchasable right now }
+                            total_bought: { type: string, example: "6667" }
+                            max_amount_cap: { type: string, example: "2500000000000" }
+                            progress_percent: { type: number, example: 2.667e-7 }
+                            sale_start: { type: string, format: date-time, nullable: true }
+                            sale_end: { type: string, format: date-time, nullable: true }
               example:
                 assets:
                   - symbol: mars1-usdt
@@ -420,6 +477,7 @@ paths:
                     quote: usdt
                     native_quote: usdt
                     token_address: KT1MarsToken
+                    market: secondary
                     price: 100.42
                     price_as_of: "2026-07-24T11:59:30Z"
                     change_24h: { delta_abs: 1.2, change_pct: 1.21 }
@@ -428,6 +486,26 @@ paths:
                       points:
                         - { t: "2026-07-23T12:00:00Z", p: 99.1 }
                         - { t: "2026-07-24T11:45:00Z", p: 100.42 }
+                  - symbol: khbe-usdt
+                    base: khbe
+                    quote: usdt
+                    native_quote: usdt
+                    token_address: KT1FBJnqyY3EHB8dpwZ51gZqHBAXZifxwDnc
+                    market: primary
+                    price: 100
+                    price_as_of: null
+                    change_24h: { delta_abs: null, change_pct: null }
+                    series_1d: { interval: 15m, points: [] }
+                    primary_issuance:
+                      launch_id: 6
+                      name: KHBE-issuance-v2
+                      status: active
+                      active: true
+                      price: 100
+                      price_as_of: "2026-07-27T09:00:00Z"
+                      total_bought: "6667"
+                      max_amount_cap: "2500000000000"
+                      progress_percent: 2.667e-7
         "400": { $ref: "#/components/responses/BadRequest" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
@@ -444,6 +522,19 @@ paths:
         `?in=usd,eur,...` adds converted prices as flat top-level numeric
         keys per row. Targets that fail conversion are silently omitted;
         the row is still returned with the native `price`.
+
+        **Primary-market assets.** A token still in primary issuance has no
+        orderbook, so it is resolved from the launchpad catalog instead of
+        `rwa_pairs`: `market` is `primary`, `price` is the fixed base-tier sale
+        price, and a `primary_issuance` block carries sale progress. Such an
+        asset has no trade history — the list endpoint returns `[]` for a
+        from/to window and the single sale price in latest mode.
+
+        An asset that trades AND is still in issuance carries both: the live
+        quote as `price` (`market: secondary`) plus a `primary_issuance` block.
+        On the list endpoint that block appears only in latest mode — a windowed
+        response is a time series of trades, and repeating asset-level metadata
+        on every row would bloat it.
       operationId: listRWAPrices
       security:
         - bearerAuth: []
@@ -626,6 +717,18 @@ paths:
         per-currency keys, converted at the snapshot's current FX rate (the
         same rate as the top-level price), for whichever currencies were
         requested in `?in=`.
+        **Primary-market assets.** A token still in primary issuance has no
+        orderbook, so it is resolved from the launchpad catalog instead of
+        `rwa_pairs`: `market` is `primary`, `price` is the fixed base-tier sale
+        price, and a `primary_issuance` block carries sale progress. Such an
+        asset has no trade history — the list endpoint returns `[]` for a
+        from/to window and the single sale price in latest mode.
+
+        An asset that trades AND is still in issuance carries both: the live
+        quote as `price` (`market: secondary`) plus a `primary_issuance` block.
+        On the list endpoint that block appears only in latest mode — a windowed
+        response is a time series of trades, and repeating asset-level metadata
+        on every row would bloat it.
       operationId: latestRWASnapshot
       security:
         - bearerAuth: []

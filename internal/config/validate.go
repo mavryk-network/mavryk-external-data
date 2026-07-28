@@ -283,6 +283,9 @@ func (c *Config) validateRWA() error {
 	if c.RWA.Enabled && c.RWA.IntervalSeconds <= 0 {
 		return fmt.Errorf("rwa.interval_seconds must be > 0 when rwa.enabled is true")
 	}
+	if c.RWA.PairSyncIntervalSeconds < 0 {
+		return fmt.Errorf("rwa.pair_sync_interval_seconds must be >= 0")
+	}
 	if c.RWA.Enabled && strings.TrimSpace(c.Equiteez.IndexerURL) == "" {
 		return fmt.Errorf("rwa.enabled=true requires equiteez.indexer_url to be set")
 	}

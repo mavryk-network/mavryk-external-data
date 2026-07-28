@@ -140,6 +140,10 @@ func setDefaults(config *Config) {
 	if config.RWA.Concurrency == 0 && config.RWA.Enabled {
 		config.RWA.Concurrency = 4
 	}
+	if config.RWA.PairSyncIntervalSeconds == 0 && config.RWA.Enabled {
+		// Hourly: listings are rare, and one GraphQL query per hour is free.
+		config.RWA.PairSyncIntervalSeconds = 3600
+	}
 
 	// Tickers defaults — only the cache TTLs are eager; the rest stay zero
 	// unless explicitly enabled in YAML so a fresh service doesn't start

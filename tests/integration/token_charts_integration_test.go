@@ -59,11 +59,11 @@ func TestQueryCandles_5m_RebucketFrom1m(t *testing.T) {
 	// 5 minute-buckets across one 5-minute bucket. Bucket-aligned at 12:00.
 	bk := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	pts := []prices.PricePoint{
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk, Metric: "usd", Price: dec("100.00")},                                                  // open
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(time.Minute), Metric: "usd", Price: dec("105.00")},                                 // high
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(2 * time.Minute), Metric: "usd", Price: dec("99.00")},                              // low
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(3 * time.Minute), Metric: "usd", Price: dec("101.00")},                             // mid
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(4 * time.Minute), Metric: "usd", Price: dec("103.00")},                             // close
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk, Metric: "usd", Price: dec("100.00")},                      // open
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(time.Minute), Metric: "usd", Price: dec("105.00")},     // high
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(2 * time.Minute), Metric: "usd", Price: dec("99.00")},  // low
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(3 * time.Minute), Metric: "usd", Price: dec("101.00")}, // mid
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk.Add(4 * time.Minute), Metric: "usd", Price: dec("103.00")}, // close
 	}
 	_, err := repo.Save(context.Background(), pts)
 	require.NoError(t, err)
@@ -210,10 +210,10 @@ func TestQueryCandles_1h_AggregatesAcrossMinutes(t *testing.T) {
 	// _1h are independent CAs).
 	bucketStart := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
 	pts := []prices.PricePoint{
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart, Metric: "usd", Price: dec("50.00")},                            // open
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart.Add(15 * time.Minute), Metric: "usd", Price: dec("55.00")},      // high
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart.Add(30 * time.Minute), Metric: "usd", Price: dec("48.00")},      // low
-		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart.Add(45 * time.Minute), Metric: "usd", Price: dec("52.00")},      // close
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart, Metric: "usd", Price: dec("50.00")},                       // open
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart.Add(15 * time.Minute), Metric: "usd", Price: dec("55.00")}, // high
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart.Add(30 * time.Minute), Metric: "usd", Price: dec("48.00")}, // low
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart.Add(45 * time.Minute), Metric: "usd", Price: dec("52.00")}, // close
 	}
 	n, err := repo.Save(context.Background(), pts)
 	require.NoError(t, err)

@@ -196,10 +196,10 @@ func TestRWAQueryCandles_1h_AggregatesAcrossMinutes(t *testing.T) {
 
 	bk := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
 	pts := []prices.PricePoint{
-		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk, Metric: "last", Price: dec("50.00")},                            // open
-		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk.Add(15 * time.Minute), Metric: "last", Price: dec("55.00")},      // high
-		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk.Add(30 * time.Minute), Metric: "last", Price: dec("48.00")},      // low
-		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk.Add(45 * time.Minute), Metric: "last", Price: dec("52.00")},      // close
+		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk, Metric: "last", Price: dec("50.00")},                       // open
+		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk.Add(15 * time.Minute), Metric: "last", Price: dec("55.00")}, // high
+		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk.Add(30 * time.Minute), Metric: "last", Price: dec("48.00")}, // low
+		{Source: prices.SourceEquiteez, EntityKey: strconv.FormatInt(pid, 10), Timestamp: bk.Add(45 * time.Minute), Metric: "last", Price: dec("52.00")}, // close
 	}
 	_, err := repo.Save(context.Background(), pts)
 	require.NoError(t, err)

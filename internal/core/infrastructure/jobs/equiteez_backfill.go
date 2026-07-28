@@ -20,12 +20,33 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// caughtUpRecheckInterval is how long a pair rests after the forward walk
+// reaches the newest indexed fill. Short enough that post-downtime gaps and a
+// brand-new pair's first trades land promptly; long enough that idle pairs cost
+// ~one cheap indexed query per interval instead of one per tick.
+const caughtUpRecheckInterval = 5 * time.Minute
+
+// pauseUntilNextFill parks a caught-up pair without disabling it: the walk
+// resumes from the persisted (CursorTs, CursorID) after caughtUpRecheckInterval. Error
+// bookkeeping is reset because reaching the head of the log is a success, not a
+// failure. Pure (no I/O) so the decision is unit-testable.
+func pauseUntilNextFill(st *repositories.BackfillState, now time.Time) {
+	next := now.Add(caughtUpRecheckInterval)
+	st.NextAttemptAt = &next
+	st.Disabled = false
+	st.DisabledReason = ""
+	st.ErrorCount = 0
+	st.LastError = ""
+}
+
 // EquiteezBackfillJob ingests historical orderbook fills from the Equiteez
 // indexer's `orderbook_order` event log and writes one `last`-side
 // PricePoint per filled order into rwa_quote_prices.
 //
-// Forward-walks per pair by orderbook_order.id (monotonic BIGSERIAL); cursor
-// state is persisted in backfill_state under (source=equiteez, entity=pair_id).
+// Forward-walks per pair by FILL time — keyset (ended_at, id) — with the cursor
+// persisted in backfill_state under (source=equiteez, entity=pair_id). id alone
+// is unsafe: it is assigned at order creation, so a resting limit order filling
+// after the walk passed its id would be skipped forever.
 // Bid/ask reconstruction is out of scope (see ADR-0014 §"Stage 2 deferred").
 //
 // Concurrency: one ticker iterates pairs sequentially; per-pair errors are
@@ -84,6 +105,16 @@ func (j *EquiteezBackfillJob) Start(ctx context.Context) {
 	if j.cfg.Equiteez.IndexerURL == "" {
 		j.logger.Warn().Msg("equiteez_backfill_no_indexer_url_skipping")
 		return
+	}
+
+	// Self-heal: earlier builds permanently disabled a pair on catch-up
+	// (disabled_reason=caught_up), so any pair frozen by that behaviour would
+	// stay dead across deploys. Resume them from their persisted cursor.
+	// Operator/terminal disables (manual, auto_disabled, reached_floor) survive.
+	if resumed, err := j.state.ClearCaughtUp(ctx, prices.SourceEquiteez); err != nil {
+		j.logger.Warn().Err(err).Msg("equiteez_backfill_clear_caught_up_failed")
+	} else if resumed > 0 {
+		j.logger.Info().Int64("pairs", resumed).Msg("equiteez_backfill_resumed_caught_up_pairs")
 	}
 
 	tick := time.Duration(j.cfg.Equiteez.Backfill.TickSeconds) * time.Second
@@ -186,9 +217,17 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		return fmt.Errorf("invalid equiteez.backfill.start_from: %w", err)
 	}
 
-	cursor := int64(0)
-	if st.CursorID != nil {
-		cursor = *st.CursorID
+	// Keyset cursor over FILL time. A nil CursorTs means either a fresh pair or a
+	// row written by the old id-only walk: in both cases we deliberately ignore
+	// the legacy CursorID and restart from start_from. That one-off re-walk is
+	// what recovers the late-filled orders the id-only cursor skipped, and it is
+	// safe because rwa_quote_prices upserts on (pair_id, side, ts).
+	var cursor equiteez.OrderCursor
+	if st.CursorTs != nil {
+		cursor.EndedAt = *st.CursorTs
+		if st.CursorID != nil {
+			cursor.ID = *st.CursorID
+		}
 	}
 
 	batch := j.cfg.Equiteez.Backfill.BatchSize
@@ -197,7 +236,8 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 	}
 
 	logger.Info().
-		Int64("since_id", cursor).
+		Time("since_ts", cursor.EndedAt).
+		Int64("since_id", cursor.ID).
 		Int("batch", batch).
 		Str("start_from", startFrom.Format(time.RFC3339)).
 		Msg("equiteez_backfill_step")
@@ -208,11 +248,19 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		return j.recordError(ctx, &logger, st, err)
 	}
 	if len(orders) == 0 {
-		// Forward cursor caught up to the latest event; live collector now
-		// owns this pair. Sticky disable; operator can clear it manually to
-		// re-walk (e.g. after a long downtime).
-		return j.markDisabled(ctx, &logger, st, repositories.BackfillDisabledReasonCaughtUp,
-			"no more orderbook_order events to backfill")
+		// Caught up with the indexer — but a forward walk has NO terminal state:
+		// new fills keep arriving. Pause until the next re-check instead of
+		// disabling the pair, otherwise (a) fills that land during any downtime
+		// are never ingested (the live collector snapshots bid/ask/last, it does
+		// not replay orderbook_order) and (b) a pair that has not traded yet
+		// would be killed on its very first tick and never pick up its first
+		// trades. The re-check costs one indexed query returning zero rows.
+		pauseUntilNextFill(st, time.Now().UTC())
+		logger.Debug().Time("retry_at", *st.NextAttemptAt).Msg("equiteez_backfill_caught_up_paused")
+		if err := j.state.Upsert(ctx, st); err != nil {
+			return fmt.Errorf("persist caught-up pause: %w", err)
+		}
+		return nil
 	}
 
 	points := ordersToLastPoints(pair, orders, quoteDecimals)
@@ -229,9 +277,10 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 			Int64("rows_affected", n).
 			Msg("equiteez_backfill_saved")
 		// Materialize the batch's time span into the rwa_quote_prices_* continuous
-		// aggregates so backfilled RWA history shows on charts / ATH. The batch is
-		// walked by order id, not time, so bound the refresh by the points' min/max
-		// ts. Best-effort — a refresh failure must not fail or retry the step.
+		// aggregates so backfilled RWA history shows on charts / ATH. Bound the
+		// refresh by the points' own min/max ts (a batch spans whatever fill
+		// window it covers). Best-effort — a refresh failure must not fail or
+		// retry the step.
 		if lo, hi := pointsTimeSpan(points); !lo.IsZero() {
 			if rErr := j.lookup.RefreshRWACandleAggregates(ctx, lo, hi.Add(time.Second)); rErr != nil {
 				logger.Debug().Err(rErr).Msg("equiteez_backfill_cagg_refresh_failed")
@@ -244,8 +293,19 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		logger.Info().Int("orders", len(orders)).Msg("equiteez_backfill_no_mappable_points")
 	}
 
-	maxID := maxOrderID(orders)
-	st.CursorID = &maxID
+	next, ok := advanceOrderCursor(orders)
+	if !ok {
+		// Every row in the batch had an unparseable ended_at, so there is no safe
+		// keyset position to move to. Advancing blindly would skip the batch;
+		// staying put would re-fetch it forever. Record it as an error so backoff
+		// applies and the auto-disable threshold eventually surfaces it.
+		return j.recordError(ctx, &logger, st,
+			fmt.Errorf("batch of %d orders has no parseable ended_at; cannot advance cursor", len(orders)))
+	}
+	endedAt := next.EndedAt
+	id := next.ID
+	st.CursorTs = &endedAt
+	st.CursorID = &id
 	st.ErrorCount = 0
 	st.LastError = ""
 	st.NextAttemptAt = nil
@@ -253,6 +313,29 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		return fmt.Errorf("persist state: %w", err)
 	}
 	return nil
+}
+
+// advanceOrderCursor returns the greatest (ended_at, id) in the batch — the
+// keyset position the next fetch resumes strictly after. ok=false when no row
+// carried a parseable ended_at.
+//
+// It takes the max rather than the last element so a mis-ordered upstream
+// response cannot rewind the cursor and cause an endless re-fetch loop.
+func advanceOrderCursor(orders []equiteez.OrderbookOrder) (equiteez.OrderCursor, bool) {
+	var out equiteez.OrderCursor
+	found := false
+	for _, o := range orders {
+		ts, err := time.Parse(time.RFC3339, o.EndedAt)
+		if err != nil {
+			continue
+		}
+		ts = ts.UTC()
+		if !found || ts.After(out.EndedAt) || (ts.Equal(out.EndedAt) && o.ID > out.ID) {
+			out = equiteez.OrderCursor{EndedAt: ts, ID: o.ID}
+			found = true
+		}
+	}
+	return out, found
 }
 
 // recordError increments the error counter, computes backoff, persists state,
@@ -399,16 +482,4 @@ func pointsTimeSpan(points []prices.PricePoint) (min, max time.Time) {
 		}
 	}
 	return min, max
-}
-
-// maxOrderID returns the maximum orderbook_order.id in the batch. Caller has
-// asserted len(orders) > 0.
-func maxOrderID(orders []equiteez.OrderbookOrder) int64 {
-	maxID := orders[0].ID
-	for _, o := range orders[1:] {
-		if o.ID > maxID {
-			maxID = o.ID
-		}
-	}
-	return maxID
 }

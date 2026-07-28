@@ -40,6 +40,9 @@ type AppDeps struct {
 	// When either field is nil the handler rejects `?in=` with 400.
 	FXConverter apiprices.PriceConverter
 	Lookup      *repositories.LookupRepository
+	// LaunchRepo surfaces primary-issuance (launchpad) assets on GET /v1/rwa.
+	// Optional: nil simply omits them from the catalog.
+	LaunchRepo *repositories.LaunchRepository
 	// TickerQuery powers /v1/tickers/:token/latest and /distribution. Nil
 	// disables the routes silently (no handlers mounted).
 	TickerQuery apitickers.QueryService
@@ -161,6 +164,25 @@ func NewApp(deps AppDeps) (*App, error) {
 // oversized X-Request-ID / User-Agent headers.
 const maxHeaderBytes = 64 << 10 // 64 KiB
 
+// launchLister adapts an optional *LaunchRepository to the handler interface.
+// A typed-nil pointer stored in an interface is non-nil, which would make the
+// handler call a nil receiver — so translate nil to a nil interface explicitly.
+func launchLister(r *repositories.LaunchRepository) handlers.RWALaunchLister {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
+// launchResolver adapts an optional *LaunchRepository to the per-symbol lookup
+// interface, translating a typed-nil pointer to a nil interface (see launchLister).
+func launchResolver(r *repositories.LaunchRepository) handlers.RWALaunchResolver {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
 func configureGinMode(cfg *config.Config) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Server.GinMode)) {
 	case "debug":
@@ -258,6 +280,9 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 		// ath + price-one-year-ago for /latest; same concrete repo as charts.
 		Stats: deps.RWAPriceRepo,
+		// Lets /v1/rwa/{symbol} and /latest serve primary-market assets, which
+		// have no orderbook pair and would otherwise 404.
+		Launches: launchResolver(deps.LaunchRepo),
 	}
 	// RWA chart service runs over RWAPriceRepository. Converter enables
 	// `?in=<currency>` close-of-bucket FX (see ADR-0015 / ADR-0013); when
@@ -310,6 +335,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 	// per-asset fan-out across dashboard polls.
 	rwaOverviewDeps := handlers.NewRWAOverviewDeps(
 		deps.Lookup,
+		launchLister(deps.LaunchRepo),
 		rwaChangeService,
 		rwaChartService,
 		deps.FXConverter,

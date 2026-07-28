@@ -818,3 +818,219 @@ func TestRWA_Latest_StatsNotFound_OmitsBlocks(t *testing.T) {
 		t.Errorf("reader calls = (ath %d, p1y %d), want (1,1)", stats.athCalls, stats.p1yCalls)
 	}
 }
+
+// stubLaunchResolver satisfies RWALaunchResolver.
+type stubLaunchResolver struct {
+	launch prices.RWALaunch
+	found  bool
+	err    error
+	calls  int
+}
+
+func (s *stubLaunchResolver) LaunchBySymbol(_ context.Context, _ prices.Source, _, _ string) (prices.RWALaunch, bool, error) {
+	s.calls++
+	if s.err != nil {
+		return prices.RWALaunch{}, false, s.err
+	}
+	return s.launch, s.found, nil
+}
+
+func khbeLaunchFixture() prices.RWALaunch {
+	return prices.RWALaunch{
+		Source: prices.SourceEquiteez, TokenAddr: "KT1KHBE",
+		BaseSymbol: "khbe", QuoteSymbol: "usdt",
+		LaunchID: 6, Name: "KHBE-issuance-v2", Status: "active", Active: true,
+		Price:           decimal.RequireFromString("100"),
+		TotalBought:     decimal.RequireFromString("6667"),
+		MaxAmountCap:    decimal.RequireFromString("2500000000000"),
+		ProgressPercent: 2.667e-7,
+		LastSyncedAt:    time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC),
+		Enabled:         true,
+	}
+}
+
+func primaryMarketDeps(res *stubLaunchResolver) RWAPriceDeps {
+	return RWAPriceDeps{
+		Service:       &stubQueryService{},
+		Lookup:        &stubLookup{err: prices.ErrPairNotFound},
+		Launches:      res,
+		DefaultSource: prices.SourceEquiteez,
+	}
+}
+
+// A token in primary issuance has no orderbook pair, so /latest used to 404.
+// It must now serve the fixed base-tier sale price.
+func TestRWA_LatestFallsBackToPrimaryMarket(t *testing.T) {
+	res := &stubLaunchResolver{launch: khbeLaunchFixture(), found: true}
+	r := newRWAEngine(t, primaryMarketDeps(res))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/khbe-usdt/latest", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["market"] != "primary" {
+		t.Errorf("market = %v, want primary", out["market"])
+	}
+	if out["price"] != 100.0 {
+		t.Errorf("price = %v, want 100 (base tier)", out["price"])
+	}
+	if out["native_quote"] != "usdt" {
+		t.Errorf("native_quote = %v, want usdt", out["native_quote"])
+	}
+	pi, ok := out["primary_issuance"].(map[string]any)
+	if !ok {
+		t.Fatalf("primary_issuance block missing: %v", out)
+	}
+	if pi["total_bought"] != "6667" || pi["max_amount_cap"] != "2500000000000" {
+		t.Errorf("issuance amounts = %v / %v", pi["total_bought"], pi["max_amount_cap"])
+	}
+	// A fixed quote still needs an "as of" so clients can judge freshness.
+	if out["timestamp"] != "2026-07-27T09:00:00Z" {
+		t.Errorf("timestamp = %v, want the last sync time", out["timestamp"])
+	}
+}
+
+// The list endpoint: latest mode yields the single sale price, window mode
+// yields [] — a primary-market asset genuinely has no observations in a range,
+// and inventing one would corrupt charts.
+func TestRWA_ListPrimaryMarket_LatestVsWindow(t *testing.T) {
+	res := &stubLaunchResolver{launch: khbeLaunchFixture(), found: true}
+	r := newRWAEngine(t, primaryMarketDeps(res))
+
+	decode := func(t *testing.T, path string) []any {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200; body=%s", path, w.Code, w.Body.String())
+		}
+		var out []any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%s: decode: %v; body=%s", path, err, w.Body.String())
+		}
+		return out
+	}
+
+	rows := decode(t, "/v1/rwa/khbe-usdt")
+	if len(rows) != 1 {
+		t.Fatalf("latest mode: got %d rows, want 1", len(rows))
+	}
+	if row := rows[0].(map[string]any); row["price"] != 100.0 || row["market"] != "primary" {
+		t.Errorf("row = %v, want price 100 / market primary", row)
+	}
+
+	if rows := decode(t, "/v1/rwa/khbe-usdt?from=2026-07-01T00:00:00Z"); len(rows) != 0 {
+		t.Errorf("window mode: got %d rows, want 0 (no trade history)", len(rows))
+	}
+}
+
+// The fallback must not mask real client errors or turn a clean 404 into a 500.
+func TestRWA_PrimaryMarketFallbackBoundaries(t *testing.T) {
+	t.Run("unknown symbol stays 404", func(t *testing.T) {
+		res := &stubLaunchResolver{found: false}
+		r := newRWAEngine(t, primaryMarketDeps(res))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/nope-usdt/latest", nil))
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+
+	t.Run("launch lookup failure degrades to 404, not 500", func(t *testing.T) {
+		res := &stubLaunchResolver{err: context.DeadlineExceeded}
+		r := newRWAEngine(t, primaryMarketDeps(res))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/khbe-usdt/latest", nil))
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+
+	t.Run("malformed symbol stays 400 without consulting launches", func(t *testing.T) {
+		res := &stubLaunchResolver{launch: khbeLaunchFixture(), found: true}
+		r := newRWAEngine(t, primaryMarketDeps(res))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/khbe/latest", nil))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+		if res.calls != 0 {
+			t.Errorf("launch resolver called %d times for a malformed symbol, want 0", res.calls)
+		}
+	})
+}
+
+// An asset can trade on an orderbook AND still be in primary issuance. The
+// per-symbol endpoints must expose both facets: the live quote as the price,
+// the sale price inside the issuance block. An earlier version returned on the
+// first catalog hit and hid the issuance entirely.
+func TestRWA_OverlapExposesBothFacets(t *testing.T) {
+	pair := prices.RWAPair{ID: 7, BaseSymbol: "khbe", QuoteSymbol: "USDT", Source: prices.SourceEquiteez}
+	res := &stubLaunchResolver{launch: khbeLaunchFixture(), found: true}
+	deps := RWAPriceDeps{
+		Service: &stubQueryService{points: []prices.PricePoint{{
+			Source: prices.SourceEquiteez, EntityKey: "7", Metric: lastSide,
+			Price: decimal.RequireFromString("42"), Timestamp: time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
+		}}},
+		Lookup:        &stubLookup{pair: pair},
+		Launches:      res,
+		DefaultSource: prices.SourceEquiteez,
+	}
+	r := newRWAEngine(t, deps)
+
+	t.Run("latest carries both", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/khbe-usdt/latest", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if out["market"] != "secondary" || out["price"] != 42.0 {
+			t.Errorf("market/price = %v/%v, want secondary/42", out["market"], out["price"])
+		}
+		pi, ok := out["primary_issuance"].(map[string]any)
+		if !ok {
+			t.Fatalf("issuance facet missing on an overlapping asset: %v", out)
+		}
+		if pi["price"] != 100.0 {
+			t.Errorf("primary_issuance.price = %v, want 100 (sale price preserved)", pi["price"])
+		}
+	})
+
+	t.Run("list latest-mode carries it once; window mode omits it", func(t *testing.T) {
+		decode := func(path string) []map[string]any {
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: status = %d; body=%s", path, w.Code, w.Body.String())
+			}
+			var out []map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatalf("%s: decode: %v", path, err)
+			}
+			return out
+		}
+		rows := decode("/v1/rwa/khbe-usdt")
+		if len(rows) == 0 {
+			t.Fatal("latest mode returned no rows")
+		}
+		if _, ok := rows[0]["primary_issuance"]; !ok {
+			t.Error("latest mode should carry the issuance block")
+		}
+		// A windowed response is a time series of trades; repeating asset-level
+		// metadata on every row would bloat it for no gain.
+		for i, row := range decode("/v1/rwa/khbe-usdt?from=2026-07-01T00:00:00Z") {
+			if _, ok := row["primary_issuance"]; ok {
+				t.Errorf("row %d: window mode must not repeat the issuance block", i)
+			}
+		}
+	})
+}

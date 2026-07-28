@@ -78,3 +78,51 @@ func TestValidateAuth_ErrorMentionsHTTPS(t *testing.T) {
 		t.Fatalf("expected an https-related error, got %v", err)
 	}
 }
+
+func TestRWAPairSyncInterval_DefaultAndValidation(t *testing.T) {
+	// Discovery latency is bounded by this knob; it must default to something
+	// sane when RWA is on, and stay 0 (job no-op) when RWA is off.
+	on := &Config{}
+	on.RWA.Enabled = true
+	setDefaults(on)
+	if on.RWA.PairSyncIntervalSeconds != 3600 {
+		t.Errorf("enabled: PairSyncIntervalSeconds = %d, want 3600", on.RWA.PairSyncIntervalSeconds)
+	}
+
+	off := &Config{}
+	setDefaults(off)
+	if off.RWA.PairSyncIntervalSeconds != 0 {
+		t.Errorf("disabled: PairSyncIntervalSeconds = %d, want 0", off.RWA.PairSyncIntervalSeconds)
+	}
+
+	// Explicit operator value survives defaulting.
+	custom := &Config{}
+	custom.RWA.Enabled = true
+	custom.RWA.PairSyncIntervalSeconds = 300
+	setDefaults(custom)
+	if custom.RWA.PairSyncIntervalSeconds != 300 {
+		t.Errorf("explicit value clobbered: got %d, want 300", custom.RWA.PairSyncIntervalSeconds)
+	}
+
+	bad := &Config{}
+	bad.RWA.PairSyncIntervalSeconds = -1
+	if err := bad.validateRWA(); err == nil {
+		t.Error("negative pair_sync_interval_seconds must be rejected")
+	}
+}
+
+func TestOverrideWithEnv_RWAPairSyncInterval(t *testing.T) {
+	t.Setenv("RWA_PAIR_SYNC_INTERVAL_SECONDS", "120")
+	c := &Config{}
+	if err := overrideWithEnv(c); err != nil {
+		t.Fatalf("overrideWithEnv: %v", err)
+	}
+	if c.RWA.PairSyncIntervalSeconds != 120 {
+		t.Errorf("PairSyncIntervalSeconds = %d, want 120", c.RWA.PairSyncIntervalSeconds)
+	}
+
+	t.Setenv("RWA_PAIR_SYNC_INTERVAL_SECONDS", "abc")
+	if err := overrideWithEnv(&Config{}); err == nil {
+		t.Error("malformed RWA_PAIR_SYNC_INTERVAL_SECONDS must error, not be silently ignored")
+	}
+}
