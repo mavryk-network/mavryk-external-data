@@ -1034,3 +1034,92 @@ func TestRWA_OverlapExposesBothFacets(t *testing.T) {
 		}
 	})
 }
+
+// TestRWA_PrimaryMarketConvertsIn is the regression guard for the `?in=` gap:
+// primary-market assets returned `price` in the native quote but no converted
+// currency keys at all, while secondary pairs converted correctly. A fixed sale
+// price is still a price in the asset's quote currency, so `?in=` must apply.
+func TestRWA_PrimaryMarketConvertsIn(t *testing.T) {
+	// The quote symbol must resolve to a registered Token, or the handler has no
+	// FX source and drops every target regardless of the fix.
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	// rate 0.999 → 100 USDT = 99.9 USD. A rate != 1 proves the conversion ran,
+	// rather than the native price being echoed under a currency key.
+	newEngine := func() *gin.Engine {
+		deps := primaryMarketDeps(&stubLaunchResolver{launch: khbeLaunchFixture(), found: true})
+		deps.Converter = &stubConverter{result: apiprices.ConversionResult{Rate: decimal.RequireFromString("0.999")}}
+		deps.MaxInCurrencies = 10
+		return newRWAEngine(t, deps)
+	}
+
+	for _, path := range []string{
+		"/v1/rwa/khbe-usdt/latest?in=usd,eur",
+		"/v1/rwa/khbe-usdt?in=usd,eur", // latest mode on the list endpoint
+	} {
+		t.Run(path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			newEngine().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+
+			row := decodeRWARow(t, w.Body.Bytes())
+			if row["price"] != 100.0 {
+				t.Errorf("native price = %v, want 100", row["price"])
+			}
+			for _, cur := range []string{"usd", "eur"} {
+				got, ok := row[cur].(float64)
+				if !ok {
+					t.Fatalf("missing converted %q key; got %v", cur, row)
+				}
+				if got < 99.89 || got > 99.91 {
+					t.Errorf("%s = %v, want ~99.9 (100 × 0.999)", cur, got)
+				}
+			}
+		})
+	}
+}
+
+// decodeRWARow accepts either a single RWAPrice object or a one-element array,
+// so the list and latest endpoints share one assertion helper.
+func decodeRWARow(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err == nil {
+		return obj
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(body, &arr); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, body)
+	}
+	if len(arr) != 1 {
+		t.Fatalf("want exactly 1 row, got %d; body=%s", len(arr), body)
+	}
+	return arr[0]
+}
+
+// A conversion that fails must drop only that currency key — the native price
+// still has to come back, same contract as an orderbook quote.
+func TestRWA_PrimaryMarketConversionFailureKeepsNative(t *testing.T) {
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	deps := primaryMarketDeps(&stubLaunchResolver{launch: khbeLaunchFixture(), found: true})
+	deps.Converter = &stubConverter{err: apiprices.ErrNoFXRate}
+	deps.MaxInCurrencies = 10
+
+	w := httptest.NewRecorder()
+	newRWAEngine(t, deps).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/khbe-usdt/latest?in=usd", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a failed FX target must not fail the row)", w.Code)
+	}
+	row := decodeRWARow(t, w.Body.Bytes())
+	if row["price"] != 100.0 {
+		t.Errorf("price = %v, want 100", row["price"])
+	}
+	if _, present := row["usd"]; present {
+		t.Errorf("failed conversion must omit the key, got %v", row["usd"])
+	}
+}

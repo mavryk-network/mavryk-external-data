@@ -397,6 +397,9 @@ paths:
             Single FX target currency (e.g. `usd`). Converts the latest price
             (flat top-level key per asset) and each mini-series point. More than
             one currency → 400, mirroring the chart endpoints.
+            Applies to BOTH market types: a `primary` asset's fixed sale price
+            converts exactly like a live orderbook quote (its mini-series is
+            empty, so there is nothing to convert there).
       responses:
         "200":
           description: List of RWA assets with latest price, 24h change and a 1d series.
@@ -535,6 +538,10 @@ paths:
         On the list endpoint that block appears only in latest mode — a windowed
         response is a time series of trades, and repeating asset-level metadata
         on every row would bloat it.
+
+        `?in=` applies to a `primary` asset's sale price exactly as it does to a
+        live quote, converted at the launchpad read time the row reports as its
+        `timestamp`. Per-target failures drop just that key, as elsewhere.
       operationId: listRWAPrices
       security:
         - bearerAuth: []
@@ -729,6 +736,10 @@ paths:
         On the list endpoint that block appears only in latest mode — a windowed
         response is a time series of trades, and repeating asset-level metadata
         on every row would bloat it.
+
+        `?in=` applies to a `primary` asset's sale price exactly as it does to a
+        live quote, converted at the launchpad read time the row reports as its
+        `timestamp`. Per-target failures drop just that key, as elsewhere.
       operationId: latestRWASnapshot
       security:
         - bearerAuth: []
