@@ -11,6 +11,7 @@ import (
 	apiprices "quotes/internal/core/application/prices"
 	coreerrors "quotes/internal/core/common/errors"
 	"quotes/internal/core/domain/prices"
+	"quotes/internal/metrics"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -189,6 +190,11 @@ func (d ChangeDeps) parseRWAInQuery(c *gin.Context) ([]prices.Currency, error) {
 // Failed conversions (no FX rate, unsupported target) drop silently, just
 // like the existing /v1/rwa/:symbol/latest?in= flow. Returns nil when no
 // target succeeded so the response stays clean.
+//
+// Conversions go through timedConvert so the fx_* metric families (outcome,
+// duration, stale ratio) cover these edges too — this helper serves GET /v1/rwa
+// (every asset in the list) and /change, which a polling dashboard hits far
+// more often than the per-symbol endpoints convertFlat meters.
 func convertNowFlat(
 	ctx context.Context,
 	conv apiprices.PriceConverter,
@@ -199,11 +205,14 @@ func convertNowFlat(
 ) map[string]num6 {
 	out := make(map[string]num6, len(targets))
 	for _, target := range targets {
-		res, err := conv.Convert(ctx, quoteToken, target, nativePrice, nativeTS)
+		res, err := timedConvert(ctx, conv, quoteToken, target, nativePrice, nativeTS)
 		if err != nil {
 			continue
 		}
 		out[string(target)] = newNum6(res.Amount)
+		if res.Stale {
+			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
+		}
 	}
 	if len(out) == 0 {
 		return nil

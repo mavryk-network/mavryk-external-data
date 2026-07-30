@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,7 +39,12 @@ func (s *stubLookup) LookupRWAPairBySymbol(_ context.Context, base, quote string
 
 // stubConverter satisfies apiprices.PriceConverter. Returns the configured
 // result (applying rate to amount) or err.
+//
+// The mutex is required, not defensive: the overview handler fans out per-asset
+// builds through an errgroup, so one shared stub receives Convert calls from
+// several goroutines at once and `-race` flags an unguarded counter.
 type stubConverter struct {
+	mu     sync.Mutex
 	result apiprices.ConversionResult
 	err    error
 	calls  int
@@ -51,6 +57,8 @@ func (s *stubConverter) Convert(
 	amount decimal.Decimal,
 	_ time.Time,
 ) (apiprices.ConversionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls++
 	if s.err != nil {
 		return apiprices.ConversionResult{}, s.err

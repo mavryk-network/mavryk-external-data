@@ -424,7 +424,7 @@ type rwaOverviewAsset struct {
 	Quote        string
 	NativeQuote  string
 	TokenAddress *string // on-chain RWA token contract; null when not synced yet
-	Market       string  // orderbook | primary_issuance
+	Market       string  // secondary | primary
 	Issuance     *primaryIssuanceDTO
 	Price        *num6 // null until a `last` tick exists
 	PriceAsOf    *string
