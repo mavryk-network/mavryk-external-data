@@ -209,7 +209,7 @@ func (d RWAOverviewDeps) assemble(ctx context.Context, limit int, in []prices.Cu
 		g.Go(func() error {
 			// Launch-only asset: no orderbook, so no change/series query at all.
 			if e.pair == nil {
-				assets[i] = launchToAsset(*e.launch)
+				assets[i] = d.launchToAsset(gctx, *e.launch, in)
 				return nil
 			}
 			asset, err := d.buildAsset(gctx, *e.pair, now, in)
@@ -249,7 +249,13 @@ func (d RWAOverviewDeps) enabledLaunches(ctx context.Context) []prices.RWALaunch
 // launchToAsset renders one primary-issuance launch in the same asset shape as
 // an orderbook pair, so a client iterates one list. `market` discriminates the
 // two; series/change stay empty because no trades exist yet.
-func launchToAsset(l prices.RWALaunch) rwaOverviewAsset {
+//
+// `?in=` applies here exactly as it does to an orderbook quote: a fixed sale
+// price is still a price in the asset's quote currency, so a client asking for
+// USD must get USD. Omitting the conversion made the two market types
+// gratuitously different on the wire — a client had to special-case `primary`
+// and convert the price itself.
+func (d RWAOverviewDeps) launchToAsset(ctx context.Context, l prices.RWALaunch, in []prices.Currency) rwaOverviewAsset {
 	price := newNum6(l.Price)
 	priceAsOf := nullableRFC3339(l.LastSyncedAt)
 	asset := rwaOverviewAsset{
@@ -264,7 +270,27 @@ func launchToAsset(l prices.RWALaunch) rwaOverviewAsset {
 		Series:       seriesMiniDTO{Interval: string(overviewSeriesInterval), Points: []SeriesPointDTO{}},
 		Issuance:     issuanceBlock(l),
 	}
+	if len(in) > 0 && d.Converter != nil {
+		if quoteToken, resolved := promoteQuoteToken(l.QuoteSymbol); resolved {
+			asset.Converted = convertNowFlat(ctx, d.Converter, quoteToken, in, l.Price, launchFXTime(l))
+		}
+	}
 	return asset
+}
+
+// launchFXTime is the timestamp a launch's price is converted at: when we last
+// read the launchpad, which is also the `price_as_of` / `timestamp` the response
+// reports. Converting at that instant keeps a row internally consistent — the
+// native and converted prices describe the same moment.
+//
+// The zero value falls back to now: the converter does an at-or-before lookup,
+// and a zero timestamp predates every FX row, which would silently drop every
+// target instead of using the freshest rate.
+func launchFXTime(l prices.RWALaunch) time.Time {
+	if l.LastSyncedAt.IsZero() {
+		return time.Now()
+	}
+	return l.LastSyncedAt
 }
 
 // nullableRFC3339Ptr formats an optional timestamp for the wire.
@@ -398,7 +424,7 @@ type rwaOverviewAsset struct {
 	Quote        string
 	NativeQuote  string
 	TokenAddress *string // on-chain RWA token contract; null when not synced yet
-	Market       string  // orderbook | primary_issuance
+	Market       string  // secondary | primary
 	Issuance     *primaryIssuanceDTO
 	Price        *num6 // null until a `last` tick exists
 	PriceAsOf    *string

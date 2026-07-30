@@ -112,14 +112,24 @@ func (d RWAPriceDeps) resolveTargetFromPath(c *gin.Context) (rwaTarget, error) {
 
 // launchPriceDTO renders a primary-market launch as a price snapshot: the fixed
 // base-tier sale price, stamped with when we last read the launchpad.
-func launchPriceDTO(l prices.RWALaunch) rwaPriceDTO {
-	return rwaPriceDTO{
+//
+// `?in=` targets convert here just as they do for an orderbook quote — a fixed
+// sale price is still a price in the asset's quote currency. Conversion uses the
+// launchpad read time (the same instant the row reports as its `timestamp`), so
+// native and converted prices describe one moment.
+func (d RWAPriceDeps) launchPriceDTO(ctx context.Context, l prices.RWALaunch, targets []prices.Currency) rwaPriceDTO {
+	dto := rwaPriceDTO{
 		Timestamp:   formatRFC3339(l.LastSyncedAt),
 		NativeQuote: strings.ToLower(l.QuoteSymbol),
 		Price:       newNum6(l.Price),
 		Market:      marketPrimary,
 		Issuance:    issuanceBlock(l),
 	}
+	if len(targets) > 0 {
+		quoteToken, quoteResolved := promoteQuoteToken(l.QuoteSymbol)
+		dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, l.Price, launchFXTime(l))
+	}
+	return dto
 }
 
 // ListBySymbol — GET /v1/rwa/:symbol
@@ -180,7 +190,7 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 			if req.Window {
 				return []rwaPriceDTO{}, nil
 			}
-			return []rwaPriceDTO{launchPriceDTO(*req.Launch)}, nil
+			return []rwaPriceDTO{d.launchPriceDTO(ctx, *req.Launch, req.InTargets)}, nil
 		}
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
@@ -252,7 +262,7 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	action := func(ctx context.Context, req request) (rwaPriceDTO, error) {
 		if !req.HasPair {
 			// Fixed sale price — no ath / price_one_year_ago (no trade history).
-			return launchPriceDTO(*req.Launch), nil
+			return d.launchPriceDTO(ctx, *req.Launch, req.InTargets), nil
 		}
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {

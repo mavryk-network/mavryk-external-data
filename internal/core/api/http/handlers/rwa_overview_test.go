@@ -377,3 +377,72 @@ func TestRWAOverview_LaunchListerErrorIsNotFatal(t *testing.T) {
 		t.Errorf("orderbook assets must survive a launch-lister failure, got %v", body["assets"])
 	}
 }
+
+// TestRWAOverview_PrimaryAssetConvertsIn is the regression guard for the `?in=`
+// gap on the overview: a launch-only asset skipped conversion entirely, so a
+// client asking for USD got only the native quote — while secondary rows in the
+// SAME response carried their converted keys. The two market types must not
+// differ on the wire here.
+func TestRWAOverview_PrimaryAssetConvertsIn(t *testing.T) {
+	// Both quote symbols must resolve to a registered Token, or the handler has
+	// no FX source and drops every target regardless of the fix.
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	// One of each kind, so the assertion also pins that both convert alike.
+	pairs := []prices.RWAPair{
+		{ID: 1, BaseSymbol: "mars1", QuoteSymbol: "USDT", Source: prices.SourceEquiteez},
+	}
+	res := apiprices.ChangeRepoResult{
+		Now: []apiprices.ChangeNow{{Currency: "usdt", Price: dec("50"), TS: time.Now().UTC(), Found: true}},
+	}
+
+	// rate 0.999: a rate != 1 proves a conversion ran instead of the native price
+	// being echoed under the currency key. The SAME converter goes to the
+	// ChartService, which validates its own — production wires both from
+	// deps.FXConverter, and a nil one there rejects `?in=` before any asset is
+	// built (the mini-series is FX-converted too).
+	conv := &stubConverter{result: apiprices.ConversionResult{Rate: decimal.RequireFromString("0.999")}}
+	gin.SetMode(gin.TestMode)
+	deps := RWAOverviewDeps{
+		Pairs:    &stubPairsLister{pairs: pairs},
+		Launches: &stubLaunchLister{launches: []prices.RWALaunch{khbeLaunch()}},
+		Change: &apiprices.ChangeService{
+			Repo: &stubChangeRepo{res: res}, Cache: apiprices.NewChangeCache(), Kind: "rwa",
+		},
+		Charts: &apiprices.ChartService{
+			Repo: &stubCandleRepo{}, Converter: conv,
+			Caps: apiprices.DefaultCaps(), MaxLimit: 1000, Kind: "rwa",
+		},
+		Converter: conv,
+		Source:    prices.SourceEquiteez,
+	}
+	r := gin.New()
+	r.GET("/v1/rwa", deps.List())
+
+	body := getJSON(t, r, "/v1/rwa?in=usd")
+
+	byMarket := map[string]map[string]any{}
+	for _, a := range body["assets"].([]any) {
+		asset := a.(map[string]any)
+		byMarket[asset["market"].(string)] = asset
+	}
+	primary, ok := byMarket["primary"]
+	if !ok {
+		t.Fatalf("no primary asset in response: %v", body["assets"])
+	}
+	// 100 × 0.999 = 99.9
+	usd, ok := primary["usd"].(float64)
+	if !ok {
+		t.Fatalf("primary asset missing converted 'usd' key: %v", primary)
+	}
+	if usd < 99.89 || usd > 99.91 {
+		t.Errorf("primary usd = %v, want ~99.9", usd)
+	}
+	// The secondary row in the same response must be unaffected: 50 × 0.999.
+	if secondary, ok := byMarket["secondary"]; ok {
+		if got, ok := secondary["usd"].(float64); !ok || got < 49.94 || got > 49.96 {
+			t.Errorf("secondary usd = %v, want ~49.95", secondary["usd"])
+		}
+	}
+}
