@@ -40,6 +40,7 @@ type RWAPairEntity struct {
 	QuoteSymbol         string     `gorm:"column:quote_symbol;not null"`
 	SourceCode          string     `gorm:"column:source_code;not null"`
 	TokenAddr           *string    `gorm:"column:token_addr"`
+	QuoteAddr           *string    `gorm:"column:quote_addr"`
 	OrderbookAddr       *string    `gorm:"column:orderbook_addr"`
 	EquiteezOrderbookID *int32     `gorm:"column:equiteez_orderbook_id"`
 	Enabled             bool       `gorm:"column:enabled;not null"`

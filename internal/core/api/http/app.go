@@ -329,7 +329,13 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		RWASource:       prices.SourceEquiteez,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
-	rwaPairsDeps := handlers.RWAPairsDeps{Lookup: deps.Lookup}
+	// GET /v1/pairs/rwa — discovery catalog: orderbook pairs unioned with
+	// primary-issuance launches, so clients learn every servable symbol.
+	rwaPairsDeps := handlers.RWAPairsDeps{
+		Lookup:   deps.Lookup,
+		Launches: launchLister(deps.LaunchRepo),
+		Source:   prices.SourceEquiteez,
+	}
 	// GET /v1/rwa — market-overview list. Composes the shared RWA change + chart
 	// services and the enabled-pair catalog. 5s response cache amortises the
 	// per-asset fan-out across dashboard polls.

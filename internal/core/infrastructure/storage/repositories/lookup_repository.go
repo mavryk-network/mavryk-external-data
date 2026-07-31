@@ -139,6 +139,7 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 	}
 
 	tokenAddr := stringPtrOrNil(p.TokenAddr)
+	quoteAddr := stringPtrOrNil(p.QuoteAddr)
 	orderbookAddr := stringPtrOrNil(p.OrderbookAddr)
 	equiteezID := p.EquiteezOrderbookID
 
@@ -153,6 +154,7 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 			QuoteSymbol:         p.QuoteSymbol,
 			SourceCode:          string(p.Source),
 			TokenAddr:           tokenAddr,
+			QuoteAddr:           quoteAddr,
 			OrderbookAddr:       orderbookAddr,
 			EquiteezOrderbookID: equiteezID,
 			Enabled:             true,
@@ -166,9 +168,10 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 		return 0, fmt.Errorf("lookup rwa_pair: %w", res.Error)
 	default:
 		// Update metadata only — leave `enabled` for the operator to control.
-		// equiteez_orderbook_id is updated only when caller supplies a value;
-		// preserves any operator-set value if a transient sync failure returned
-		// nil for it.
+		// equiteez_orderbook_id and quote_addr are updated only when the caller
+		// supplies a value; preserves a previously-good value if a degraded sync
+		// response omitted it (currency rows are a nested, independently-nullable
+		// part of the indexer payload).
 		updates := map[string]any{
 			"base_symbol":    p.BaseSymbol,
 			"quote_symbol":   p.QuoteSymbol,
@@ -177,6 +180,9 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 		}
 		if equiteezID != nil {
 			updates["equiteez_orderbook_id"] = equiteezID
+		}
+		if quoteAddr != nil {
+			updates["quote_addr"] = quoteAddr
 		}
 		err := tx.Model(&entities.RWAPairEntity{}).
 			Where("id = ?", existing.ID).
@@ -219,6 +225,9 @@ func entityToRWAPair(e entities.RWAPairEntity) prices.RWAPair {
 	}
 	if e.TokenAddr != nil {
 		pair.TokenAddr = *e.TokenAddr
+	}
+	if e.QuoteAddr != nil {
+		pair.QuoteAddr = *e.QuoteAddr
 	}
 	if e.OrderbookAddr != nil {
 		pair.OrderbookAddr = *e.OrderbookAddr

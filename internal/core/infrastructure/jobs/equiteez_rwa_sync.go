@@ -81,6 +81,7 @@ func SyncRWAPairs(
 			pair := prices.RWAPair{
 				Source:        source,
 				TokenAddr:     tok.Address,
+				QuoteAddr:     ob.QuoteTokenAddress(),
 				OrderbookAddr: ob.Address,
 				BaseSymbol:    baseSymbol,
 				QuoteSymbol:   ob.QuoteSymbol(),

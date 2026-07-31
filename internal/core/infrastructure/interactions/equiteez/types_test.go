@@ -57,3 +57,31 @@ func TestOrderbookOrder_UnmarshalJSON(t *testing.T) {
 		t.Errorf("ended_at not RFC3339: %v", err)
 	}
 }
+
+// TestOrderbookQuoteAccessors — QuoteSymbol / QuoteTokenAddress must be
+// nil-safe at every level: nil receiver, no currency rows, currency row
+// without a nested token. The sync loop calls them on whatever the indexer
+// returned, so a partial payload must degrade to "", never panic.
+func TestOrderbookQuoteAccessors(t *testing.T) {
+	var nilOB *EquiteezOrderbook
+	if got := nilOB.QuoteTokenAddress(); got != "" {
+		t.Errorf("nil receiver: %q, want empty", got)
+	}
+	if got := (&EquiteezOrderbook{}).QuoteTokenAddress(); got != "" {
+		t.Errorf("no currencies: %q, want empty", got)
+	}
+	noToken := &EquiteezOrderbook{Currencies: []OrderbookCurrency{{CurrencyName: "USDT"}}}
+	if got := noToken.QuoteTokenAddress(); got != "" {
+		t.Errorf("currency without token: %q, want empty", got)
+	}
+	if got := noToken.QuoteSymbol(); got != "USDT" {
+		t.Errorf("symbol should still resolve without token: %q", got)
+	}
+	full := &EquiteezOrderbook{Currencies: []OrderbookCurrency{{
+		CurrencyName: "USDT",
+		Token:        &TokenQuoteToken{Address: "KT1VAymQuote"},
+	}}}
+	if got := full.QuoteTokenAddress(); got != "KT1VAymQuote" {
+		t.Errorf("address = %q, want KT1VAymQuote", got)
+	}
+}

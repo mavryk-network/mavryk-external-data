@@ -15,6 +15,9 @@ import (
 //   - ID:                  BIGSERIAL — stable across restarts and deploys.
 //   - Source:               registry source (`equiteez` today).
 //   - TokenAddr:             Tezos token contract that owns the orderbook.
+//   - QuoteAddr:             Tezos contract of the quote token (e.g. USDT) —
+//     what a consumer building transactions approves/spends against. Empty
+//     until the first discovery sync after migration 0017.
 //   - OrderbookAddr:         Tezos orderbook contract — what the collector polls.
 //   - EquiteezOrderbookID:   indexer's internal integer ID for the orderbook
 //     (Hasura `orderbook.id`). Required by the Equiteez backfill job to query
@@ -28,6 +31,7 @@ type RWAPair struct {
 	ID                  int64
 	Source              Source
 	TokenAddr           string
+	QuoteAddr           string
 	OrderbookAddr       string
 	EquiteezOrderbookID *int32
 	BaseSymbol          string

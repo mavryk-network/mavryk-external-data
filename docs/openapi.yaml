@@ -6,7 +6,7 @@ servers:
 
 info:
   title: Mavryk External Data API
-  version: "2.3.0"
+  version: "2.4.0"
   description: |
     Long-format price service.
 
@@ -955,29 +955,54 @@ paths:
   /v1/pairs/rwa:
     get:
       tags: [discovery]
-      summary: Catalog of enabled RWA pairs
+      summary: Catalog of enabled RWA assets (orderbook pairs + launches)
       description: |
-        Returns the list of enabled RWA pairs currently served by the API.
-        Use it to discover which `{base}-{quote}` symbols can be passed to
-        `/v1/rwa/{symbol}` and its sibling endpoints — clients construct
-        the symbol as `${base}-${quote}` (both already lowercase).
+        Returns the catalog of enabled RWA assets currently served by the API:
+        orderbook pairs (`market: secondary`) unioned with primary-issuance
+        launches (`market: primary`), so a client discovers every
+        `{base}-{quote}` symbol the `/v1/rwa` endpoints serve. The `symbol`
+        field is ready to use verbatim.
 
-        Order is stable: `(source, base, quote)` ascending. Disabled pairs
+        Each entry carries the on-chain addresses a transaction-building
+        consumer needs: `token_addr` (the RWA token), `quote_addr` (the
+        settlement token to approve/spend) and `orderbook_addr` (the escrow
+        contract). For `primary` entries `quote_addr` / `orderbook_addr` are
+        always null — a primary sale is not settled through the orderbook
+        escrow; its payment flow is the launchpad's own domain.
+
+        Union semantics mirror `GET /v1/rwa`: an asset that trades AND is
+        still in issuance appears once, as `secondary`.
+
+        Order is stable: `(source, base, quote)` ascending. Disabled entries
         are never returned. Empty database returns `[]` (200), not 404.
       operationId: listRWAPairs
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: Array of pair catalog entries.
+          description: Array of catalog entries.
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/RWAPairCatalogEntry" }
               example:
-                - { base: mars1, quote: usdt, source: equiteez }
-                - { base: tst,   quote: usdt, source: equiteez }
+                - symbol: khbe-usdt
+                  base: khbe
+                  quote: usdt
+                  market: primary
+                  token_addr: KT1FBJnqyY3EHB8dpwZ51gZqHBAXZifxwDnc
+                  quote_addr: null
+                  orderbook_addr: null
+                  source: equiteez
+                - symbol: ntbm-usdt
+                  base: ntbm
+                  quote: usdt
+                  market: secondary
+                  token_addr: KT1Xd6Q4TokenAddr
+                  quote_addr: KT1VAymQuoteAddr
+                  orderbook_addr: KT1A3JhOrderbook
+                  source: equiteez
         "500": { $ref: "#/components/responses/Internal" }
 
 components:
@@ -1326,18 +1351,50 @@ components:
     RWAPairCatalogEntry:
       type: object
       description: |
-        One enabled RWA pair, in the minimal shape needed to build a
-        `/v1/rwa/{symbol}` request. `symbol` is `${base}-${quote}`.
-      required: [base, quote, source]
+        One enabled RWA asset in the discovery catalog: an orderbook pair
+        (`market: secondary`) or a primary-issuance launch (`market: primary`).
+        `symbol` is `${base}-${quote}`, ready to pass to `/v1/rwa/{symbol}`.
+      required: [symbol, base, quote, market, source]
       properties:
+        symbol:
+          type: string
+          description: Canonical `{base}-{quote}`, lowercase.
+          example: ntbm-usdt
         base:
           type: string
-          description: Lowercase base asset ticker (`rwa_pairs.base_symbol`).
-          example: mars1
+          description: Lowercase base asset ticker.
+          example: ntbm
         quote:
           type: string
-          description: Lowercase quote currency ticker (`rwa_pairs.quote_symbol`).
+          description: Lowercase quote currency ticker.
           example: usdt
+        market:
+          type: string
+          enum: [secondary, primary]
+          description: >
+            How the asset is priced — live orderbook quote (`secondary`) or
+            fixed launchpad sale price (`primary`). Same discriminator as the
+            /v1/rwa endpoints.
+        token_addr:
+          type: string
+          nullable: true
+          description: On-chain contract of the RWA token; null when not synced yet.
+          example: KT1Xd6Q4TokenAddr
+        quote_addr:
+          type: string
+          nullable: true
+          description: >
+            On-chain contract of the quote (settlement) token. Null for
+            `primary` entries (no escrow settlement) and for pairs not yet
+            re-synced after the column was introduced.
+          example: KT1VAymQuoteAddr
+        orderbook_addr:
+          type: string
+          nullable: true
+          description: >
+            On-chain orderbook (escrow) contract. Always null for `primary`
+            entries — a primary sale's payment flow is the launchpad's domain.
+          example: KT1A3JhOrderbook
         source:
           type: string
           description: Upstream provider code (matches `sources.code`).
