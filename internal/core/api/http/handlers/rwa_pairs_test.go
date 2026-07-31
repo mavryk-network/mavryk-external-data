@@ -188,10 +188,12 @@ func catalogRows(t *testing.T, deps RWAPairsDeps) []map[string]any {
 }
 
 // TestRWAPairs_UnionWithLaunches — a launch-only asset joins the catalog as
-// market=primary with its token address and null quote/orderbook addresses
-// (a primary sale is not settled through the orderbook escrow), and the merged
-// list keeps the (source, base, quote) order.
+// market=primary carrying its token address AND the payment-token quote_addr;
+// orderbook_addr stays null (a primary sale is not settled through the
+// orderbook escrow). The merged list keeps the (source, base, quote) order.
 func TestRWAPairs_UnionWithLaunches(t *testing.T) {
+	launch := khbeLaunch()
+	launch.QuoteAddr = "KT19bKTsUsdtPay"
 	deps := RWAPairsDeps{
 		Lookup: &stubPairsLister{pairs: []prices.RWAPair{
 			{
@@ -199,7 +201,7 @@ func TestRWAPairs_UnionWithLaunches(t *testing.T) {
 				TokenAddr: "KT1Ntbm", QuoteAddr: "KT1Usdt", OrderbookAddr: "KT1Book",
 			},
 		}},
-		Launches: &stubLaunchLister{launches: []prices.RWALaunch{khbeLaunch()}},
+		Launches: &stubLaunchLister{launches: []prices.RWALaunch{launch}},
 		Source:   prices.SourceEquiteez,
 	}
 	rows := catalogRows(t, deps)
@@ -207,20 +209,39 @@ func TestRWAPairs_UnionWithLaunches(t *testing.T) {
 		t.Fatalf("len = %d, want 2 (pair + launch)", len(rows))
 	}
 	// khbe sorts before ntbm.
-	launch := rows[0]
-	if launch["symbol"] != "khbe-usdt" || launch["market"] != "primary" {
-		t.Errorf("launch row = %v/%v, want khbe-usdt/primary", launch["symbol"], launch["market"])
+	got := rows[0]
+	if got["symbol"] != "khbe-usdt" || got["market"] != "primary" {
+		t.Errorf("launch row = %v/%v, want khbe-usdt/primary", got["symbol"], got["market"])
 	}
-	if launch["token_addr"] != "KT1KHBE" {
-		t.Errorf("launch token_addr = %v, want KT1KHBE", launch["token_addr"])
+	if got["token_addr"] != "KT1KHBE" {
+		t.Errorf("launch token_addr = %v, want KT1KHBE", got["token_addr"])
 	}
-	if launch["quote_addr"] != nil || launch["orderbook_addr"] != nil {
-		t.Errorf("launch quote/orderbook addr = %v/%v, want null/null",
-			launch["quote_addr"], launch["orderbook_addr"])
+	if got["quote_addr"] != "KT19bKTsUsdtPay" {
+		t.Errorf("launch quote_addr = %v, want the payment token address", got["quote_addr"])
+	}
+	if got["orderbook_addr"] != nil {
+		t.Errorf("launch orderbook_addr = %v, want null (no escrow)", got["orderbook_addr"])
 	}
 	pair := rows[1]
 	if pair["symbol"] != "ntbm-usdt" || pair["market"] != "secondary" {
 		t.Errorf("pair row = %v/%v, want ntbm-usdt/secondary", pair["symbol"], pair["market"])
+	}
+}
+
+// TestRWAPairs_LaunchWithoutQuoteAddr — a launch not re-synced since migration
+// 0018 (or whose payment carried no token ref) renders quote_addr null, not "".
+func TestRWAPairs_LaunchWithoutQuoteAddr(t *testing.T) {
+	deps := RWAPairsDeps{
+		Lookup:   &stubPairsLister{},
+		Launches: &stubLaunchLister{launches: []prices.RWALaunch{khbeLaunch()}},
+		Source:   prices.SourceEquiteez,
+	}
+	rows := catalogRows(t, deps)
+	if len(rows) != 1 {
+		t.Fatalf("len = %d, want 1", len(rows))
+	}
+	if rows[0]["quote_addr"] != nil {
+		t.Errorf("quote_addr = %v, want null for an unsynced launch", rows[0]["quote_addr"])
 	}
 }
 

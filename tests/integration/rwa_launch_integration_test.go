@@ -145,6 +145,53 @@ func TestLaunchRepository_UpsertPreservesOperatorDisable(t *testing.T) {
 	require.True(t, price.Equal(decimal.RequireFromString("11")), "price = %s", price)
 }
 
+// TestLaunchRepository_QuoteAddrRoundTrip exercises migration 0018: the
+// payment-token address must survive the driver, and — same preserve contract
+// as rwa_pairs.quote_addr — a later sync whose payment row lost its token ref
+// must NOT wipe a previously-good address.
+func TestLaunchRepository_QuoteAddrRoundTrip(t *testing.T) {
+	db := openGorm(t)
+	truncateLaunches(t, db)
+	repo := repositories.NewLaunchRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	l := prices.RWALaunch{
+		Source: prices.SourceEquiteez, TokenAddr: "KT1QA", LaunchID: 1,
+		BaseSymbol: "qa", QuoteSymbol: "usdt", Status: "active",
+		QuoteAddr:    "KT19bKTsUsdtPay",
+		Price:        decimal.RequireFromString("100"),
+		TotalBought:  decimal.Zero,
+		MaxAmountCap: decimal.RequireFromString("1000"),
+	}
+	require.NoError(t, repo.Upsert(ctx, l, now))
+
+	got, found, err := repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "qa", "usdt")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "KT19bKTsUsdtPay", got.QuoteAddr, "quote_addr must round-trip (migration 0018)")
+
+	// Degraded sync: payment row without a token ref → empty QuoteAddr.
+	degraded := l
+	degraded.QuoteAddr = ""
+	require.NoError(t, repo.Upsert(ctx, degraded, now.Add(time.Minute)))
+
+	got, _, err = repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "qa", "usdt")
+	require.NoError(t, err)
+	require.Equal(t, "KT19bKTsUsdtPay", got.QuoteAddr,
+		"an empty quote_addr in a later sync must not wipe the stored one")
+
+	// A changed address (payment token migrated) does propagate.
+	moved := l
+	moved.QuoteAddr = "KT1UsdtV2"
+	require.NoError(t, repo.Upsert(ctx, moved, now.Add(2*time.Minute)))
+
+	list, err := repo.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "KT1UsdtV2", list[0].QuoteAddr, "the catalog lister must carry the refreshed address")
+}
+
 // EnabledLaunches must return a deterministic, symbol-ordered catalog — the API
 // relies on it for a stable response.
 func TestLaunchRepository_EnabledLaunchesOrdered(t *testing.T) {

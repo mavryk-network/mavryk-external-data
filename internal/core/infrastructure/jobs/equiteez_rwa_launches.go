@@ -158,7 +158,7 @@ func buildLaunch(rows []equiteez.LaunchRow, baseSymbol string, now time.Time) (p
 	}
 	row := rows[idx]
 
-	rawPrice, currency, hasPrice := row.BaseTierPrice()
+	rawPrice, currency, quoteAddr, hasPrice := row.BaseTierPrice()
 	if !hasPrice {
 		return prices.RWALaunch{}, false
 	}
@@ -189,6 +189,7 @@ func buildLaunch(rows []equiteez.LaunchRow, baseSymbol string, now time.Time) (p
 		Active:          prices.LaunchActive(sel[idx], now),
 		BaseSymbol:      strings.ToLower(strings.TrimSpace(baseSymbol)),
 		QuoteSymbol:     quoteSymbol,
+		QuoteAddr:       quoteAddr,
 		Price:           price,
 		TotalBought:     decimalOrZero(row.TotalBought.String()),
 		MaxAmountCap:    decimalOrZero(row.MaxAmountCap.String()),

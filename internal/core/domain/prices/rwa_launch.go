@@ -43,13 +43,17 @@ func LaunchStatusString(code int) string {
 // and would lose precision as float64; Price is already decimals-applied and
 // value-bounded.
 type RWALaunch struct {
-	Source      Source
-	TokenAddr   string
-	TokenID     int
-	LaunchID    int
-	Name        string
-	Status      string // active | inactive | paused | closed
-	Active      bool   // purchasable right now
+	Source    Source
+	TokenAddr string
+	TokenID   int
+	LaunchID  int
+	Name      string
+	Status    string // active | inactive | paused | closed
+	Active    bool   // purchasable right now
+	// QuoteAddr is the on-chain contract of the quote (payment) token, taken
+	// from the same sale-option payment that sets Price — so price, symbol and
+	// address always describe one payment row. Empty until synced.
+	QuoteAddr   string
 	BaseSymbol  string
 	QuoteSymbol string
 
