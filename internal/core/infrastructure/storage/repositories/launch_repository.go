@@ -43,6 +43,7 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 		Active:          l.Active,
 		BaseSymbol:      l.BaseSymbol,
 		QuoteSymbol:     l.QuoteSymbol,
+		QuoteAddr:       stringPtrOrNil(l.QuoteAddr),
 		Price:           decimal.NullDecimal{Decimal: l.Price, Valid: !l.Price.IsZero()},
 		TotalBought:     decimal.NullDecimal{Decimal: l.TotalBought, Valid: true},
 		MaxAmountCap:    decimal.NullDecimal{Decimal: l.MaxAmountCap, Valid: true},
@@ -54,27 +55,34 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 		LastSyncedAt:    now.UTC(),
 		UpdatedAt:       now.UTC(),
 	}
+	updateCols := []string{
+		"token_id",
+		"launch_id",
+		"name",
+		"status",
+		"active",
+		"base_symbol",
+		"quote_symbol",
+		"price",
+		"total_bought",
+		"max_amount_cap",
+		"progress_percent",
+		"sale_start",
+		"sale_end",
+		"sale_closed",
+		"last_synced_at",
+		"updated_at",
+		// NOTE: `enabled` intentionally omitted — operator-owned.
+	}
+	// quote_addr updates only when the sync produced a value — same preserve
+	// contract as rwa_pairs.quote_addr: a payment row missing its token ref in
+	// a degraded response must not wipe a previously-good address.
+	if l.QuoteAddr != "" {
+		updateCols = append(updateCols, "quote_addr")
+	}
 	res := r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "source_code"}, {Name: "token_addr"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"token_id",
-			"launch_id",
-			"name",
-			"status",
-			"active",
-			"base_symbol",
-			"quote_symbol",
-			"price",
-			"total_bought",
-			"max_amount_cap",
-			"progress_percent",
-			"sale_start",
-			"sale_end",
-			"sale_closed",
-			"last_synced_at",
-			"updated_at",
-			// NOTE: `enabled` intentionally omitted — operator-owned.
-		}),
+		Columns:   []clause.Column{{Name: "source_code"}, {Name: "token_addr"}},
+		DoUpdates: clause.AssignmentColumns(updateCols),
 	}).Create(&e)
 	if res.Error != nil {
 		return fmt.Errorf("upsert rwa_launches: %w", res.Error)
@@ -120,6 +128,10 @@ func (r *LaunchRepository) LaunchBySymbol(ctx context.Context, source prices.Sou
 }
 
 func entityToLaunch(e entities.RWALaunchEntity) prices.RWALaunch {
+	quoteAddr := ""
+	if e.QuoteAddr != nil {
+		quoteAddr = *e.QuoteAddr
+	}
 	return prices.RWALaunch{
 		Source:          prices.Source(e.SourceCode),
 		TokenAddr:       e.TokenAddr,
@@ -130,6 +142,7 @@ func entityToLaunch(e entities.RWALaunchEntity) prices.RWALaunch {
 		Active:          e.Active,
 		BaseSymbol:      e.BaseSymbol,
 		QuoteSymbol:     e.QuoteSymbol,
+		QuoteAddr:       quoteAddr,
 		Price:           e.Price.Decimal,
 		TotalBought:     e.TotalBought.Decimal,
 		MaxAmountCap:    e.MaxAmountCap.Decimal,

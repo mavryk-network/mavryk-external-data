@@ -122,13 +122,19 @@ type LaunchRow struct {
 }
 
 // BaseTierPrice returns the launch's undiscounted list price — the highest
-// price across every sale option's payments — together with its currency label.
+// price across every sale option's payments — together with its currency label
+// and the on-chain address of that payment's token.
 //
 // The sale options are a volume-discount ladder (for KHBE: Starter 100 → …→
 // Pinnacle 75 USDT), so the maximum is the base tier a buyer pays with no
 // allocation. Picking by price rather than by option name keeps this working if
 // the tiers are ever renamed. ok=false when the launch quotes no usable price.
-func (r LaunchRow) BaseTierPrice() (raw string, currency string, ok bool) {
+//
+// All three values come from the SAME winning payment row: the schema allows
+// several payment tokens per option, so taking the address from any other row
+// could pair the price with the wrong settlement token. quoteAddr is "" when
+// that payment carries no nested token ref.
+func (r LaunchRow) BaseTierPrice() (raw string, currency string, quoteAddr string, ok bool) {
 	var best *big.Float
 	for _, so := range r.SaleOptions {
 		for _, p := range so.Payments {
@@ -140,10 +146,14 @@ func (r LaunchRow) BaseTierPrice() (raw string, currency string, ok bool) {
 				best = v
 				raw = strings.TrimSpace(p.Price.String())
 				currency = strings.TrimSpace(p.Name)
+				quoteAddr = ""
+				if p.Token != nil {
+					quoteAddr = strings.TrimSpace(p.Token.Address)
+				}
 			}
 		}
 	}
-	return raw, currency, best != nil
+	return raw, currency, quoteAddr, best != nil
 }
 
 // GetLaunchesByTokens returns every launchpad_launch attached to the given RWA

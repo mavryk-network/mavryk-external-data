@@ -36,11 +36,12 @@ type RWAPairsDeps struct {
 // (parseRWASymbol lowercases on the way in).
 //
 // The address fields serve consumers that build transactions: `token_addr`
-// (the RWA token), `quote_addr` (the settlement token to approve/spend), and
-// `orderbook_addr` (the escrow contract). All three are nullable — a pair not
-// yet re-synced after migration 0017 has no quote_addr, and a primary-market
-// asset has no escrow at all (its payment flow is the launchpad's own domain),
-// so its quote_addr / orderbook_addr are always null.
+// (the RWA token), `quote_addr` (the settlement/payment token), and
+// `orderbook_addr` (the escrow contract). All three are nullable — an entry
+// not re-synced since its address column was introduced has null. For a
+// primary-market asset `quote_addr` is the launchpad payment token (the one
+// backing the base-tier price), while `orderbook_addr` is always null — there
+// is no orderbook escrow, its payment flow is the launchpad's own domain.
 type rwaPairDTO struct {
 	Symbol        string  `json:"symbol"`
 	Base          string  `json:"base"`
@@ -138,10 +139,12 @@ func launchCatalogDTO(l prices.RWALaunch) rwaPairDTO {
 		Base:   base,
 		Quote:  quote,
 		Market: marketPrimary,
-		// quote_addr / orderbook_addr stay null by design: a primary sale is not
-		// settled through the orderbook escrow, its payment flow is a separate
-		// domain the launchpad owns.
+		// quote_addr is the launchpad payment token — the same payment row that
+		// sets the base-tier price. orderbook_addr stays null by design: a
+		// primary sale is not settled through the orderbook escrow, its payment
+		// flow is a separate domain the launchpad owns.
 		TokenAddr: nilIfEmpty(l.TokenAddr),
+		QuoteAddr: nilIfEmpty(l.QuoteAddr),
 		Source:    string(l.Source),
 	}
 }

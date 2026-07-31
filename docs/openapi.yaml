@@ -965,10 +965,12 @@ paths:
 
         Each entry carries the on-chain addresses a transaction-building
         consumer needs: `token_addr` (the RWA token), `quote_addr` (the
-        settlement token to approve/spend) and `orderbook_addr` (the escrow
-        contract). For `primary` entries `quote_addr` / `orderbook_addr` are
-        always null — a primary sale is not settled through the orderbook
-        escrow; its payment flow is the launchpad's own domain.
+        settlement/payment token) and `orderbook_addr` (the escrow contract).
+        For `primary` entries `quote_addr` is the launchpad payment token —
+        taken from the same sale-option payment that sets the base-tier price —
+        while `orderbook_addr` is always null: a primary sale is not settled
+        through the orderbook escrow; its payment flow is the launchpad's own
+        domain.
 
         Union semantics mirror `GET /v1/rwa`: an asset that trades AND is
         still in issuance appears once, as `secondary`.
@@ -992,7 +994,7 @@ paths:
                   quote: usdt
                   market: primary
                   token_addr: KT1FBJnqyY3EHB8dpwZ51gZqHBAXZifxwDnc
-                  quote_addr: null
+                  quote_addr: KT19bKTs9qsoBrspRNwsHn46YarEWuj3Vjc6
                   orderbook_addr: null
                   source: equiteez
                 - symbol: ntbm-usdt
@@ -1384,9 +1386,11 @@ components:
           type: string
           nullable: true
           description: >
-            On-chain contract of the quote (settlement) token. Null for
-            `primary` entries (no escrow settlement) and for pairs not yet
-            re-synced after the column was introduced.
+            On-chain contract of the quote (settlement/payment) token. For
+            `secondary` entries this is the orderbook's currency token; for
+            `primary` entries it is the launchpad payment token backing the
+            base-tier price. Null for entries not yet re-synced since the
+            column was introduced.
           example: KT1VAymQuoteAddr
         orderbook_addr:
           type: string

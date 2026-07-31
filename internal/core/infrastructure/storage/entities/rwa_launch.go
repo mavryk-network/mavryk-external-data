@@ -24,6 +24,7 @@ type RWALaunchEntity struct {
 
 	BaseSymbol      string              `gorm:"column:base_symbol;not null;default:''"`
 	QuoteSymbol     string              `gorm:"column:quote_symbol;not null;default:''"`
+	QuoteAddr       *string             `gorm:"column:quote_addr"`
 	Price           decimal.NullDecimal `gorm:"column:price"`
 	TotalBought     decimal.NullDecimal `gorm:"column:total_bought"`
 	MaxAmountCap    decimal.NullDecimal `gorm:"column:max_amount_cap"`
