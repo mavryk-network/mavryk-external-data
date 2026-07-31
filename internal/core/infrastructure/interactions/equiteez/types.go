@@ -87,6 +87,16 @@ func (o *EquiteezOrderbook) QuoteSymbol() string {
 	return o.Currencies[0].CurrencyName
 }
 
+// QuoteTokenAddress returns the on-chain contract address of the orderbook's
+// quote token (the first row of `currencies`, same selection as QuoteSymbol);
+// empty when the indexer reported no currency rows or no nested token.
+func (o *EquiteezOrderbook) QuoteTokenAddress() string {
+	if o == nil || len(o.Currencies) == 0 || o.Currencies[0].Token == nil {
+		return ""
+	}
+	return o.Currencies[0].Token.Address
+}
+
 // TokenWithOrderbooks is one token row from the GraphQL queries
 // (`GetTokensWithOrderbooks` / `GetAllowlistedTokensAndOrderbooks`).
 type TokenWithOrderbooks struct {
