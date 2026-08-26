@@ -76,5 +76,17 @@ func MapToPricePoints(
 		return out[i].Metric < out[j].Metric
 	})
 
-	return out
+	// CoinGecko occasionally emits duplicate timestamps. Two rows with the same
+	// (currency, ts) inside one INSERT ... ON CONFLICT batch fail with SQLSTATE
+	// 21000 and poison the backfill chunk, so keep the last sample per key
+	// (mirrors the Equiteez backfill dedup).
+	dedup := out[:0]
+	for _, p := range out {
+		if n := len(dedup); n > 0 && dedup[n-1].Metric == p.Metric && dedup[n-1].Timestamp.Equal(p.Timestamp) {
+			dedup[n-1] = p
+			continue
+		}
+		dedup = append(dedup, p)
+	}
+	return dedup
 }
