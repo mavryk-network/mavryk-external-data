@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -45,7 +46,7 @@ func Execute(ctx context.Context, client *http.Client, serviceName, url, query s
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, scrubURLError(err, req.URL)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
@@ -71,6 +72,51 @@ func Execute(ctx context.Context, client *http.Client, serviceName, url, query s
 	}
 	return []byte(envelope.Data), nil
 }
+
+// sensitiveQueryParams mirror the logging transport's redaction list. Needed
+// here too: http.Client.Do wraps transport errors in a fresh *url.Error whose
+// text embeds the full request URL (Go strips only userinfo, never the query),
+// so the transport-level scrub alone cannot stop secrets carried as query
+// params (e.g. the Equiteez ?bypass=) from reaching logs and persisted state.
+var sensitiveQueryParams = map[string]struct{}{
+	"bypass": {}, "key": {}, "token": {}, "secret": {},
+	"password": {}, "api_key": {}, "apikey": {}, "access_token": {},
+}
+
+// scrubURLError rewrites sensitive query values inside an error produced by
+// client.Do. Returns the original error untouched when nothing needs hiding;
+// otherwise wraps it, preserving the errors.Is/As chain via Unwrap.
+func scrubURLError(err error, u *url.URL) error {
+	if err == nil || u == nil || u.RawQuery == "" {
+		return err
+	}
+	q := u.Query()
+	redacted := false
+	for k := range q {
+		if _, sensitive := sensitiveQueryParams[strings.ToLower(k)]; sensitive {
+			q.Set(k, "REDACTED")
+			redacted = true
+		}
+	}
+	if !redacted {
+		return err
+	}
+	raw := u.String()
+	if !strings.Contains(err.Error(), raw) {
+		return err
+	}
+	clone := *u
+	clone.RawQuery = q.Encode()
+	return &scrubbedError{msg: strings.ReplaceAll(err.Error(), raw, clone.String()), err: err}
+}
+
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }
 
 // maxErrorBodyLen bounds how much upstream body we embed in an error string.
 // The body can be up to the outbound size cap (16 MiB); un-truncated it produces
