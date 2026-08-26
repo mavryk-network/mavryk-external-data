@@ -22,10 +22,12 @@ import (
 //
 // Semantics:
 //   - INSERT new pairs with `enabled=true`.
-//   - UPDATE existing pairs' metadata (`last_synced_at`, base/quote/token addr)
-//     but never touch `enabled` — operator overrides survive.
-//   - Pairs that disappear from the allowlist get `enabled=false` (soft
-//     disable; preserves history and the synthetic `pair_id` FK).
+//   - UPDATE existing pairs' metadata (`last_synced_at`, base/quote/token addr);
+//     `enabled` is touched only to undo the sync's own disable — operator
+//     overrides survive.
+//   - Pairs that disappear from the allowlist get `enabled=false` with
+//     disabled_reason='sync_missing' (soft disable; preserves history and the
+//     synthetic `pair_id` FK, re-enabled when the pair reappears).
 //
 // Returns the number of pairs that ended up enabled (i.e. visible to the
 // collector after the sync). Logs at info level for ops visibility.
@@ -107,9 +109,10 @@ func SyncRWAPairs(
 	// Soft-disable pairs missing from the allowlist ONLY when we have a complete,
 	// non-empty view. An empty allowlist (indexer mid-resync, upstream flag flip)
 	// or any failed upsert makes keepIDs an unreliable "keep" set: passing it to
-	// DisableMissingRWAPairs would disable every enabled pair, and since
-	// UpsertRWAPair never re-enables existing rows, a later correct sync would NOT
-	// undo it — one bad response permanently halts all RWA collection.
+	// DisableMissingRWAPairs would disable every enabled pair. Sync disables are
+	// stamped disabled_reason='sync_missing' and are undone by the next sync that
+	// sees the pair again, so a partial view costs at most one sync interval of
+	// collection — but still skip the disable when the view is obviously bad.
 	var disabled int64
 	if shouldDisableMissingPairs(len(tokens), len(keepIDs), upsertFailed) {
 		disabled, err = lookup.DisableMissingRWAPairs(ctx, source, keepIDs)
@@ -140,8 +143,8 @@ func SyncRWAPairs(
 // It refuses when the fetched allowlist was empty (tokenCount == 0), when nothing
 // upserted successfully (keepCount == 0), or when any per-pair upsert failed
 // (upsertFailed > 0). In all three cases keepIDs under-represents the true set of
-// live pairs, so disabling "everything not in keepIDs" would over-disable —
-// permanently, because enabled is never re-set by a later sync.
+// live pairs, so disabling "everything not in keepIDs" would over-disable for at
+// least one sync interval (the next complete sync re-enables sync-disabled rows).
 func shouldDisableMissingPairs(tokenCount, keepCount, upsertFailed int) bool {
 	return tokenCount > 0 && keepCount > 0 && upsertFailed == 0
 }

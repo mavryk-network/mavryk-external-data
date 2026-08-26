@@ -127,12 +127,19 @@ func (r *LookupRepository) LookupRWAPairBySymbol(ctx context.Context, base, quot
 	}
 }
 
+// RWAPairDisabledReasonSyncMissing marks rows the discovery sync disabled
+// because the pair fell out of the upstream allowlist. Only rows with this
+// reason are auto-re-enabled when the pair reappears; NULL/other reasons are
+// operator decisions and survive every sync.
+const RWAPairDisabledReasonSyncMissing = "sync_missing"
+
 // UpsertRWAPair finds-or-creates by `(source_code, orderbook_addr)` and
 // updates metadata + `last_synced_at`. Returns the persisted ID.
 //
-// Operator overrides survive sync: `enabled` is **only set on INSERT** (to
-// true). Existing pairs keep whatever the operator chose. To reset a manual
-// override, edit the row in DB.
+// Operator overrides survive sync: `enabled` is set on INSERT (to true) and
+// re-set to true only for rows the sync itself disabled (disabled_reason =
+// 'sync_missing'). Rows disabled by an operator keep their state; reset them
+// by editing the row in DB.
 func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, syncedAt time.Time) (int64, error) {
 	if p.Source == "" || p.OrderbookAddr == "" {
 		return 0, fmt.Errorf("upsert rwa_pair: source and orderbook_addr are required")
@@ -167,7 +174,9 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 	case res.Error != nil:
 		return 0, fmt.Errorf("lookup rwa_pair: %w", res.Error)
 	default:
-		// Update metadata only — leave `enabled` for the operator to control.
+		// Update metadata only — leave `enabled` for the operator to control,
+		// except rows the sync itself disabled: the pair is present upstream
+		// again, so undo the sync's own soft-disable.
 		// equiteez_orderbook_id and quote_addr are updated only when the caller
 		// supplies a value; preserves a previously-good value if a degraded sync
 		// response omitted it (currency rows are a nested, independently-nullable
@@ -177,6 +186,11 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 			"quote_symbol":   p.QuoteSymbol,
 			"token_addr":     tokenAddr,
 			"last_synced_at": syncedAt,
+		}
+		if !existing.Enabled && existing.DisabledReason != nil &&
+			*existing.DisabledReason == RWAPairDisabledReasonSyncMissing {
+			updates["enabled"] = true
+			updates["disabled_reason"] = nil
 		}
 		if equiteezID != nil {
 			updates["equiteez_orderbook_id"] = equiteezID
@@ -195,8 +209,9 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 }
 
 // DisableMissingRWAPairs marks every pair for `source` whose ID is NOT in
-// `keepIDs` as `enabled=false`. Used by the sync to handle pairs that fell
-// out of the upstream allowlist.
+// `keepIDs` as `enabled=false` with disabled_reason='sync_missing', so a later
+// sync that sees the pair again can re-enable it (see UpsertRWAPair). Used by
+// the sync to handle pairs that fell out of the upstream allowlist.
 //
 // Pairs already disabled stay disabled. Pairs in `keepIDs` are not touched
 // (operator overrides are preserved).
@@ -206,7 +221,10 @@ func (r *LookupRepository) DisableMissingRWAPairs(ctx context.Context, source pr
 	if len(keepIDs) > 0 {
 		tx = tx.Where("id NOT IN ?", keepIDs)
 	}
-	res := tx.Update("enabled", false)
+	res := tx.Updates(map[string]any{
+		"enabled":         false,
+		"disabled_reason": RWAPairDisabledReasonSyncMissing,
+	})
 	if res.Error != nil {
 		return 0, fmt.Errorf("disable missing rwa_pairs: %w", res.Error)
 	}
