@@ -112,8 +112,6 @@ temp/
 *.sqlite
 *.sqlite3
 
-# Docker
-.dockerignore
 
 # Build output
 build/

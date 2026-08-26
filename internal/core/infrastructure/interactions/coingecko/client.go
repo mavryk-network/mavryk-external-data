@@ -64,7 +64,7 @@ func newHTTPClient(timeout time.Duration, cg config.CoinGeckoConfig, api *config
 	rt = httpclient.WrapResilientTransport(rt, res)
 	rt = &logging.HTTPTransport{Base: rt, Logger: log, Component: "coingecko"}
 	rt = httpclient.WrapRateLimited(rt, rl)
-	return &http.Client{Timeout: timeout, Transport: rt}
+	return &http.Client{Timeout: timeout, Transport: rt, CheckRedirect: httpclient.SameHostRedirectPolicy}
 }
 
 func maxBytes(api *config.APIConfig) int64 {

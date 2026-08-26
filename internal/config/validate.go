@@ -156,10 +156,35 @@ func (c *Config) validateCoinGecko() error {
 	if strings.TrimSpace(c.CoinGecko.BaseURL) == "" {
 		return fmt.Errorf("coingecko.base_url is required")
 	}
+	if err := requireSecureUpstreamBase("coingecko.base_url", c.CoinGecko.BaseURL); err != nil {
+		return err
+	}
+	if base := strings.TrimSpace(c.Equiteez.IndexerURL); base != "" {
+		if err := requireSecureUpstreamBase("equiteez.indexer_url", base); err != nil {
+			return err
+		}
+	}
 	if err := validateRateLimit("coingecko", c.CoinGecko.RateLimit); err != nil {
 		return err
 	}
 	return validateRateLimit("equiteez", c.Equiteez.RateLimit)
+}
+
+// requireSecureUpstreamBase rejects a non-https upstream base URL unless it
+// targets localhost (local dev / testcontainers). API keys and the Equiteez
+// bypass secret ride on these requests; an http hop hands them to any on-path
+// attacker.
+func requireSecureUpstreamBase(name, base string) error {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return fmt.Errorf("%s is not a valid URL: %w", name, err)
+	}
+	host := u.Hostname()
+	isLocal := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	if u.Scheme != "https" && !isLocal {
+		return fmt.Errorf("%s must use https (got %q); credentials ride on these requests and an http hop exposes them", name, u.Scheme)
+	}
+	return nil
 }
 
 func (c *Config) validateBackfill() error {
@@ -395,6 +420,7 @@ func (c *Config) validateProductionSafety() error {
 		"admin":    true,
 		"password": true,
 		"changeme": true,
+		"qwerty":   true, // Makefile's local default
 	}
 	if insecure[strings.ToLower(strings.TrimSpace(c.Database.Password))] {
 		return fmt.Errorf("database.password is a well-known default (%q); refusing to start in release mode",

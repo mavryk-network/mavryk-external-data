@@ -52,8 +52,9 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	return &Client{
 		indexerURL: indexerRequestURL(eq.IndexerURL, eq.IndexerPassword),
 		httpClient: &http.Client{
-			Timeout:   timeout,
-			Transport: rt,
+			Timeout:       timeout,
+			Transport:     rt,
+			CheckRedirect: httpclient.SameHostRedirectPolicy,
 		},
 		logger: componentLogger,
 	}
