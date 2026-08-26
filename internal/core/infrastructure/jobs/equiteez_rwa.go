@@ -300,11 +300,11 @@ func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, quot
 
 	shift := -int32(quoteDecimals) //nolint:gosec // decimals is small (typically 6); int→int32 cannot overflow
 
-	add := func(side string, raw float64) {
-		if raw <= 0 {
+	add := func(side string, raw decimal.Decimal) {
+		if !raw.IsPositive() {
 			return
 		}
-		price := decimal.NewFromFloat(raw)
+		price := raw
 		if shift != 0 {
 			price = price.Shift(shift)
 		}
@@ -316,8 +316,8 @@ func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, quot
 			Price:     price,
 		})
 	}
-	add(string(prices.SideBid), ob.HighestBuyPrice.Float64())
-	add(string(prices.SideAsk), ob.LowestSellPrice.Float64())
-	add(string(prices.SideLast), ob.LastMatchedPrice.Float64())
+	add(string(prices.SideBid), ob.HighestBuyPrice.Decimal())
+	add(string(prices.SideAsk), ob.LowestSellPrice.Decimal())
+	add(string(prices.SideLast), ob.LastMatchedPrice.Decimal())
 	return out
 }

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -62,25 +63,35 @@ func (s ResilienceSettings) Normalized() ResilienceSettings {
 	return out
 }
 
-// WrapResilientTransport returns base wrapped with retry, then optionally a circuit breaker (outermost).
-// Order: circuit breaker → retry → counter → base.
+// WrapResilientTransport returns base wrapped with retry (counter inside).
+// Order: retry → counter → base.
 // The counter sits inside retry so each attempt (including retries) increments
 // outbound_http_requests_total — `total - outbound_http_retries_total` then
 // gives logical-request count.
+//
+// The circuit breaker is applied separately via WrapCircuitBreaker so clients
+// can place it OUTSIDE the rate limiter: an open breaker then fast-fails
+// before a limiter token is consumed (and before the caller blocks in Wait).
 func WrapResilientTransport(base http.RoundTripper, s ResilienceSettings) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	s = s.Normalized()
 	counted := WrapCounted(base, s.Component)
-	if s.CircuitBreakerDisabled && s.RetryMaxAttempts == 1 {
+	if s.RetryMaxAttempts == 1 {
 		return counted
 	}
-	rt := http.RoundTripper(&retryTransport{next: counted, s: s})
-	if !s.CircuitBreakerDisabled {
-		rt = newCircuitBreakerRoundTripper(s, rt)
+	return &retryTransport{next: counted, s: s}
+}
+
+// WrapCircuitBreaker wraps rt with the component's shared circuit breaker
+// (no-op when disabled). Intended as the OUTERMOST layer of the client stack.
+func WrapCircuitBreaker(rt http.RoundTripper, s ResilienceSettings) http.RoundTripper {
+	s = s.Normalized()
+	if s.CircuitBreakerDisabled {
+		return rt
 	}
-	return rt
+	return newCircuitBreakerRoundTripper(s, rt)
 }
 
 func shouldRetryHTTPStatus(code int) bool {
@@ -278,7 +289,33 @@ type circuitBreakerRoundTripper struct {
 	next http.RoundTripper
 }
 
-func newCircuitBreakerRoundTripper(s ResilienceSettings, next http.RoundTripper) http.RoundTripper {
+// sharedBreakers holds one circuit breaker per component (the "CB registry key"
+// promised in config/api.go), mirroring sharedLimiters. Without it every client
+// instance carried its own breaker: N tokens produced 2N+1 CoinGecko breakers
+// (each needing its own failure streak to trip), the hourly pair-sync rebuilt
+// its client — and breaker — every tick so it could never trip at all, and
+// every construction reset the shared state gauge to "closed" mid-incident.
+// First construction per component wins; settings are uniform per upstream.
+var (
+	sharedBreakersMu sync.Mutex
+	sharedBreakers   = map[string]*gobreaker.CircuitBreaker{}
+)
+
+func sharedBreaker(s ResilienceSettings) *gobreaker.CircuitBreaker {
+	if s.Component == "" {
+		return newBreaker(s) // isolated (tests)
+	}
+	sharedBreakersMu.Lock()
+	defer sharedBreakersMu.Unlock()
+	if cb, ok := sharedBreakers[s.Component]; ok {
+		return cb
+	}
+	cb := newBreaker(s)
+	sharedBreakers[s.Component] = cb
+	return cb
+}
+
+func newBreaker(s ResilienceSettings) *gobreaker.CircuitBreaker {
 	st := gobreaker.Settings{}
 	st.Name = s.Component
 	st.MaxRequests = s.CBHalfOpenMaxRequests
@@ -296,10 +333,15 @@ func newCircuitBreakerRoundTripper(s ResilienceSettings, next http.RoundTripper)
 		metrics.OutboundHTTPCircuitBreakerState.WithLabelValues(comp).Set(cbStateValue(to))
 	}
 	// Initial state — gobreaker starts closed; record so the gauge isn't blank
-	// until the first failure.
+	// until the first failure. Runs once per component (registry), so later
+	// client constructions can no longer reset an open breaker's gauge.
 	metrics.OutboundHTTPCircuitBreakerState.WithLabelValues(comp).Set(cbStateValue(gobreaker.StateClosed))
+	return gobreaker.NewCircuitBreaker(st)
+}
+
+func newCircuitBreakerRoundTripper(s ResilienceSettings, next http.RoundTripper) http.RoundTripper {
 	return &circuitBreakerRoundTripper{
-		cb:   gobreaker.NewCircuitBreaker(st),
+		cb:   sharedBreaker(s),
 		next: next,
 	}
 }

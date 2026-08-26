@@ -3,49 +3,59 @@ package equiteez
 import (
 	"bytes"
 	"encoding/json"
-	"strconv"
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // FlexibleFloat unmarshals JSON numbers or quoted numeric strings (Hasura /
 // bigint fields). Equiteez orderbook prices come back as JSON-quoted strings
 // for big numbers (`"56250000"`) and as bare floats for small ones — this
 // type tolerates both.
-type FlexibleFloat float64
+//
+// Backed by decimal, not float64: on-chain amounts routinely exceed float64's
+// 53-bit integer range and the wire format is exact, so the value must reach
+// numeric(38,18) storage without a lossy float hop. Non-finite inputs
+// ("NaN"/"Inf") fail to parse and error the decode instead of poisoning the
+// batch downstream.
+type FlexibleFloat struct {
+	d decimal.Decimal
+}
 
 func (f *FlexibleFloat) UnmarshalJSON(b []byte) error {
 	b = bytes.TrimSpace(b)
 	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
-		*f = 0
+		f.d = decimal.Decimal{}
 		return nil
 	}
+	s := string(b)
 	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
 			return err
 		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			*f = 0
+		str = strings.TrimSpace(str)
+		if str == "" {
+			f.d = decimal.Decimal{}
 			return nil
 		}
-		v, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return err
-		}
-		*f = FlexibleFloat(v)
-		return nil
+		s = str
 	}
-	var v float64
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
+	d, err := decimal.NewFromString(s)
+	if err != nil {
+		return fmt.Errorf("parse numeric value %q: %w", s, err)
 	}
-	*f = FlexibleFloat(v)
+	f.d = d
 	return nil
 }
 
-func (f FlexibleFloat) Float64() float64 { return float64(f) }
+// Decimal returns the exact parsed value (zero for null/empty payloads).
+func (f FlexibleFloat) Decimal() decimal.Decimal { return f.d }
+
+// FlexibleFloatFromDecimal builds a value directly (fixtures/tests).
+func FlexibleFloatFromDecimal(d decimal.Decimal) FlexibleFloat { return FlexibleFloat{d: d} }
 
 // TokenQuoteToken is the nested token row under orderbook_currency.token.
 type TokenQuoteToken struct {

@@ -26,9 +26,10 @@ BEGIN
     END IF;
 END $$ LANGUAGE plpgsql;
 
--- Hot path: latest price for (token, currency).
-CREATE INDEX IF NOT EXISTS idx_token_prices_latest
-    ON token_prices (token_symbol, quote_currency, ts DESC);
+-- Hot path: latest price per (token, source, currency) — key order matches
+-- latestPerMetric's WHERE + DISTINCT ON (see 0022 for the transition).
+CREATE INDEX IF NOT EXISTS idx_token_prices_latest_source
+    ON token_prices (token_symbol, source_code, quote_currency, ts DESC);
 
 -- Range scans by source (rare, but cheap to maintain on a hypertable).
 CREATE INDEX IF NOT EXISTS idx_token_prices_source_ts

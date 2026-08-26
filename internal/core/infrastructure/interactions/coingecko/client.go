@@ -55,9 +55,11 @@ func NewClient(cg config.CoinGeckoConfig, api *config.APIConfig, timeout time.Du
 
 // newHTTPClient constructs the resilient transport stack. Refactoring v2 §3.4
 // — the rate-limiter sits OUTSIDE the logging transport so log latency reflects
-// only network time, not throttling wait. Order (outermost first):
+// only network time, not throttling wait; the circuit breaker sits outermost so
+// an open breaker fast-fails before a limiter token is spent. Order (outermost
+// first):
 //
-//	rate-limit → logging → retry/CB → response-size guard → pooled transport.
+//	CB → rate-limit → logging → retry → response-size guard → pooled transport.
 func newHTTPClient(timeout time.Duration, cg config.CoinGeckoConfig, api *config.APIConfig, log *zerolog.Logger) *http.Client {
 	res := api.OutboundResilience("coingecko")
 	rl := cg.RateLimit.Settings("coingecko")
@@ -65,6 +67,7 @@ func newHTTPClient(timeout time.Duration, cg config.CoinGeckoConfig, api *config
 	rt = httpclient.WrapResilientTransport(rt, res)
 	rt = &logging.HTTPTransport{Base: rt, Logger: log, Component: "coingecko"}
 	rt = httpclient.WrapRateLimited(rt, rl)
+	rt = httpclient.WrapCircuitBreaker(rt, res)
 	return &http.Client{Timeout: timeout, Transport: rt, CheckRedirect: httpclient.SameHostRedirectPolicy}
 }
 

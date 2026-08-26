@@ -49,6 +49,7 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 		Component: "equiteez",
 	}
 	rt = httpclient.WrapRateLimited(rt, rl)
+	rt = httpclient.WrapCircuitBreaker(rt, res)
 	return &Client{
 		indexerURL: indexerRequestURL(eq.IndexerURL, eq.IndexerPassword),
 		httpClient: &http.Client{

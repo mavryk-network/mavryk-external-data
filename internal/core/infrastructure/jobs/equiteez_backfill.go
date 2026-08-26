@@ -18,7 +18,6 @@ import (
 	"quotes/internal/metrics"
 
 	"github.com/rs/zerolog"
-	"github.com/shopspring/decimal"
 	"github.com/sony/gobreaker"
 )
 
@@ -468,15 +467,14 @@ func ordersToLastPoints(pair prices.RWAPair, orders []equiteez.OrderbookOrder, q
 	indexByTs := make(map[int64]int, len(orders))
 	shift := -int32(quoteDecimals) //nolint:gosec // decimals is small (typically 6); int→int32 cannot overflow
 	for _, o := range orders {
-		raw := o.PricePerRWAToken.Float64()
-		if raw <= 0 {
+		price := o.PricePerRWAToken.Decimal()
+		if !price.IsPositive() {
 			continue
 		}
 		ts, err := time.Parse(time.RFC3339, o.EndedAt)
 		if err != nil {
 			continue
 		}
-		price := decimal.NewFromFloat(raw)
 		if shift != 0 {
 			price = price.Shift(shift)
 		}

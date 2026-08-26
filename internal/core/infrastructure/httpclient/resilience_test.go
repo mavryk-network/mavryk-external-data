@@ -36,13 +36,14 @@ func TestCircuitBreakerTripsOn5xx(t *testing.T) {
 		calls++
 		return mkResp(500), nil
 	})
-	rt := WrapResilientTransport(base, ResilienceSettings{
+	s := ResilienceSettings{
 		Component:                      "test-cb-5xx",
 		RetryMaxAttempts:               1,
 		CBTripAfterConsecutiveFailures: 2,
 		CBInterval:                     time.Minute,
 		CBOpenTimeout:                  time.Minute,
-	})
+	}
+	rt := WrapCircuitBreaker(WrapResilientTransport(base, s), s)
 	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
 
 	for i := 0; i < 2; i++ {
@@ -65,13 +66,14 @@ func TestCircuitBreakerTripsOn5xx(t *testing.T) {
 // TestCircuitBreakerIgnores4xx: client errors must not open the breaker.
 func TestCircuitBreakerIgnores4xx(t *testing.T) {
 	base := rtFunc(func(_ *http.Request) (*http.Response, error) { return mkResp(400), nil })
-	rt := WrapResilientTransport(base, ResilienceSettings{
+	s := ResilienceSettings{
 		Component:                      "test-cb-4xx",
 		RetryMaxAttempts:               1,
 		CBTripAfterConsecutiveFailures: 2,
 		CBInterval:                     time.Minute,
 		CBOpenTimeout:                  time.Minute,
-	})
+	}
+	rt := WrapCircuitBreaker(WrapResilientTransport(base, s), s)
 	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
 	for i := 0; i < 5; i++ {
 		r, err := rt.RoundTrip(req)
