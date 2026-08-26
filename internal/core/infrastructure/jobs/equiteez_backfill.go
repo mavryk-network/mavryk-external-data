@@ -416,23 +416,6 @@ func (j *EquiteezBackfillJob) recordError(
 	return fetchErr
 }
 
-func (j *EquiteezBackfillJob) markDisabled(
-	ctx context.Context,
-	logger *zerolog.Logger,
-	st *repositories.BackfillState,
-	reason, detail string,
-) error {
-	st.Disabled = true
-	st.DisabledReason = reason
-	st.NextAttemptAt = nil
-	st.LastError = detail
-	if err := j.state.Upsert(ctx, st); err != nil {
-		return fmt.Errorf("persist disabled state: %w", err)
-	}
-	logger.Info().Str("reason", reason).Str("detail", detail).Msg("equiteez_backfill_pair_disabled")
-	return nil
-}
-
 // filterBackfillablePairs keeps enabled Equiteez pairs sorted by ID for a
 // stable per-tick order (helps log diffing during incident triage).
 func filterBackfillablePairs(in []prices.RWAPair) []prices.RWAPair {

@@ -219,7 +219,7 @@ func TestMBIOJWT_BuildFails_OnInvalidLocalPEM(t *testing.T) {
 
 // TestMBIOJWT_RejectsWeakLocalKey: keys below 2048 bits must refuse to build.
 func TestMBIOJWT_RejectsWeakLocalKey(t *testing.T) {
-	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	weak, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // deliberately weak: the test asserts this key size is rejected
 	require.NoError(t, err)
 	der, err := x509.MarshalPKIXPublicKey(&weak.PublicKey)
 	require.NoError(t, err)
