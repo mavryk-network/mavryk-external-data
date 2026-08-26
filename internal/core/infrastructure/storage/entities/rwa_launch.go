@@ -34,8 +34,9 @@ type RWALaunchEntity struct {
 	SaleEnd    *time.Time `gorm:"column:sale_end"`
 	SaleClosed *time.Time `gorm:"column:sale_closed"`
 
-	Enabled      bool      `gorm:"column:enabled;not null;default:true"`
-	LastSyncedAt time.Time `gorm:"column:last_synced_at;not null"`
+	Enabled        bool      `gorm:"column:enabled;not null;default:true"`
+	DisabledReason *string   `gorm:"column:disabled_reason"`
+	LastSyncedAt   time.Time `gorm:"column:last_synced_at;not null"`
 	CreatedAt    time.Time `gorm:"column:created_at;<-:false"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;not null"`
 }

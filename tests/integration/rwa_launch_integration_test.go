@@ -296,3 +296,54 @@ func TestBackfillState_ClearAutoDisabled(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, manual.Disabled, "an operator disable must survive ClearAutoDisabled")
 }
+
+// TestLaunchRepository_SyncDisableReenableCycle exercises migration 0020: a
+// sync soft-disable is stamped 'sync_missing' and undone when the launch
+// reappears upstream; an operator disable survives the same flow.
+func TestLaunchRepository_SyncDisableReenableCycle(t *testing.T) {
+	db := openGorm(t)
+	truncateLaunches(t, db)
+	repo := repositories.NewLaunchRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	mk := func(addr, base string) prices.RWALaunch {
+		return prices.RWALaunch{
+			Source: prices.SourceEquiteez, TokenAddr: addr, LaunchID: 7,
+			BaseSymbol: base, QuoteSymbol: "usdt", Status: "active",
+			Price:        decimal.RequireFromString("10"),
+			TotalBought:  decimal.Zero,
+			MaxAmountCap: decimal.RequireFromString("100"),
+		}
+	}
+	require.NoError(t, repo.Upsert(ctx, mk("KT1AAA", "aaa"), now))
+	require.NoError(t, repo.Upsert(ctx, mk("KT1BBB", "bbb"), now))
+	require.NoError(t, repo.Upsert(ctx, mk("KT1CCC", "ccc"), now))
+
+	// Operator hides ccc by hand (no reason recorded).
+	require.NoError(t, db.Exec(
+		"UPDATE rwa_launches SET enabled = FALSE WHERE token_addr = ?", "KT1CCC").Error)
+
+	// Sync view no longer contains bbb → sync-disabled with a reason.
+	disabled, err := repo.DisableMissingLaunches(ctx, prices.SourceEquiteez, []string{"KT1AAA"})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), disabled, "only enabled+missing rows are touched")
+
+	list, err := repo.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "aaa", list[0].BaseSymbol)
+
+	// bbb reappears upstream → the sync's own disable is undone on upsert.
+	require.NoError(t, repo.Upsert(ctx, mk("KT1BBB", "bbb"), now.Add(time.Hour)))
+	list, err = repo.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 2, "sync must undo its own soft-disable")
+
+	// ccc also comes through the same sync — operator disable must survive.
+	require.NoError(t, repo.Upsert(ctx, mk("KT1CCC", "ccc"), now.Add(time.Hour)))
+	var enabled bool
+	require.NoError(t, db.Raw(
+		"SELECT enabled FROM rwa_launches WHERE token_addr = ?", "KT1CCC").Scan(&enabled).Error)
+	require.False(t, enabled, "operator disables are never overridden by sync")
+}

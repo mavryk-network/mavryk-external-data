@@ -90,20 +90,43 @@ func SyncRWALaunches(
 
 	now := time.Now().UTC()
 	byToken := groupLaunchesByToken(rows)
-	stored, skipped := 0, 0
+	stored, skipped, upsertFailed := 0, 0, 0
+	keepAddrs := make([]string, 0, len(byToken))
 	for addr, tokenRows := range byToken {
 		launch, ok := buildLaunch(tokenRows, baseSymbols[addr], now)
 		if !ok {
+			// No usable launch (delisted / price broken) — deliberately NOT in
+			// keepAddrs, so the disable pass below retires the stored row
+			// instead of serving its last price as current forever.
 			skipped++
 			log.Debug().Str("token_addr", addr).Msg("rwa_launch_sync_skipped_no_usable_launch")
 			continue
 		}
 		if err := launches.Upsert(ctx, launch, now); err != nil {
-			skipped++
+			upsertFailed++
 			log.Error().Err(err).Str("token_addr", addr).Msg("rwa_launch_sync_upsert_failed")
 			continue
 		}
+		keepAddrs = append(keepAddrs, addr)
 		stored++
+	}
+
+	// Soft-disable launches missing from the view, under the same completeness
+	// guard as the pair sync: an empty/failed view must not wipe the catalog.
+	// Sync disables carry disabled_reason='sync_missing' and are undone by the
+	// next sync that sees the launch again.
+	var disabled int64
+	if shouldDisableMissingPairs(len(tokens), len(keepAddrs), upsertFailed) {
+		disabled, err = launches.DisableMissingLaunches(ctx, prices.SourceEquiteez, keepAddrs)
+		if err != nil {
+			return 0, fmt.Errorf("disable missing launches: %w", err)
+		}
+	} else if upsertFailed > 0 || len(keepAddrs) == 0 {
+		log.Warn().
+			Int("tokens", len(tokens)).
+			Int("stored", stored).
+			Int("upsert_failed", upsertFailed).
+			Msg("rwa_launch_sync_skipping_disable_incomplete_view")
 	}
 
 	log.Info().
@@ -111,6 +134,8 @@ func SyncRWALaunches(
 		Int("launches", len(rows)).
 		Int("stored", stored).
 		Int("skipped", skipped).
+		Int("upsert_failed", upsertFailed).
+		Int64("disabled_missing", disabled).
 		Msg("rwa_launch_sync_completed")
 	return stored, nil
 }

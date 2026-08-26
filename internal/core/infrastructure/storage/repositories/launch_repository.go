@@ -26,9 +26,10 @@ func NewLaunchRepository(db *gorm.DB) *LaunchRepository {
 
 // Upsert writes one launch, creating the row on first sight.
 //
-// `enabled` is set only on INSERT and never overwritten on conflict — same
-// contract as LookupRepository.UpsertRWAPair: it is the operator's kill-switch,
-// so a routine sync must not resurrect an asset someone deliberately hid.
+// `enabled` follows the LookupRepository.UpsertRWAPair contract: set on
+// INSERT, and re-set to true on conflict only for rows the sync itself
+// disabled (disabled_reason='sync_missing' — the launch is back upstream).
+// Operator disables (reason NULL/other) are never resurrected by a sync.
 func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now time.Time) error {
 	if l.Source == "" || l.TokenAddr == "" {
 		return fmt.Errorf("launch source and token_addr are required")
@@ -80,14 +81,48 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 	if l.QuoteAddr != "" {
 		updateCols = append(updateCols, "quote_addr")
 	}
+	set := clause.AssignmentColumns(updateCols)
+	set = append(set,
+		clause.Assignment{
+			Column: clause.Column{Name: "enabled"},
+			Value: gorm.Expr("CASE WHEN rwa_launches.disabled_reason = ? THEN TRUE ELSE rwa_launches.enabled END",
+				RWAPairDisabledReasonSyncMissing),
+		},
+		clause.Assignment{
+			Column: clause.Column{Name: "disabled_reason"},
+			Value: gorm.Expr("CASE WHEN rwa_launches.disabled_reason = ? THEN NULL ELSE rwa_launches.disabled_reason END",
+				RWAPairDisabledReasonSyncMissing),
+		},
+	)
 	res := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "source_code"}, {Name: "token_addr"}},
-		DoUpdates: clause.AssignmentColumns(updateCols),
+		DoUpdates: set,
 	}).Create(&e)
 	if res.Error != nil {
 		return fmt.Errorf("upsert rwa_launches: %w", res.Error)
 	}
 	return nil
+}
+
+// DisableMissingLaunches soft-disables every enabled launch for `source` whose
+// token_addr is NOT in keepAddrs, stamping disabled_reason='sync_missing' so a
+// later sync that sees the launch again re-enables it (see Upsert). Callers
+// must only pass a keep-set built from a complete, non-empty upstream view.
+func (r *LaunchRepository) DisableMissingLaunches(ctx context.Context, source prices.Source, keepAddrs []string) (int64, error) {
+	tx := r.db.WithContext(ctx).Model(&entities.RWALaunchEntity{}).
+		Where("source_code = ? AND enabled = ?", string(source), true)
+	if len(keepAddrs) > 0 {
+		tx = tx.Where("token_addr NOT IN ?", keepAddrs)
+	}
+	res := tx.Updates(map[string]any{
+		"enabled":         false,
+		"disabled_reason": RWAPairDisabledReasonSyncMissing,
+		"updated_at":      time.Now().UTC(),
+	})
+	if res.Error != nil {
+		return 0, fmt.Errorf("disable missing rwa_launches: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // EnabledLaunches returns every enabled launch for `source`, ordered by symbol
