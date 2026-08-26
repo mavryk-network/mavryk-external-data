@@ -107,6 +107,33 @@ func (r *BackfillStateRepository) ClearCaughtUp(ctx context.Context, source pric
 	return res.RowsAffected, nil
 }
 
+// ClearAutoDisabled re-enables every row for `source` that repeated errors
+// parked with disabled_reason='auto_disabled', returning how many were resumed.
+// Only older builds wrote that reason (current ones convert the error threshold
+// into a cooldown); without this a past provider outage keeps backfill dead
+// across deploys. Operator/terminal disables (manual, reached_floor) survive.
+func (r *BackfillStateRepository) ClearAutoDisabled(ctx context.Context, source prices.Source) (int64, error) {
+	if source == "" {
+		return 0, fmt.Errorf("source is required")
+	}
+	res := r.db.WithContext(ctx).
+		Model(&entities.BackfillStateEntity{}).
+		Where("source_code = ? AND disabled = ? AND disabled_reason = ?",
+			string(source), true, BackfillDisabledReasonAutoDisabled).
+		Updates(map[string]any{
+			"disabled":        false,
+			"disabled_reason": "",
+			"next_attempt_at": nil,
+			"error_count":     0,
+			"last_error":      "",
+			"updated_at":      time.Now().UTC(),
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("clear auto_disabled backfill_state: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // Upsert writes the current state, creating the row on first call. updated_at is
 // always stamped to NOW(UTC).
 //

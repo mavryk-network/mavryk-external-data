@@ -19,14 +19,25 @@ import (
 	"quotes/internal/metrics"
 
 	"github.com/rs/zerolog"
+	"github.com/sony/gobreaker"
 )
+
+// backfillErrorCooldown replaces the old permanent auto-disable: after
+// BackfillMaxErrors consecutive failures the entity rests this long, then
+// retries — so a transient provider outage can never kill backfill for good.
+const backfillErrorCooldown = 30 * time.Minute
+
+// breakerOpenRetryDelay paces retries while the shared circuit breaker is
+// open. Breaker-open reflects upstream health, not this entity, so it never
+// counts toward the error threshold.
+const breakerOpenRetryDelay = 30 * time.Second
 
 // CoinGeckoBackfillJob walks oldest_ts backwards from the live cursor towards
 // start_from (clamped by min_start_from). One step per token per tick.
 //
 // Persistent per-token state (backfill_state, keyed by (source=coingecko, token))
-// survives restarts; sticky `disabled` flag with reasons {reached_floor,
-// auto_disabled, manual} prevents re-flooding the API after terminal events.
+// survives restarts; sticky `disabled` flag with reasons {reached_floor, manual}
+// prevents re-flooding the API after terminal events.
 type CoinGeckoBackfillJob struct {
 	cfg     *config.Config
 	repo    apiprices.Repository
@@ -75,6 +86,13 @@ func (j *CoinGeckoBackfillJob) Start(ctx context.Context) {
 		return
 	}
 	j.tokens = tokens
+
+	// Self-heal rows permanently disabled by older builds' error threshold.
+	if resumed, err := j.state.ClearAutoDisabled(ctx, prices.SourceCoinGecko); err != nil {
+		j.logger.Warn().Err(err).Msg("backfill_clear_auto_disabled_failed")
+	} else if resumed > 0 {
+		j.logger.Info().Int64("tokens", resumed).Msg("backfill_resumed_auto_disabled_tokens")
+	}
 
 	for _, info := range tokens {
 		name := string(info.Symbol)
@@ -267,31 +285,43 @@ func (j *CoinGeckoBackfillJob) stepToken(ctx context.Context, info prices.TokenI
 	return nil
 }
 
-// recordError increments the error counter, computes backoff, persists state,
-// and (if threshold crossed) auto-disables. Always returns the original error.
+// recordError tracks a failed step: breaker-open pauses without counting, and
+// crossing the error threshold converts into a long cooldown (never a
+// permanent disable). Always returns the original error.
 func (j *CoinGeckoBackfillJob) recordError(
 	ctx context.Context,
 	logger *zerolog.Logger,
 	st *repositories.BackfillState,
 	fetchErr error,
 ) error {
-	st.ErrorCount++
 	st.LastError = truncateError(fetchErr)
 
+	if errors.Is(fetchErr, gobreaker.ErrOpenState) || errors.Is(fetchErr, gobreaker.ErrTooManyRequests) {
+		next := time.Now().UTC().Add(breakerOpenRetryDelay)
+		st.NextAttemptAt = &next
+		if perr := j.state.Upsert(ctx, st); perr != nil {
+			logger.Error().Err(perr).Msg("backfill_persist_failed_on_error")
+		}
+		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "breaker_open").Inc()
+		logger.Warn().Err(fetchErr).Msg("backfill_paused_breaker_open")
+		return fetchErr
+	}
+
+	st.ErrorCount++
 	threshold := j.cfg.Backfill.BackfillMaxErrors
 	if threshold > 0 && st.ErrorCount >= threshold {
-		st.Disabled = true
-		st.DisabledReason = repositories.BackfillDisabledReasonAutoDisabled
-		st.NextAttemptAt = nil
+		next := time.Now().UTC().Add(backfillErrorCooldown)
+		st.NextAttemptAt = &next
+		st.ErrorCount = 0
 		if perr := j.state.Upsert(ctx, st); perr != nil {
-			logger.Error().Err(perr).Msg("backfill_persist_failed_after_auto_disable")
+			logger.Error().Err(perr).Msg("backfill_persist_failed_after_cooldown")
 		}
 		metrics.BackfillAutoDisabledTotal.WithLabelValues(string(st.Source), st.EntityKey, "errors_threshold").Inc()
 		logger.Error().
 			Err(fetchErr).
-			Int("error_count", st.ErrorCount).
 			Int("threshold", threshold).
-			Msg("backfill_auto_disabled")
+			Dur("cooldown", backfillErrorCooldown).
+			Msg("backfill_cooldown_after_repeated_errors")
 		return fetchErr
 	}
 	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()

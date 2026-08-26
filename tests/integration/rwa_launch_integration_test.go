@@ -263,3 +263,36 @@ func TestBackfillState_CursorTsRoundTrip(t *testing.T) {
 	require.True(t, manual.Disabled, "an operator disable must survive ClearCaughtUp")
 	require.Equal(t, repositories.BackfillDisabledReasonManual, manual.DisabledReason)
 }
+
+// TestBackfillState_ClearAutoDisabled: rows bricked by the legacy error
+// threshold resume on deploy; manual disables survive.
+func TestBackfillState_ClearAutoDisabled(t *testing.T) {
+	db := openGorm(t)
+	require.NoError(t, db.Exec("TRUNCATE TABLE backfill_state").Error)
+	repo := repositories.NewBackfillStateRepository(db)
+	ctx := context.Background()
+
+	require.NoError(t, repo.Upsert(ctx, &repositories.BackfillState{
+		Source: prices.SourceCoinGecko, EntityKey: "mvrk",
+		Disabled: true, DisabledReason: repositories.BackfillDisabledReasonAutoDisabled,
+		ErrorCount: 5, LastError: "coingecko returned status 502",
+	}))
+	require.NoError(t, repo.Upsert(ctx, &repositories.BackfillState{
+		Source: prices.SourceCoinGecko, EntityKey: "usdt",
+		Disabled: true, DisabledReason: repositories.BackfillDisabledReasonManual,
+	}))
+
+	resumed, err := repo.ClearAutoDisabled(ctx, prices.SourceCoinGecko)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), resumed, "only the auto_disabled row should resume")
+
+	back, err := repo.Get(ctx, prices.SourceCoinGecko, "mvrk")
+	require.NoError(t, err)
+	require.False(t, back.Disabled)
+	require.Zero(t, back.ErrorCount)
+	require.Empty(t, back.LastError)
+
+	manual, err := repo.Get(ctx, prices.SourceCoinGecko, "usdt")
+	require.NoError(t, err)
+	require.True(t, manual.Disabled, "an operator disable must survive ClearAutoDisabled")
+}

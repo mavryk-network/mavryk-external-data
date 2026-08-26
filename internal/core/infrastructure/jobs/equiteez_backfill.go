@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/shopspring/decimal"
+	"github.com/sony/gobreaker"
 )
 
 // caughtUpRecheckInterval is how long a pair rests after the forward walk
@@ -107,14 +109,20 @@ func (j *EquiteezBackfillJob) Start(ctx context.Context) {
 		return
 	}
 
-	// Self-heal: earlier builds permanently disabled a pair on catch-up
-	// (disabled_reason=caught_up), so any pair frozen by that behaviour would
-	// stay dead across deploys. Resume them from their persisted cursor.
-	// Operator/terminal disables (manual, auto_disabled, reached_floor) survive.
+	// Self-heal: earlier builds permanently disabled pairs on catch-up
+	// (disabled_reason=caught_up) or after repeated errors (auto_disabled), so
+	// pairs frozen by that behaviour would stay dead across deploys. Resume
+	// them from their persisted cursor. Operator/terminal disables
+	// (manual, reached_floor) survive.
 	if resumed, err := j.state.ClearCaughtUp(ctx, prices.SourceEquiteez); err != nil {
 		j.logger.Warn().Err(err).Msg("equiteez_backfill_clear_caught_up_failed")
 	} else if resumed > 0 {
 		j.logger.Info().Int64("pairs", resumed).Msg("equiteez_backfill_resumed_caught_up_pairs")
+	}
+	if resumed, err := j.state.ClearAutoDisabled(ctx, prices.SourceEquiteez); err != nil {
+		j.logger.Warn().Err(err).Msg("equiteez_backfill_clear_auto_disabled_failed")
+	} else if resumed > 0 {
+		j.logger.Info().Int64("pairs", resumed).Msg("equiteez_backfill_resumed_auto_disabled_pairs")
 	}
 
 	tick := time.Duration(j.cfg.Equiteez.Backfill.TickSeconds) * time.Second
@@ -338,8 +346,9 @@ func advanceOrderCursor(orders []equiteez.OrderbookOrder) (equiteez.OrderCursor,
 	return out, found
 }
 
-// recordError increments the error counter, computes backoff, persists state,
-// and (if threshold crossed) auto-disables. Always returns the original error.
+// recordError tracks a failed step: breaker-open pauses without counting, and
+// crossing the error threshold converts into a long cooldown (never a
+// permanent disable). Always returns the original error.
 //
 // Mirrors CoinGeckoBackfillJob.recordError for behavioural symmetry.
 func (j *EquiteezBackfillJob) recordError(
@@ -348,23 +357,34 @@ func (j *EquiteezBackfillJob) recordError(
 	st *repositories.BackfillState,
 	fetchErr error,
 ) error {
-	st.ErrorCount++
 	st.LastError = truncateError(fetchErr)
 
+	if errors.Is(fetchErr, gobreaker.ErrOpenState) || errors.Is(fetchErr, gobreaker.ErrTooManyRequests) {
+		next := time.Now().UTC().Add(breakerOpenRetryDelay)
+		st.NextAttemptAt = &next
+		if perr := j.state.Upsert(ctx, st); perr != nil {
+			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_on_error")
+		}
+		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "breaker_open").Inc()
+		logger.Warn().Err(fetchErr).Msg("equiteez_backfill_paused_breaker_open")
+		return fetchErr
+	}
+
+	st.ErrorCount++
 	threshold := j.cfg.Equiteez.Backfill.BackfillMaxErrors
 	if threshold > 0 && st.ErrorCount >= threshold {
-		st.Disabled = true
-		st.DisabledReason = repositories.BackfillDisabledReasonAutoDisabled
-		st.NextAttemptAt = nil
+		next := time.Now().UTC().Add(backfillErrorCooldown)
+		st.NextAttemptAt = &next
+		st.ErrorCount = 0
 		if perr := j.state.Upsert(ctx, st); perr != nil {
-			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_after_auto_disable")
+			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_after_cooldown")
 		}
 		metrics.BackfillAutoDisabledTotal.WithLabelValues(string(st.Source), st.EntityKey, "errors_threshold").Inc()
 		logger.Error().
 			Err(fetchErr).
-			Int("error_count", st.ErrorCount).
 			Int("threshold", threshold).
-			Msg("equiteez_backfill_auto_disabled")
+			Dur("cooldown", backfillErrorCooldown).
+			Msg("equiteez_backfill_cooldown_after_repeated_errors")
 		return fetchErr
 	}
 	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
