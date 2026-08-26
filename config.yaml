@@ -32,13 +32,15 @@ server:
     burst: 0
     per_ip: true
 
+# No password / ssl_mode here: this file is baked into the production image.
+# Local dev falls back to the in-code defaults (postgres / prefer); deployed
+# envs must set POSTGRES_PASSWORD (+ POSTGRES_SSL) — effective release mode
+# refuses well-known default passwords at startup.
 database:
   host: "localhost"
   port: "5432"
   user: "postgres"
-  password: "postgres"
   name: "quotes"
-  ssl_mode: "disable"
   # Pool tuning. 0 = driver default; production should set explicit values.
   max_open_conns: 25
   max_idle_conns: 5

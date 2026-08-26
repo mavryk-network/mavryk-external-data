@@ -357,18 +357,20 @@ func requireSecureJWKSBase(base string) error {
 // default credentials or with RWA auth disabled. Caught at config-load so the
 // operator sees a clear error instead of a deploy that silently leaks behind a
 // default password or serves RWA data on the public listener with no token.
+//
+// Gates on the EFFECTIVE gin mode: an empty gin_mode on a non-localhost host
+// runs release at the HTTP layer, so it must be treated as production here too.
 func (c *Config) validateProductionSafety() error {
-	if !strings.EqualFold(strings.TrimSpace(c.Server.GinMode), "release") {
+	if c.Server.EffectiveGinMode() != "release" {
 		return nil
 	}
 	// Auth off on the public listener in release mode exposes every /v1/rwa/*
 	// and /v1/pairs/rwa route without a token. Disabling auth is a dev/CI-only
-	// convenience (AUTH_ENABLED=false); refuse it when the operator has
-	// explicitly declared production via gin_mode=release.
+	// convenience (AUTH_ENABLED=false); refuse it in effective release mode.
 	if !c.Auth.JWTVerificationEnabled() {
-		return fmt.Errorf("auth is disabled (auth.enabled=false / AUTH_ENABLED=false) while server.gin_mode=release; " +
+		return fmt.Errorf("auth is disabled (auth.enabled=false / AUTH_ENABLED=false) while the effective gin mode is release; " +
 			"RWA routes would be served unauthenticated on the public listener. Enable auth (unset AUTH_ENABLED or set it true) " +
-			"or run a non-release gin_mode for dev/CI")
+			"or set SERVER_GIN_MODE=debug for dev/CI")
 	}
 	insecure := map[string]bool{
 		"postgres": true,

@@ -184,20 +184,11 @@ func launchResolver(r *repositories.LaunchRepository) handlers.RWALaunchResolver
 }
 
 func configureGinMode(cfg *config.Config) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Server.GinMode)) {
+	switch cfg.Server.EffectiveGinMode() {
 	case "debug":
 		gin.SetMode(gin.DebugMode)
-	case "release":
-		gin.SetMode(gin.ReleaseMode)
 	case "test":
 		gin.SetMode(gin.TestMode)
-	case "":
-		h := strings.TrimSpace(cfg.Server.Host)
-		if h == "localhost" || h == "127.0.0.1" {
-			gin.SetMode(gin.DebugMode)
-		} else {
-			gin.SetMode(gin.ReleaseMode)
-		}
 	default:
 		gin.SetMode(gin.ReleaseMode)
 	}

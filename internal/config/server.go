@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // ServerConfig holds HTTP server bind options and response-cache settings.
 type ServerConfig struct {
 	Port string `yaml:"port"`
@@ -46,6 +48,30 @@ type ServerConfig struct {
 	// returns them with is_stale=true. /distribution always excludes stale
 	// rows regardless of caller flag. 0 means use the in-code default (1h).
 	TickerStaleAfter DurationYAML `yaml:"ticker_stale_after"`
+}
+
+// EffectiveGinMode resolves GinMode to the mode the HTTP layer actually runs:
+// explicit debug/release/test are honored; empty derives from the bind host
+// (localhost → debug, anything else → release); unknown values → release.
+// Load writes the resolved value back so every consumer (gin setup, safety
+// validators, dev-default warnings) agrees on what "production" means.
+func (s ServerConfig) EffectiveGinMode() string {
+	switch strings.ToLower(strings.TrimSpace(s.GinMode)) {
+	case "debug":
+		return "debug"
+	case "test":
+		return "test"
+	case "release":
+		return "release"
+	case "":
+		h := strings.TrimSpace(s.Host)
+		if h == "localhost" || h == "127.0.0.1" {
+			return "debug"
+		}
+		return "release"
+	default:
+		return "release"
+	}
 }
 
 // ServerRateLimitConfig controls inbound HTTP throttling.

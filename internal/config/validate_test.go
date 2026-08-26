@@ -16,6 +16,7 @@ func TestValidateProductionSafety_AuthGuard(t *testing.T) {
 	tests := []struct {
 		name       string
 		ginMode    string
+		host       string
 		authEnable *bool
 		dbPassword string
 		wantErr    bool
@@ -59,11 +60,30 @@ func TestValidateProductionSafety_AuthGuard(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name:       "empty gin_mode + auth disabled -> ok (not explicitly production)",
+			name:       "empty gin_mode + localhost host + auth disabled -> ok (derived debug)",
 			ginMode:    "",
+			host:       "localhost",
 			authEnable: boolPtr(false),
 			dbPassword: "postgres",
 			wantErr:    false,
+		},
+		{
+			name:       "empty gin_mode + 0.0.0.0 host + auth disabled -> refuse (derived release)",
+			ginMode:    "",
+			host:       "0.0.0.0",
+			authEnable: boolPtr(false),
+			dbPassword: "s3cret-strong",
+			wantErr:    true,
+			errSubstr:  "auth is disabled",
+		},
+		{
+			name:       "empty gin_mode + 0.0.0.0 host + default db password -> refuse (derived release)",
+			ginMode:    "",
+			host:       "0.0.0.0",
+			authEnable: nil,
+			dbPassword: "postgres",
+			wantErr:    true,
+			errSubstr:  "database.password",
 		},
 	}
 
@@ -71,6 +91,7 @@ func TestValidateProductionSafety_AuthGuard(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Config{}
 			c.Server.GinMode = tc.ginMode
+			c.Server.Host = tc.host
 			c.Auth.Enabled = tc.authEnable
 			c.Database.Password = tc.dbPassword
 

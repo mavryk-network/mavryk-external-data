@@ -11,6 +11,7 @@ func setDefaults(config *Config) {
 	if config.Server.Host == "" {
 		config.Server.Host = "0.0.0.0"
 	}
+	config.Server.GinMode = config.Server.EffectiveGinMode()
 	if config.Server.ReadTimeout == 0 {
 		config.Server.ReadTimeout = DurationYAML(30 * time.Second)
 	}

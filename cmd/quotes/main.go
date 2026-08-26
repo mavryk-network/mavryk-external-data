@@ -12,7 +12,6 @@ import (
 	stdhttp "net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -224,11 +223,11 @@ func run() int {
 	return 0
 }
 
-// warnDevDefaults logs warnings when production-looking config (gin_mode=release)
-// still leans on dev defaults that wouldn't survive an audit. Hard rejects (e.g.
-// default postgres password) live in Validate; here we only nudge.
+// warnDevDefaults logs warnings when production-looking config (effective
+// release mode) still leans on dev defaults that wouldn't survive an audit.
+// Hard rejects (e.g. default postgres password) live in Validate; here we only nudge.
 func warnDevDefaults(cfg *config.Config, logger *zerolog.Logger) {
-	if !strings.EqualFold(strings.TrimSpace(cfg.Server.GinMode), "release") {
+	if cfg.Server.EffectiveGinMode() != "release" {
 		return
 	}
 	if cfg.Server.RateLimit.RPS <= 0 {
