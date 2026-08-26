@@ -8,6 +8,3 @@
 -- while operator disables (reason NULL/other) survive every sync.
 
 ALTER TABLE rwa_launches ADD COLUMN IF NOT EXISTS disabled_reason TEXT;
-
-COMMENT ON COLUMN rwa_launches.disabled_reason IS
-    'Why enabled=false: ''sync_missing'' = auto-disabled by the launch sync (re-enabled automatically when the launch reappears upstream); NULL/other = operator decision, never touched by the sync.';
