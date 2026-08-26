@@ -124,9 +124,15 @@ func (r *TickerRepository) SaveSnapshot(
 //	        AND exchange_id  = latest.exchange_id
 //	        AND target_symbol = latest.target_symbol
 //	        AND ts <= latest.ts - INTERVAL '24 hours'
+//	        AND ts >= latest.ts - INTERVAL '25 hours'
 //	      ORDER BY ts DESC LIMIT 1
 //	  ) ago ON true
 //	  ORDER BY latest.last_price * COALESCE(latest.volume_24h_base, 0) DESC;
+//
+// The anchor bracket [ts-25h, ts-24h] mirrors Period.AnchorWindow's 1h budget:
+// without the lower bound an ingestion gap would anchor "24h ago" on a row
+// arbitrarily far back and report a multi-week move as a 24h change. No row in
+// the bracket → change_24h_pct is null.
 //
 // All filters parameterised. is_stale derived in Go from the returned `ts`
 // against the caller's StaleAfter window.
@@ -176,6 +182,7 @@ SELECT
          AND exchange_id   = latest.exchange_id
          AND target_symbol = latest.target_symbol
          AND ts <= latest.ts - INTERVAL '24 hours'
+         AND ts >= latest.ts - INTERVAL '25 hours'
        ORDER BY ts DESC LIMIT 1
   ) ago ON TRUE
   ORDER BY (latest.last_price * COALESCE(latest.volume_24h_base, 0)) DESC NULLS LAST,
