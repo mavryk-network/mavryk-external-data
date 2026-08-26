@@ -8,9 +8,6 @@ package config
 type RWAConfig struct {
 	Enabled         bool `yaml:"enabled"`
 	IntervalSeconds int  `yaml:"interval_seconds"`
-	// Concurrency bounds the number of pairs polled in parallel each tick.
-	// 0 = unlimited (no semaphore); production should pin to e.g. 4–8.
-	Concurrency int `yaml:"concurrency"`
 	// PairSyncIntervalSeconds is how often the Equiteez allowlist is re-read
 	// into rwa_pairs (RWAPairSyncJob). Discovery latency for a newly listed
 	// asset is bounded by this. 0 = in-code default (1h).

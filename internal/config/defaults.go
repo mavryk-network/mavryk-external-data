@@ -138,9 +138,6 @@ func setDefaults(config *Config) {
 		// (rare) or raise to reduce storage pressure on idle markets.
 		config.RWA.IntervalSeconds = 10
 	}
-	if config.RWA.Concurrency == 0 && config.RWA.Enabled {
-		config.RWA.Concurrency = 4
-	}
 	if config.RWA.PairSyncIntervalSeconds == 0 && config.RWA.Enabled {
 		// Hourly: listings are rare, and one GraphQL query per hour is free.
 		config.RWA.PairSyncIntervalSeconds = 3600

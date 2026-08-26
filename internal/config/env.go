@@ -317,14 +317,6 @@ func overrideWithEnv(config *Config) error {
 		}
 		config.RWA.PairSyncIntervalSeconds = val
 	}
-	if v := os.Getenv("RWA_CONCURRENCY"); v != "" {
-		val, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("RWA_CONCURRENCY: invalid int %q: %w", v, err)
-		}
-		config.RWA.Concurrency = val
-	}
-
 	if v := os.Getenv("TICKERS_ENABLED"); v != "" {
 		val, err := strconv.ParseBool(v)
 		if err != nil {

@@ -83,6 +83,13 @@ func tickBudget(interval time.Duration) time.Duration {
 	return floor
 }
 
+// defaultJitter staggers the first tick across replicas: a tenth of the
+// interval breaks fleet-synchronized upstream hammering after a coordinated
+// restart without materially delaying the first collection.
+func defaultJitter(interval time.Duration) time.Duration {
+	return interval / 10
+}
+
 // runTickWithCorrelation injects a fresh tick_id into ctx (re-using the
 // request_id key so logging.RequestLogger and HTTPTransport pick it up
 // transparently) and recovers from a panic in the tick.

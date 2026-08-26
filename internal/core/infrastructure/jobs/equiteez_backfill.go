@@ -214,10 +214,18 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 	quoteDecimals, ok := lookupQuoteDecimals(pair.QuoteSymbol)
 	if !ok {
 		// Without decimals we'd write raw smallest-unit prices into the table.
-		// Mark disabled so we don't loop forever; operator must add the quote
-		// symbol to `tokens` before re-enabling.
-		return j.markDisabled(ctx, &logger, st, repositories.BackfillDisabledReasonManual,
-			fmt.Sprintf("unknown quote symbol %q in tokens registry", pair.QuoteSymbol))
+		// Rest and retry rather than permanently disabling under a misleading
+		// 'manual' reason: the registry is loaded at startup, so registering the
+		// quote token heals this on the next deploy with no operator SQL (the
+		// live collector likewise just skips such pairs).
+		next := now.Add(backfillErrorCooldown)
+		st.NextAttemptAt = &next
+		st.LastError = fmt.Sprintf("unknown quote symbol %q in tokens registry", pair.QuoteSymbol)
+		if perr := j.state.Upsert(ctx, st); perr != nil {
+			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_on_error")
+		}
+		logger.Warn().Str("quote_symbol", pair.QuoteSymbol).Msg("equiteez_backfill_paused_unknown_quote")
+		return nil
 	}
 
 	startFrom, err := parseBackfillTime(j.cfg.Equiteez.Backfill.StartFrom)

@@ -9,11 +9,17 @@ import (
 	apiprices "quotes/internal/core/application/prices"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/interactions/coingecko"
+	"quotes/internal/core/infrastructure/storage/repositories"
 	"quotes/internal/logging"
 	"quotes/internal/metrics"
 
 	"github.com/rs/zerolog"
 )
+
+// maxLiveCatchup caps how far back a live tick may extend to cover an outage
+// gap: 24h keeps it to one CoinGecko request at hourly-granularity worst case;
+// anything older is the backfill job's territory.
+const maxLiveCatchup = 24 * time.Hour
 
 // CoinGeckoLiveJob polls CoinGecko on a per-token ticker and writes the freshest
 // window into token_prices via the application Repository. It never does
@@ -24,9 +30,10 @@ import (
 // later ticks queue up rather than fanning out N parallel CoinGecko calls. 0
 // disables the cap (legacy "one goroutine per token, all concurrent").
 type CoinGeckoLiveJob struct {
-	cfg    *config.Config
-	repo   apiprices.Repository
-	logger *zerolog.Logger
+	cfg     *config.Config
+	repo    apiprices.Repository
+	tokenRO *repositories.TokenPriceRepository
+	logger  *zerolog.Logger
 
 	tokens     []prices.TokenInfo
 	collectors map[string]*tokenCollector
@@ -44,7 +51,9 @@ type tokenCollector struct {
 
 // NewCoinGeckoLiveJob wires the job. Tokens come from the in-process registry
 // (loaded from `tokens` table at startup) — config only filters & sets cadence.
-func NewCoinGeckoLiveJob(cfg *config.Config, repo apiprices.Repository, log *zerolog.Logger) *CoinGeckoLiveJob {
+// tokenRO (optional) lets each tick anchor its window on the last stored point
+// so outages longer than the lookback don't leave permanent holes.
+func NewCoinGeckoLiveJob(cfg *config.Config, repo apiprices.Repository, tokenRO *repositories.TokenPriceRepository, log *zerolog.Logger) *CoinGeckoLiveJob {
 	if log == nil {
 		nop := zerolog.Nop()
 		log = &nop
@@ -56,6 +65,7 @@ func NewCoinGeckoLiveJob(cfg *config.Config, repo apiprices.Repository, log *zer
 	return &CoinGeckoLiveJob{
 		cfg:        cfg,
 		repo:       repo,
+		tokenRO:    tokenRO,
 		logger:     logging.WithComponent(log, "coingecko_live_job"),
 		collectors: make(map[string]*tokenCollector),
 		sem:        sem,
@@ -95,7 +105,7 @@ func (j *CoinGeckoLiveJob) Start(ctx context.Context) {
 
 		interval := j.cfg.GetTokenInterval(name)
 		safeGo(&j.wg, j.logger, "live:"+name, func() {
-			runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "live", func(c context.Context) {
+			runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "live", func(c context.Context) {
 				j.collectOnce(c, col)
 			})
 		})
@@ -108,9 +118,11 @@ func (j *CoinGeckoLiveJob) Stop() {
 	j.wg.Wait()
 }
 
-// collectOnce fetches the live window [max(last_ts, now-lookback) .. now] and
-// persists any new points. Acquires the global concurrency slot before doing
-// any work; releases it on return.
+// collectOnce fetches the live window and persists any new points. The window
+// is [now-lookback .. now], extended back to the last stored point (capped at
+// maxLiveCatchup) when an outage outlasted the lookback — otherwise that gap
+// would stay unfilled forever (the backfill only walks older than the live
+// anchor). Acquires the global concurrency slot before doing any work.
 func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector) {
 	tokenName := string(col.info.Symbol)
 	logger := j.logger.With().Str("token", tokenName).Logger()
@@ -141,10 +153,18 @@ func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector)
 	}
 
 	now := time.Now().UTC()
-	minWindowStart := now.Add(-lookback)
-
-	from := minWindowStart
+	from := now.Add(-lookback)
 	to := now
+
+	if j.tokenRO != nil {
+		if s, sErr := j.tokenRO.LatestTimestamp(ctx, prices.SourceCoinGecko, tokenName); sErr == nil && s.Found && s.TS.Before(from) {
+			from = s.TS
+			if floor := now.Add(-maxLiveCatchup); from.Before(floor) {
+				from = floor
+			}
+			logger.Info().Time("from", from).Msg("live_window_extended_to_last_stored")
+		}
+	}
 
 	minRange := time.Duration(col.cfg.MinTimeRangeSeconds) * time.Second
 	if minRange <= 0 {

@@ -84,7 +84,7 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 	// resolved per tick (see collectTick), so a pair discovered later — by the
 	// periodic RWAPairSyncJob or by an operator — is picked up without a restart.
 	safeGo(&j.wg, j.logger, "rwa", func() {
-		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "rwa", func(c context.Context) {
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa", func(c context.Context) {
 			j.collectTick(c)
 		})
 	})

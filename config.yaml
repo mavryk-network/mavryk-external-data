@@ -111,7 +111,6 @@ backfill:
 rwa:
   enabled: false
   interval_seconds: 60
-  concurrency: 4
   # How often the Equiteez allowlist is re-read into rwa_pairs. Bounds how long
   # a newly listed asset stays invisible; the collector re-reads rwa_pairs every
   # tick, so no restart is involved. 0 = in-code default (3600).

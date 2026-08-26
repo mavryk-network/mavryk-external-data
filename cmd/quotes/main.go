@@ -135,7 +135,7 @@ func run() int {
 		return 1
 	}
 
-	liveJob := jobs.NewCoinGeckoLiveJob(cfg, tokenAppRepo, logger)
+	liveJob := jobs.NewCoinGeckoLiveJob(cfg, tokenAppRepo, tokenRepo, logger)
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)

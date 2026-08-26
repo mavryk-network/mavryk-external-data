@@ -76,7 +76,7 @@ func (j *RWAPairSyncJob) Start(ctx context.Context) {
 	j.logger.Info().Dur("interval", interval).Msg("rwa_pair_sync_job_starting")
 
 	safeGo(&j.wg, j.logger, "rwa_pair_sync", func() {
-		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "rwa_pair_sync", func(c context.Context) {
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa_pair_sync", func(c context.Context) {
 			j.syncOnce(c)
 		})
 	})
