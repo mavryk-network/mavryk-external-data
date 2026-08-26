@@ -137,6 +137,9 @@ func NewApp(deps AppDeps) (*App, error) {
 		} else {
 			publicEngine.GET("/metrics", gin.WrapH(promhttp.Handler()))
 		}
+		if cfg.Server.PprofEnabled {
+			appLogger.Warn().Msg("pprof_requires_internal_listener_set_internal_port")
+		}
 		return app, nil
 	}
 
@@ -229,9 +232,6 @@ func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
 		router.Use(httpmw.HandlerTimeout(to))
 	}
-	if cfg.Server.PprofEnabled {
-		httpmw.RegisterPprof(router)
-	}
 	return router
 }
 
@@ -249,6 +249,11 @@ func buildInternalEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine
 	router.Use(gin.Recovery())
 	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
 		router.Use(httpmw.HandlerTimeout(to))
+	}
+	// pprof discloses stack traces, heap layout and lets anyone pin a CPU for
+	// 30s per profile request — internal listener only, never the public one.
+	if cfg.Server.PprofEnabled {
+		httpmw.RegisterPprof(router)
 	}
 	return router
 }
