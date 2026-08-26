@@ -28,7 +28,9 @@ type candleSource struct {
 // the simplest correct aggregation for the "incomplete bucket" hint the UI
 // surfaces (see ADR-0015).
 //
-// Caller appends ORDER BY bucket ASC and an optional LIMIT.
+// ORDER BY bucket DESC so that LIMIT keeps the NEWEST buckets — both in
+// latest mode (no window) and when a window holds more buckets than the
+// limit. Callers reverse the rows to restore ascending wire order.
 func buildCandleSQL(src candleSource, where string) string {
 	if src.rebucket == "" {
 		return fmt.Sprintf(`SELECT bucket,
@@ -39,7 +41,7 @@ func buildCandleSQL(src candleSource, where string) string {
 		            samples
 		 FROM %s
 		WHERE %s
-		ORDER BY bucket ASC`, src.view, where)
+		ORDER BY bucket DESC`, src.view, where)
 	}
 	return fmt.Sprintf(`SELECT
 		            time_bucket('%s', bucket)        AS bucket,
@@ -51,5 +53,5 @@ func buildCandleSQL(src candleSource, where string) string {
 		 FROM %s
 		WHERE %s
 		GROUP BY 1
-		ORDER BY 1 ASC`, src.rebucket, src.view, where)
+		ORDER BY 1 DESC`, src.rebucket, src.view, where)
 }

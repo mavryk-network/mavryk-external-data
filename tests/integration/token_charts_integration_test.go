@@ -278,6 +278,81 @@ func TestQueryCandles_1h_TwoBuckets_OrderASC(t *testing.T) {
 	require.True(t, candles[1].Close.Equal(dec("11.00")))
 }
 
+// --- Latest mode (no window): LIMIT must keep the NEWEST buckets ---
+
+func TestQueryCandles_LatestMode_ReturnsNewestBuckets(t *testing.T) {
+	db := openGorm(t)
+	truncateTokenPrices(t, db)
+	repo := repositories.NewTokenPriceRepository(db)
+
+	bk := time.Date(2026, 5, 1, 8, 0, 0, 0, time.UTC)
+	pts := make([]prices.PricePoint, 0, 5)
+	for i := 0; i < 5; i++ {
+		pts = append(pts, prices.PricePoint{
+			Source:    prices.SourceCoinGecko,
+			EntityKey: "mvrk",
+			Timestamp: bk.Add(time.Duration(i) * time.Hour),
+			Metric:    "usd",
+			Price:     dec("10.00").Add(decimal.NewFromInt(int64(i))),
+		})
+	}
+	_, err := repo.Save(context.Background(), pts)
+	require.NoError(t, err)
+	refreshCA(t, db, "token_prices_1h")
+
+	candles, err := repo.QueryCandles(context.Background(), apiprices.CandleQuery{
+		EntityKey: "mvrk",
+		AuxKey:    "coingecko|usd",
+		Interval:  apiprices.Interval1h,
+		Limit:     3,
+	})
+	require.NoError(t, err)
+	require.Len(t, candles, 3)
+
+	require.True(t, candles[0].Bucket.Equal(bk.Add(2*time.Hour)),
+		"latest mode must drop the oldest buckets, got first=%s", candles[0].Bucket)
+	require.True(t, candles[2].Bucket.Equal(bk.Add(4*time.Hour)),
+		"latest mode must include the newest bucket, got last=%s", candles[2].Bucket)
+	require.True(t, candles[0].Bucket.Before(candles[1].Bucket))
+	require.True(t, candles[1].Bucket.Before(candles[2].Bucket))
+}
+
+// --- Windowed + limit: truncation drops the OLDEST buckets, not the newest ---
+
+func TestQueryCandles_WindowLimit_KeepsNewestBuckets(t *testing.T) {
+	db := openGorm(t)
+	truncateTokenPrices(t, db)
+	repo := repositories.NewTokenPriceRepository(db)
+
+	bk := time.Date(2026, 5, 2, 8, 0, 0, 0, time.UTC)
+	pts := make([]prices.PricePoint, 0, 4)
+	for i := 0; i < 4; i++ {
+		pts = append(pts, prices.PricePoint{
+			Source:    prices.SourceCoinGecko,
+			EntityKey: "mvrk",
+			Timestamp: bk.Add(time.Duration(i) * time.Hour),
+			Metric:    "usd",
+			Price:     dec("20.00").Add(decimal.NewFromInt(int64(i))),
+		})
+	}
+	_, err := repo.Save(context.Background(), pts)
+	require.NoError(t, err)
+	refreshCA(t, db, "token_prices_1h")
+
+	candles, err := repo.QueryCandles(context.Background(), apiprices.CandleQuery{
+		EntityKey: "mvrk",
+		AuxKey:    "coingecko|usd",
+		Interval:  apiprices.Interval1h,
+		From:      bk.Add(-time.Minute),
+		To:        bk.Add(5 * time.Hour),
+		Limit:     2,
+	})
+	require.NoError(t, err)
+	require.Len(t, candles, 2)
+	require.True(t, candles[0].Bucket.Equal(bk.Add(2*time.Hour)))
+	require.True(t, candles[1].Bucket.Equal(bk.Add(3*time.Hour)))
+}
+
 // --- Currency / source isolation ---
 
 func TestQueryCandles_FiltersByCurrency(t *testing.T) {

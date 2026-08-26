@@ -37,7 +37,7 @@ type chartTokenRequest struct {
 // Series — GET /v1/prices/:token/series
 //
 // Returns one (timestamp, close) point per bucket. Empty range ⇒ latest
-// mode (the underlying CA SELECT runs ORDER BY bucket ASC + LIMIT N).
+// mode: the newest N buckets, served in ascending order.
 func (d TokenChartDeps) Series() gin.HandlerFunc {
 	bind := d.bindChart()
 	action := func(ctx context.Context, req chartTokenRequest) (SeriesDTO, error) {

@@ -195,9 +195,10 @@ func (r *RWAPriceRepository) QueryCandles(
 		return nil, fmt.Errorf("query %s: %w", src.view, err)
 	}
 
+	// Rows arrive newest-first (see buildCandleSQL); reverse to ascending.
 	out := make([]apiprices.Candle, len(rows))
 	for i, rec := range rows {
-		out[i] = apiprices.Candle{
+		out[len(rows)-1-i] = apiprices.Candle{
 			Bucket:  rec.Bucket.UTC(),
 			Open:    rec.OpenPrice,
 			High:    rec.HighPrice,
