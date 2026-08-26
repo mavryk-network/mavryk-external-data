@@ -103,7 +103,12 @@ func buildKeyFunc(cfg *config.AuthConfig, log *zerolog.Logger) (jwt.Keyfunc, err
 		if err != nil {
 			return nil, fmt.Errorf("local jwt verify public key: %w", err)
 		}
-		log.Debug().Msg("jwt_verify_mode=local_rsa_public_key")
+		if bits := pub.N.BitLen(); bits < 2048 {
+			return nil, fmt.Errorf("local jwt verify public key is %d-bit RSA; refusing keys below 2048 bits", bits)
+		}
+		// Warn, not Debug: this swaps the JWKS trust anchor for a static key,
+		// which must be loudly visible if it ever reaches a deployed env.
+		log.Warn().Msg("jwt_verify_mode=local_rsa_public_key_jwks_bypassed")
 		return func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])

@@ -322,6 +322,13 @@ func (c *Config) validateAuth() error {
 		return fmt.Errorf("auth.jwks_cache_ttl must be >= 0, got %s", a.JWKSCacheTTL)
 	}
 	if a.LocalJWTVerifyConfigured() {
+		// Local-key mode swaps the MBIO JWKS trust anchor for whatever key the
+		// env carries — a leaked CI var reaching prod would silently accept
+		// attacker-minted tokens. Dev/CI only; refuse it in effective release.
+		if c.Server.EffectiveGinMode() == "release" {
+			return fmt.Errorf("auth.jwt_local_verify_public_key (AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY) is set while the effective gin mode is release; " +
+				"local-key verification bypasses the MBIO JWKS trust anchor and is dev/CI-only — unset it or set SERVER_GIN_MODE=debug for dev")
+		}
 		pemBytes, err := a.LocalJWTVerifyPublicKeyPEMBytes()
 		if err != nil {
 			return err
@@ -329,8 +336,8 @@ func (c *Config) validateAuth() error {
 		if len(pemBytes) == 0 {
 			return fmt.Errorf("auth.jwt_local_verify_public_key is empty after base64 decode (AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY)")
 		}
-		// Deeper PEM validity (ParseRSAPublicKeyFromPEM) happens at middleware
-		// build time — keeps validate.go free of the JWT dep.
+		// Deeper PEM validity + the 2048-bit floor (ParseRSAPublicKeyFromPEM)
+		// happen at middleware build time — keeps validate.go free of the JWT dep.
 		return nil
 	}
 	base := strings.TrimSpace(a.MBIOJWTBaseURL)

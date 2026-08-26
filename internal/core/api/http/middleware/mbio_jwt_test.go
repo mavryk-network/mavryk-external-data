@@ -1,8 +1,12 @@
 package middleware_test
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -211,4 +215,22 @@ func TestMBIOJWT_BuildFails_OnInvalidLocalPEM(t *testing.T) {
 	logger := zerolog.Nop()
 	_, err := httpmw.MBIOJWT(cfg, &logger)
 	require.Error(t, err)
+}
+
+// TestMBIOJWT_RejectsWeakLocalKey: keys below 2048 bits must refuse to build.
+func TestMBIOJWT_RejectsWeakLocalKey(t *testing.T) {
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(&weak.PublicKey)
+	require.NoError(t, err)
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+
+	cfg := &config.AuthConfig{
+		MBIOJWTIssuer:                 testIssuer,
+		JWTLocalVerifyPublicKeyBase64: base64.StdEncoding.EncodeToString(pemBytes),
+	}
+	log := zerolog.Nop()
+	_, err = httpmw.MBIOJWT(cfg, &log)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "2048")
 }
