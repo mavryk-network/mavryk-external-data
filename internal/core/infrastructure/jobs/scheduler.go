@@ -48,7 +48,8 @@ func runTickerLoop(
 		}
 	}
 
-	runTickWithCorrelation(ctx, logger, name, tick)
+	budget := tickBudget(interval)
+	runTickWithCorrelation(ctx, budget, logger, name, tick)
 
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -65,9 +66,21 @@ func runTickerLoop(
 			}
 			return
 		case <-t.C:
-			runTickWithCorrelation(ctx, logger, name, tick)
+			runTickWithCorrelation(ctx, budget, logger, name, tick)
 		}
 	}
+}
+
+// tickBudget bounds one tick: without a deadline a TCP black hole or a
+// lock-blocked query stalls the (single-goroutine) job silently forever, and
+// Stop() blocks shutdown until SIGKILL. Generous — max(2×interval, 5m) — so
+// slow-but-progressing work (backfill CAGG refreshes) never gets cut.
+func tickBudget(interval time.Duration) time.Duration {
+	const floor = 5 * time.Minute
+	if b := 2 * interval; b > floor {
+		return b
+	}
+	return floor
 }
 
 // runTickWithCorrelation injects a fresh tick_id into ctx (re-using the
@@ -79,9 +92,14 @@ func runTickerLoop(
 // stopping the job (for the shared backfill goroutine, ALL tokens/pairs) until
 // process restart. Recovering per tick logs + counts the panic and lets the
 // loop keep running; safeGo's recover stays as a last resort.
-func runTickWithCorrelation(ctx context.Context, logger *zerolog.Logger, name string, tick func(context.Context)) {
+func runTickWithCorrelation(ctx context.Context, timeout time.Duration, logger *zerolog.Logger, name string, tick func(context.Context)) {
 	tickID := "tick-" + uuid.NewString()
 	tickCtx := logging.WithRequestID(ctx, tickID)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		tickCtx, cancel = context.WithTimeout(tickCtx, timeout)
+		defer cancel()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.JobTickPanicsTotal.WithLabelValues(name).Inc()
@@ -91,6 +109,7 @@ func runTickWithCorrelation(ctx context.Context, logger *zerolog.Logger, name st
 		}
 	}()
 	tick(tickCtx)
+	metrics.JobLastSuccessTimestamp.WithLabelValues(name).SetToCurrentTime()
 }
 
 // safeGo runs f in a new goroutine with panic-recovery, logging the panic via

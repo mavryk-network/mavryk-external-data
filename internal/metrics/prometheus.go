@@ -105,6 +105,18 @@ var (
 		[]string{"job", "source", "entity", "reason"},
 	)
 
+	// JobLastSuccessTimestamp — unix time of the last tick that completed
+	// without panicking. A job whose gauge stops advancing is stalled (blocked
+	// query, dead upstream) even while the process looks healthy; alert on
+	// now() - job_last_success_timestamp_seconds > a few intervals.
+	JobLastSuccessTimestamp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "job_last_success_timestamp_seconds",
+			Help: "Unix timestamp of the last background-job tick that completed without panicking.",
+		},
+		[]string{"job"},
+	)
+
 	// JobTickPanicsTotal — counter of panics recovered inside a single job tick.
 	// A non-zero value means a tick paniced but the loop survived (see
 	// runTickerLoop); alert on any increase.
