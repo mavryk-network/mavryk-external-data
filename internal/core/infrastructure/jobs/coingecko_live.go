@@ -159,8 +159,13 @@ func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector)
 	data, err := col.client.GetMultipleCurrencies(ctx, col.info.CoinGeckoID, currencies, from.Unix(), to.Unix())
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("live", string(prices.SourceCoinGecko), tokenName, "fetch").Inc()
-		logger.Error().Err(err).Msg("live_fetch_failed")
-		return
+		if len(data) == 0 {
+			logger.Error().Err(err).Msg("live_fetch_failed")
+			return
+		}
+		// Partial view: save what arrived rather than dropping the whole tick —
+		// one dead vs_currency must not stop FT prices (and FX) for the rest.
+		logger.Warn().Err(err).Int("currencies_ok", len(data)).Msg("live_fetch_partial")
 	}
 	points := coingecko.MapToPricePoints(prices.SourceCoinGecko, tokenName, data)
 	if len(points) == 0 {

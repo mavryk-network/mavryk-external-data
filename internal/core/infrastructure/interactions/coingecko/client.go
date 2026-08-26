@@ -3,6 +3,7 @@ package coingecko
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -134,16 +135,26 @@ func (c *Client) GetMarketChartRange(ctx context.Context, coinID, vsCurrency str
 	return &result, nil
 }
 
-// GetMultipleCurrencies fetches one window for many vs_currencies. Returns the
-// first error and stops; partial results are dropped (caller logs and retries).
+// GetMultipleCurrencies fetches one window for many vs_currencies. Successful
+// currencies are always returned; failures come back joined in the error, so
+// one dead vs_currency (a deterministic 4xx) cannot black out every other
+// currency's prices — token_prices doubles as the FX source. The map is empty
+// only when every currency failed. Callers choose the policy: the live job
+// saves partials, the backfill treats any error as a failed chunk (its cursor
+// must not skip a currency's history).
 func (c *Client) GetMultipleCurrencies(ctx context.Context, coinID string, currencies []prices.Currency, from, to int64) (map[prices.Currency]*MarketChartRangeResponse, error) {
 	results := make(map[prices.Currency]*MarketChartRangeResponse, len(currencies))
+	var errs []error
 	for _, cur := range currencies {
 		data, err := c.GetMarketChartRange(ctx, coinID, string(cur), from, to)
 		if err != nil {
-			return nil, fmt.Errorf("currency %s: %w", cur, err)
+			errs = append(errs, fmt.Errorf("currency %s: %w", cur, err))
+			continue
 		}
 		results[cur] = data
+	}
+	if len(errs) > 0 {
+		return results, errors.Join(errs...)
 	}
 	return results, nil
 }

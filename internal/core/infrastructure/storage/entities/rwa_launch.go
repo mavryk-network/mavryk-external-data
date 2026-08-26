@@ -37,8 +37,8 @@ type RWALaunchEntity struct {
 	Enabled        bool      `gorm:"column:enabled;not null;default:true"`
 	DisabledReason *string   `gorm:"column:disabled_reason"`
 	LastSyncedAt   time.Time `gorm:"column:last_synced_at;not null"`
-	CreatedAt    time.Time `gorm:"column:created_at;<-:false"`
-	UpdatedAt    time.Time `gorm:"column:updated_at;not null"`
+	CreatedAt      time.Time `gorm:"column:created_at;<-:false"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;not null"`
 }
 
 func (RWALaunchEntity) TableName() string { return "rwa_launches" }
