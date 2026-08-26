@@ -291,7 +291,8 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		// retry the step.
 		if lo, hi := pointsTimeSpan(points); !lo.IsZero() {
 			if rErr := j.lookup.RefreshRWACandleAggregates(ctx, lo, hi.Add(time.Second)); rErr != nil {
-				logger.Debug().Err(rErr).Msg("equiteez_backfill_cagg_refresh_failed")
+				// Warn, not Debug — see backfill_cagg_refresh_failed.
+				logger.Warn().Err(rErr).Msg("equiteez_backfill_cagg_refresh_failed")
 			}
 		}
 	} else {

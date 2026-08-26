@@ -435,3 +435,30 @@ func TestQueryCandles_BadAuxKey_400(t *testing.T) {
 		require.Errorf(t, err, "AuxKey=%q should be rejected", aux)
 	}
 }
+
+// --- Real-time aggregation (migration 0021): unmaterialized rows must be visible ---
+
+func TestQueryCandles_RealtimeAggregation_SeesUnmaterializedBucket(t *testing.T) {
+	db := openGorm(t)
+	truncateTokenPrices(t, db)
+	repo := repositories.NewTokenPriceRepository(db)
+
+	// Deliberately NO refreshCA: with materialized_only=false the CAGG must
+	// union the raw hypertable tail, so the bucket shows up anyway.
+	bk := time.Date(2026, 5, 3, 9, 0, 0, 0, time.UTC)
+	_, err := repo.Save(context.Background(), []prices.PricePoint{
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk, Metric: "usd", Price: dec("55.00")},
+	})
+	require.NoError(t, err)
+
+	candles, err := repo.QueryCandles(context.Background(), apiprices.CandleQuery{
+		EntityKey: "mvrk",
+		AuxKey:    "coingecko|usd",
+		Interval:  apiprices.Interval1h,
+		From:      bk.Add(-time.Minute),
+		To:        bk.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.Len(t, candles, 1, "real-time aggregation must surface the in-progress bucket without a refresh")
+	require.True(t, candles[0].Close.Equal(dec("55.00")))
+}

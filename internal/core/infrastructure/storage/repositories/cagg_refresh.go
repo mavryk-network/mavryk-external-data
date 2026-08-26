@@ -66,24 +66,36 @@ func refreshContinuousAggregates(ctx context.Context, db *gorm.DB, views []strin
 }
 
 var (
-	timescaleOnce    sync.Once
-	timescalePresent bool
+	timescaleMu    sync.Mutex
+	timescaleState int // 0 = unknown (probe again), 1 = present, -1 = absent
 )
 
-// timescaleAvailable reports whether the timescaledb extension is installed,
-// caching the answer for the process lifetime (extension presence does not change
-// at runtime). A probe failure is treated as "absent" so refresh degrades to a
-// no-op rather than erroring on every call.
+// timescaleAvailable reports whether the timescaledb extension is installed.
+// Only a SUCCESSFUL probe is cached (extension presence does not change at
+// runtime); a probe failure returns false for this call but stays unknown so
+// the next call re-probes — latching a transient connection blip as "absent"
+// would silently no-op every refresh for the process lifetime and backfilled
+// history would never materialize into the aggregates.
 func timescaleAvailable(ctx context.Context, db *gorm.DB) bool {
-	timescaleOnce.Do(func() {
-		if db == nil {
-			return
-		}
-		var n int64
-		err := db.WithContext(ctx).
-			Raw("SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb'").
-			Scan(&n).Error
-		timescalePresent = err == nil && n > 0
-	})
-	return timescalePresent
+	timescaleMu.Lock()
+	defer timescaleMu.Unlock()
+	if timescaleState != 0 {
+		return timescaleState == 1
+	}
+	if db == nil {
+		return false
+	}
+	var n int64
+	err := db.WithContext(ctx).
+		Raw("SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb'").
+		Scan(&n).Error
+	if err != nil {
+		return false
+	}
+	if n > 0 {
+		timescaleState = 1
+	} else {
+		timescaleState = -1
+	}
+	return timescaleState == 1
 }

@@ -259,7 +259,9 @@ func (j *CoinGeckoBackfillJob) stepToken(ctx context.Context, info prices.TokenI
 		// chart/ATH reads (QueryCandles reads only the CAs). Best-effort: a
 		// refresh failure must not fail or retry the backfill step.
 		if rErr := j.tokenRO.RefreshCandleAggregates(ctx, from, to); rErr != nil {
-			logger.Debug().Err(rErr).Msg("backfill_cagg_refresh_failed")
+			// Warn, not Debug: a persistently failing refresh means backfilled
+			// history never reaches the charts, invisible at default log levels.
+			logger.Warn().Err(rErr).Msg("backfill_cagg_refresh_failed")
 		}
 	} else {
 		logger.Info().Msg("backfill_empty_window")
