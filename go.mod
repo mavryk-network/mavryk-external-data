@@ -7,7 +7,7 @@ go 1.25.0
 // the go1.25.1 that shipped several remotely-triggerable net/http and net/url
 // DoS fixes later) would silently produce a vulnerable binary. GOTOOLCHAIN=auto
 // downloads this on demand for local, CI, and Docker builds alike.
-toolchain go1.25.12
+toolchain go1.25.13
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.8.0
