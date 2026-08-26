@@ -1,8 +1,14 @@
 # ADR-0012: RWA pair discovery from Equiteez allowlist + price normalization via `tokens.decimals`
 
-- **Status**: Accepted
+- **Status**: Accepted (sync cadence superseded)
 - **Date**: 2026-04-28
 - **Deciders**: backend team
+
+> **Supersession note (2026-08):** discovery is no longer a one-shot startup
+> sync. `RWAPairSyncJob` re-reads the allowlist on an hourly ticker
+> (`rwa.pair_sync_interval_seconds`), soft-disables pairs/launches that left
+> the allowlist (`disabled_reason='sync_missing'`, auto-re-enabled on
+> reappearance), and new listings need no restart.
 
 ## Context
 

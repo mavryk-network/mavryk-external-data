@@ -17,7 +17,7 @@ For schema migrations we had three credible options:
    slightly more brittle source-driver story.
 4. **`atlas`** — declarative schema, diff-driven, schema-as-code.
 
-The greenfield rewrite [upgrade-plan.md](../../upgrade-plan.md) listed
+The greenfield rewrite `upgrade-plan.md` (historical; not in this repo) listed
 goose as the recommended target, but the implementation kept the
 psql-loop because the cost of the migration was non-trivial and the
 benefits weren't blocking.
@@ -63,4 +63,4 @@ when one of the trigger conditions below fires.
 - Run via `make migrate-up`. The dockerfile's migration stage uses
   `scripts/run-migrations.sh`.
 - This decision is the open follow-up to
-  [upgrade-plan.md §6.3](../../upgrade-plan.md).
+  `upgrade-plan.md` §6.3 (historical; not in this repo).

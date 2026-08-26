@@ -99,12 +99,17 @@ paths:
       tags: [health]
       summary: Prometheus metrics
       description: |
-        Prometheus exposition format. See `internal/metrics/prometheus.go`
-        for the registered collectors:
+        Prometheus exposition format. **Listener caveat:** with
+        `server.internal_port` set, `/metrics` is served on the INTERNAL
+        listener only; in single-port mode it appears on the public listener
+        only outside release mode (a release single-port deploy has no
+        `/metrics` at all — set the internal port).
+
+        See `internal/metrics/prometheus.go` for the registered collectors:
 
           * `http_*` — request counts, latencies, response classes.
           * `outbound_http_*` — retries, CB transitions, CB current state, RL wait.
-          * `job_*` — tick duration, error counters, rows written.
+          * `job_*` — tick duration, error counters, rows written, last-success timestamp.
           * `backfill_*` — oldest_ts cursor, auto-disable counter.
           * `db_pool_*` — connection pool stats.
       operationId: metrics
@@ -115,6 +120,47 @@ paths:
             text/plain:
               schema:
                 type: string
+
+  /quotes:
+    get:
+      tags: [health]
+      summary: Legacy wide-format quotes (deprecated)
+      deprecated: true
+      description: |
+        Pre-v1 compatibility endpoint: MVRK prices pivoted into one row per
+        timestamp with a fixed currency column set, values as JSON numbers
+        (float64 — NOT the v1 precision contract). Superseded by
+        `/v1/prices/{token}`; new integrations must not use it.
+
+        `from`/`to` are RFC3339; an explicit `limit` is validated against
+        `server.max_query_limit`.
+      operationId: legacyQuotes
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Array of wide rows, ts ASC.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    timestamp: { type: string, format: date-time }
+                    btc: { type: number }
+                    usd: { type: number }
+                    eur: { type: number }
+                    cny: { type: number }
+                    jpy: { type: number }
+                    krw: { type: number }
+                    eth: { type: number }
+                    gbp: { type: number }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
 
   /v1/prices/{token}:
     get:
@@ -510,6 +556,8 @@ paths:
                       max_amount_cap: "2500000000000"
                       progress_percent: 2.667e-7
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
@@ -563,6 +611,8 @@ paths:
                 - { timestamp: "2026-04-27T12:00:00Z", native_quote: usdt, price: 100.42, usd: 100.4300, eur: 85.62 }
                 - { timestamp: "2026-04-27T11:00:00Z", native_quote: usdt, price: 99.80 }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -611,6 +661,8 @@ paths:
                   - { t: "2026-04-27T12:00:00Z", p: 100.42, usd: 100.4300 }
                   - { t: "2026-04-27T13:00:00Z", p: 99.80,  usd: 99.8050 }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
@@ -668,6 +720,8 @@ paths:
                       rate: 1.0005
                       rate_ts: "2026-04-27T12:55:00Z"
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
@@ -691,6 +745,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Symbol"
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "501":
           description: OHLCV is parked until Stage 4.
           content:
@@ -771,6 +827,8 @@ paths:
                   eur: 70.16
                   aed: 302.30
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/Internal" }
@@ -819,6 +877,8 @@ paths:
                   "7d":  { from_ts: "2026-05-01T00:00:00Z", from: 54.10, delta_abs: 2.15, change_pct: 3.9741 }
                   "30d": { from_ts: "2026-04-08T00:00:00Z", from: 51.20, delta_abs: 5.05, change_pct: 9.8633 }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/Internal" }
@@ -1005,6 +1065,8 @@ paths:
                   quote_addr: KT1VAymQuoteAddr
                   orderbook_addr: KT1A3JhOrderbook
                   source: equiteez
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/Internal" }
 
 components:
@@ -1226,6 +1288,23 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
           example: { code: RATE_LIMITED, message: "Too many requests" }
+    Unauthorized:
+      description: |
+        Missing, malformed, expired, or unverifiable Bearer JWT
+        (`code: UNAUTHORIZED`). Returned by the MBIO JWT middleware on the
+        public listener's RWA routes.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: UNAUTHORIZED, message: "Authorization header required" }
+    Forbidden:
+      description: |
+        Token verified but unusable — e.g. missing `sub` or invalid claims
+        (`code: FORBIDDEN`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: FORBIDDEN, message: "JWT missing subject" }
     Internal:
       description: "Unexpected server error (`code: INTERNAL`)."
       content:
@@ -1260,13 +1339,15 @@ components:
         When `?in=usd,eur,...` is requested, each successfully converted
         currency appears as an additional top-level numeric key (lowercase
         ISO-4217 code). Targets that fail conversion are silently absent —
-        the response stays 200 as long as the native price was found.
+        the response stays 200 as long as the native price was found. A
+        conversion served with a stale FX rate is flagged in the `fx` object.
 
-        Top-level reserved keys: `timestamp`, `native_quote`, `price`, and —
-        on `/latest` only — the optional `ath` and `price_one_year_ago`
-        objects. All other top-level keys are converted currencies (3-letter
-        codes that can never collide with the reserved names).
-      required: [timestamp, native_quote, price]
+        Top-level reserved keys: `timestamp`, `native_quote`, `price`,
+        `market`, and the optional `primary_issuance`, `fx`, and — on
+        `/latest` only — `ath` / `price_one_year_ago` objects. All other
+        top-level keys are converted currencies (3-letter codes that can
+        never collide with the reserved names).
+      required: [timestamp, native_quote, price, market]
       properties:
         timestamp:
           type: string
@@ -1285,6 +1366,33 @@ components:
             Last price in `native_quote`, rounded to 6 decimal places.
             Serialised as a JSON number (not a quoted string).
           example: 100.45
+        market:
+          type: string
+          enum: [secondary, primary]
+          description: |
+            How the asset is priced: `secondary` = live orderbook quote,
+            `primary` = fixed launchpad sale price (the `primary_issuance`
+            block carries the sale detail).
+          example: secondary
+        primary_issuance:
+          $ref: "#/components/schemas/RWAPrimaryIssuance"
+        fx:
+          type: object
+          description: |
+            Present only when at least one `?in=` conversion was served with
+            an FX rate older than the freshness budget
+            (`server.fx_max_staleness_seconds`). One key per stale target.
+          additionalProperties:
+            type: object
+            required: [rate_ts, stale]
+            properties:
+              rate_ts:
+                type: string
+                format: date-time
+                description: Timestamp of the FX rate actually used.
+              stale:
+                type: boolean
+                enum: [true]
         ath:
           $ref: "#/components/schemas/RWAAllTimeHigh"
         price_one_year_ago:
@@ -1295,6 +1403,45 @@ components:
           Converted price for a target currency from `?in=`.
           Key is the lowercase ISO-4217 code (`usd`, `eur`, `aed`, …).
           Rounded to 6 decimal places.
+
+    RWAPrimaryIssuance:
+      type: object
+      description: |
+        Launchpad facet for an asset in primary issuance (`primary_issuance`
+        key). Present on `market: primary` assets, and on `market: secondary`
+        latest-mode responses when the asset also still sells on the launchpad.
+      required: [launch_id, name, status, active, price, total_bought, max_amount_cap, progress_percent]
+      properties:
+        launch_id: { type: integer, example: 6 }
+        name: { type: string, example: KHBE-issuance-v2 }
+        status:
+          type: string
+          enum: [active, inactive, paused, closed]
+        active:
+          type: boolean
+          description: Purchasable right now.
+        price:
+          type: number
+          description: Base-tier (undiscounted) sale price in the asset's quote currency, 6 dp.
+          example: 100
+        price_as_of:
+          type: string
+          format: date-time
+          nullable: true
+        total_bought:
+          type: string
+          description: Raw on-chain nat (supply-scale values overflow float64).
+          example: "6667"
+        max_amount_cap:
+          type: string
+          description: Raw on-chain nat.
+          example: "2500000000000"
+        progress_percent:
+          type: number
+          description: total_bought / max_amount_cap × 100, precomputed server-side.
+          example: 2.667e-7
+        sale_start: { type: string, format: date-time, nullable: true }
+        sale_end: { type: string, format: date-time, nullable: true }
 
     RWAAllTimeHigh:
       type: object
@@ -1934,7 +2081,7 @@ components:
       properties:
         code:
           type: string
-          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, RANGE_NOT_SATISFIABLE, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED, NOT_IMPLEMENTED]
+          enum: [INVALID_ARGUMENT, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, RANGE_NOT_SATISFIABLE, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED, NOT_IMPLEMENTED]
         message:
           type: string
           description: Client-safe message. Internal causes are NOT included; check server logs by `request_id` for the underlying error.

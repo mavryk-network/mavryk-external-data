@@ -48,7 +48,7 @@ disappeared.
 - ⚠️ All handlers share the same response shape (`200 + JSON(res)` or
   `mapDomainError`). If we ever need streaming or non-JSON responses,
   those endpoints opt out of `Wrap` and roll their own.
-- 🔁 If response-envelope semantics change ([refactoring_v2 §1.1](../../refactoring_v2.md)),
+- 🔁 If response-envelope semantics change (refactoring_v2 §1.1 (historical; not in this repo)),
   `Wrap` is the single point of change.
 
 ## Alternatives considered
