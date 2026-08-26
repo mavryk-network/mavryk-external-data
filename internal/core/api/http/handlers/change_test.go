@@ -426,3 +426,39 @@ type rwaChangeResponse struct {
 	Now         *decimal.Decimal                  `json:"now"`
 	Periods     map[string]ftChangePeriodResponse `json:"periods"`
 }
+
+func TestChangeRWA_InConversion_StaleRateFlagged(t *testing.T) {
+	pair := prices.RWAPair{ID: 42, BaseSymbol: "mars1", QuoteSymbol: "usdt"}
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	repo := &stubChangeRepo{
+		res: apiprices.ChangeRepoResult{
+			Now: []apiprices.ChangeNow{{Currency: "usdt", Price: decimal.RequireFromString("100"), TS: now, Found: true}},
+		},
+	}
+	rateTS := now.Add(-2 * time.Hour)
+	conv := &stubConverter{result: apiprices.ConversionResult{
+		Rate:   decimal.RequireFromString("1.0001"),
+		Amount: decimal.RequireFromString("100.01"),
+		RateTS: rateTS,
+		Stale:  true,
+	}}
+	deps := ChangeDeps{
+		RWAService:      &apiprices.ChangeService{Repo: repo, Cache: apiprices.NewChangeCache(), Kind: "rwa"},
+		Lookup:          &stubLookup{pair: pair},
+		Converter:       conv,
+		RWASource:       prices.SourceEquiteez,
+		MaxInCurrencies: 10,
+	}
+	r := newChangeEngine(t, deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt/change?in=usd&periods=24h", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"fx":{"usd":{"rate_ts":"2026-05-08T10:00:00Z","stale":true}}`) {
+		t.Errorf("expected stale fx block in response, got: %s", body)
+	}
+}

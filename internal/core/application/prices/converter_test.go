@@ -259,11 +259,17 @@ func TestConverter_HistoricalAtOrBefore(t *testing.T) {
 		askAt    time.Time
 		wantRate decimal.Decimal
 		wantTS   time.Time
+		wantErr  error
 	}{
-		{"at t1 exactly", t1, decimal.NewFromFloat(1.0001), t1},
-		{"between t1 and t2", t1.Add(7 * 24 * time.Hour), decimal.NewFromFloat(1.0001), t1},
-		{"at t2", t2, decimal.NewFromFloat(1.0005), t2},
-		{"after t3", t3.Add(time.Hour), decimal.NewFromFloat(0.9999), t3},
+		{"at t1 exactly", t1, decimal.NewFromFloat(1.0001), t1, nil},
+		// Within the hard staleness cap the at-or-before rate is served
+		// (flagged Stale past the soft budget).
+		{"shortly after t1", t1.Add(20 * time.Hour), decimal.NewFromFloat(1.0001), t1, nil},
+		// Past the hard cap a rate is a dead feed, not a coarse one — refuse
+		// instead of converting a week-old rate as if current.
+		{"mid-gap past hard cap", t1.Add(7 * 24 * time.Hour), decimal.Decimal{}, time.Time{}, ErrNoFXRate},
+		{"at t2", t2, decimal.NewFromFloat(1.0005), t2, nil},
+		{"after t3", t3.Add(time.Hour), decimal.NewFromFloat(0.9999), t3, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -274,6 +280,12 @@ func TestConverter_HistoricalAtOrBefore(t *testing.T) {
 				decimal.NewFromInt(100),
 				c.askAt,
 			)
+			if c.wantErr != nil {
+				if !errors.Is(err, c.wantErr) {
+					t.Fatalf("convert err = %v, want %v", err, c.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("convert: %v", err)
 			}

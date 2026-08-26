@@ -127,7 +127,7 @@ func (d RWAPriceDeps) launchPriceDTO(ctx context.Context, l prices.RWALaunch, ta
 	}
 	if len(targets) > 0 {
 		quoteToken, quoteResolved := promoteQuoteToken(l.QuoteSymbol)
-		dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, l.Price, launchFXTime(l))
+		dto.Converted, dto.FX = d.convertFlat(ctx, quoteToken, quoteResolved, targets, l.Price, launchFXTime(l))
 	}
 	return dto
 }
@@ -207,7 +207,7 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 				Market:      marketSecondary,
 			}
 			if len(req.InTargets) > 0 {
-				row.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, p.Price, p.Timestamp)
+				row.Converted, row.FX = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, p.Price, p.Timestamp)
 			}
 			out = append(out, row)
 		}
@@ -280,7 +280,7 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 			Market:      marketSecondary,
 		}
 		if len(req.InTargets) > 0 {
-			dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, picked.Price, picked.Timestamp)
+			dto.Converted, dto.FX = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, picked.Price, picked.Timestamp)
 		}
 		d.enrichLatest(ctx, &dto, req.Pair, quoteToken, quoteResolved, req.InTargets, picked.Timestamp)
 		// Still in primary issuance while already trading: the live quote stays
@@ -318,7 +318,8 @@ func (d RWAPriceDeps) enrichLatest(
 	if price, ts, found, err := d.Stats.AllTimeHighLast(ctx, pair.ID, lastSide); err == nil && found {
 		ath := &athDTO{Price: newNum6(price), Date: ts.Format("2006-01-02")}
 		if len(targets) > 0 {
-			ath.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
+			// Same snapshot rate as the top-level price — its fx flags cover these.
+			ath.Converted, _ = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
 		}
 		dto.ATH = ath
 	}
@@ -326,7 +327,7 @@ func (d RWAPriceDeps) enrichLatest(
 	if price, _, found, err := d.Stats.PriceAtOrBefore(ctx, pair.ID, lastSide, yearAgo); err == nil && found {
 		p1y := &priceAtDTO{Price: newNum6(price)}
 		if len(targets) > 0 {
-			p1y.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
+			p1y.Converted, _ = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
 		}
 		dto.PriceOneYearAgo = p1y
 	}
@@ -352,6 +353,8 @@ type rwaPriceDTO struct {
 	// Issuance is present only for a primary-market asset.
 	Issuance  *primaryIssuanceDTO
 	Converted map[string]num6 // optional; one key per `?in=` target that succeeded
+	// FX carries stale-rate flags per converted currency; omitted when fresh.
+	FX map[string]fxMetaDTO
 	// Optional enrichment (only on /latest, only when a Stats reader is wired).
 	// `ath` / `price_one_year_ago` are nested objects (not flat currency keys)
 	// so they don't collide with the top-level converted-price currency keys.
@@ -372,6 +375,9 @@ func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
 	}
 	for cur, v := range d.Converted {
 		out[cur] = v
+	}
+	if len(d.FX) > 0 {
+		out["fx"] = d.FX
 	}
 	if d.ATH != nil {
 		out["ath"] = d.ATH
@@ -418,6 +424,15 @@ func (p priceAtDTO) MarshalJSON() ([]byte, error) {
 		out[cur] = v
 	}
 	return json.Marshal(out)
+}
+
+// fxMetaDTO flags a conversion that was served with a rate older than the
+// freshness budget. Emitted per stale target under an `fx` key, so healthy
+// responses keep their existing flat shape. Field names match the tickers
+// FXMeta block.
+type fxMetaDTO struct {
+	RateTS string `json:"rate_ts"`
+	Stale  bool   `json:"stale"`
 }
 
 // num6 carries a price rounded to 6 decimal places and serialises as a
@@ -534,7 +549,8 @@ func (d RWAPriceDeps) parseInQuery(c *gin.Context) ([]prices.Currency, error) {
 // convertFlat builds the per-currency map for one row. Failed conversions
 // (no FX rate, unsupported target, unregistered source) are silently
 // dropped from the output map — observability lives in the
-// `fx_conversions_total` counter, not on the wire.
+// `fx_conversions_total` counter, not on the wire. Conversions served with
+// a stale rate are flagged in the second return value (rendered as `fx`).
 func (d RWAPriceDeps) convertFlat(
 	ctx context.Context,
 	quoteToken prices.Token,
@@ -542,16 +558,17 @@ func (d RWAPriceDeps) convertFlat(
 	targets []prices.Currency,
 	native decimal.Decimal,
 	ts time.Time,
-) map[string]num6 {
+) (map[string]num6, map[string]fxMetaDTO) {
 	if !quoteResolved {
 		// Account for the registry-miss in metrics for every requested target;
 		// the wire response just omits the currency keys.
 		for _, t := range targets {
 			metrics.FXConversionsTotal.WithLabelValues("unknown", string(t), "unregistered_source").Inc()
 		}
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]num6, len(targets))
+	var fx map[string]fxMetaDTO
 	for _, target := range targets {
 		res, err := timedConvert(ctx, d.Converter, quoteToken, target, native, ts)
 		if err != nil {
@@ -560,12 +577,16 @@ func (d RWAPriceDeps) convertFlat(
 		out[string(target)] = newNum6(res.Amount)
 		if res.Stale {
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
+			if fx == nil {
+				fx = make(map[string]fxMetaDTO, 1)
+			}
+			fx[string(target)] = fxMetaDTO{RateTS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, fx
 }
 
 // timedConvert wraps PriceConverter.Convert with timing + outcome metrics.

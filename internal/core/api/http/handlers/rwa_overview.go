@@ -272,7 +272,7 @@ func (d RWAOverviewDeps) launchToAsset(ctx context.Context, l prices.RWALaunch, 
 	}
 	if len(in) > 0 && d.Converter != nil {
 		if quoteToken, resolved := promoteQuoteToken(l.QuoteSymbol); resolved {
-			asset.Converted = convertNowFlat(ctx, d.Converter, quoteToken, in, l.Price, launchFXTime(l))
+			asset.Converted, asset.FX = convertNowFlat(ctx, d.Converter, quoteToken, in, l.Price, launchFXTime(l))
 		}
 	}
 	return asset
@@ -351,7 +351,7 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 			asset.PriceAsOf = &ts
 			if len(in) > 0 && d.Converter != nil {
 				if quoteToken, resolved := promoteQuoteToken(pair.QuoteSymbol); resolved {
-					asset.Converted = convertNowFlat(ctx, d.Converter, quoteToken, in, cur.Now, cur.NowTS)
+					asset.Converted, asset.FX = convertNowFlat(ctx, d.Converter, quoteToken, in, cur.Now, cur.NowTS)
 				}
 			}
 		}
@@ -431,6 +431,8 @@ type rwaOverviewAsset struct {
 	Change24h    change24hDTO
 	Series       seriesMiniDTO
 	Converted    map[string]num6 // ?in= per-target latest price; nil when absent
+	// FX carries stale-rate flags per converted currency; omitted when fresh.
+	FX map[string]fxMetaDTO
 }
 
 func (a rwaOverviewAsset) MarshalJSON() ([]byte, error) {
@@ -450,6 +452,9 @@ func (a rwaOverviewAsset) MarshalJSON() ([]byte, error) {
 	}
 	for cur, v := range a.Converted {
 		out[cur] = v
+	}
+	if len(a.FX) > 0 {
+		out["fx"] = a.FX
 	}
 	return json.Marshal(out)
 }

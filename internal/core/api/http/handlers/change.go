@@ -138,16 +138,17 @@ func (d ChangeDeps) ChangeRWA() gin.HandlerFunc {
 		// Optional ?in= conversion of `now`. Uses converter's at-or-before
 		// semantics (Decision #19). Failed conversions drop silently.
 		var converted map[string]num6
+		var fxMeta map[string]fxMetaDTO
 		if len(req.InTargets) > 0 && d.Converter != nil {
 			cur, hasCur := res.Currencies[nativeQuote]
 			if hasCur && cur.NowFound {
 				quoteToken, quoteResolved := promoteQuoteToken(req.Pair.QuoteSymbol)
 				if quoteResolved {
-					converted = convertNowFlat(ctx, d.Converter, quoteToken, req.InTargets, cur.Now, cur.NowTS)
+					converted, fxMeta = convertNowFlat(ctx, d.Converter, quoteToken, req.InTargets, cur.Now, cur.NowTS)
 				}
 			}
 		}
-		return renderRWAChange(symbol, nativeQuote, req.Periods, converted, res), nil
+		return renderRWAChange(symbol, nativeQuote, req.Periods, converted, fxMeta, res), nil
 	}
 	return common.Wrap(bind, action)
 }
@@ -186,10 +187,11 @@ func (d ChangeDeps) parseRWAInQuery(c *gin.Context) ([]prices.Currency, error) {
 	return out, nil
 }
 
-// convertNowFlat returns a per-target-currency map for the `now` price.
-// Failed conversions (no FX rate, unsupported target) drop silently, just
-// like the existing /v1/rwa/:symbol/latest?in= flow. Returns nil when no
-// target succeeded so the response stays clean.
+// convertNowFlat returns a per-target-currency map for the `now` price plus
+// stale-rate flags for the `fx` block. Failed conversions (no FX rate,
+// unsupported target) drop silently, just like the existing
+// /v1/rwa/:symbol/latest?in= flow. Returns nil when no target succeeded so
+// the response stays clean.
 //
 // Conversions go through timedConvert so the fx_* metric families (outcome,
 // duration, stale ratio) cover these edges too — this helper serves GET /v1/rwa
@@ -202,8 +204,9 @@ func convertNowFlat(
 	targets []prices.Currency,
 	nativePrice decimal.Decimal,
 	nativeTS time.Time,
-) map[string]num6 {
+) (map[string]num6, map[string]fxMetaDTO) {
 	out := make(map[string]num6, len(targets))
+	var fx map[string]fxMetaDTO
 	for _, target := range targets {
 		res, err := timedConvert(ctx, conv, quoteToken, target, nativePrice, nativeTS)
 		if err != nil {
@@ -212,12 +215,16 @@ func convertNowFlat(
 		out[string(target)] = newNum6(res.Amount)
 		if res.Stale {
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
+			if fx == nil {
+				fx = make(map[string]fxMetaDTO, 1)
+			}
+			fx[string(target)] = fxMetaDTO{RateTS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, fx
 }
 
 func (d ChangeDeps) maxPeriods() int {
@@ -400,6 +407,8 @@ type rwaChangeDTO struct {
 	// — same convention as /v1/rwa/:symbol/latest. Empty map omits the
 	// keys entirely.
 	Converted map[string]num6 `json:"-"`
+	// FX carries stale-rate flags per converted currency; omitted when fresh.
+	FX map[string]fxMetaDTO `json:"-"`
 }
 
 // MarshalJSON for rwaChangeDTO flattens Converted onto the top-level
@@ -416,6 +425,9 @@ func (d rwaChangeDTO) MarshalJSON() ([]byte, error) {
 	out["periods"] = d.Periods
 	for cur, v := range d.Converted {
 		out[cur] = v
+	}
+	if len(d.FX) > 0 {
+		out["fx"] = d.FX
 	}
 	return json.Marshal(out)
 }
@@ -451,7 +463,7 @@ func renderFTChange(token string, periods []prices.Period, currencies []string, 
 	return out
 }
 
-func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, converted map[string]num6, res apiprices.ChangeResult) rwaChangeDTO {
+func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, converted map[string]num6, fx map[string]fxMetaDTO, res apiprices.ChangeResult) rwaChangeDTO {
 	cur, ok := res.Currencies[nativeQuote]
 	if !ok {
 		// Defensive — service always emits the requested currency entry.
@@ -461,6 +473,7 @@ func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, conver
 			AsOf:        nullableRFC3339(res.AsOf),
 			Periods:     orderedPeriodsDTO{order: periods, data: emptyPeriodsData(periods)},
 			Converted:   converted,
+			FX:          fx,
 		}
 	}
 	var nowVal *num6
@@ -475,6 +488,7 @@ func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, conver
 		Now:         nowVal,
 		Periods:     orderedPeriodsDTO{order: periods, data: renderPeriodsData(periods, cur.ByPeriod)},
 		Converted:   converted,
+		FX:          fx,
 	}
 }
 
