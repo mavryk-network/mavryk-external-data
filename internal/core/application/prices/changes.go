@@ -221,14 +221,14 @@ func (s *ChangeService) preflight(q ChangeQuery) error {
 // anchor. Returned slices identify which still need a repo fetch.
 func (s *ChangeService) collectMisses(q ChangeQuery) (missingNow []string, missingAnchor []anchorKey) {
 	for _, cur := range q.Currencies {
-		if _, _, ok := s.Cache.GetNow(q.Source, q.EntityKey, cur); ok {
+		if _, _, ok := s.Cache.GetNow(q.Source, q.EntityKey, q.AuxKey, cur); ok {
 			s.observeCache("hit")
 		} else {
 			s.observeCache("miss")
 			missingNow = append(missingNow, cur)
 		}
 		for _, p := range q.Periods {
-			if _, _, ok := s.Cache.GetAnchor(q.Source, q.EntityKey, cur, p); ok {
+			if _, _, ok := s.Cache.GetAnchor(q.Source, q.EntityKey, q.AuxKey, cur, p); ok {
 				s.observeCache("hit")
 			} else {
 				s.observeCache("miss")
@@ -246,13 +246,13 @@ func (s *ChangeService) populateCache(q ChangeQuery, res ChangeRepoResult) {
 		if !n.Found {
 			continue
 		}
-		s.Cache.SetNow(q.Source, q.EntityKey, n.Currency, n.Price, n.TS)
+		s.Cache.SetNow(q.Source, q.EntityKey, q.AuxKey, n.Currency, n.Price, n.TS)
 	}
 	for _, a := range res.Anchors {
 		if !a.Found {
 			continue
 		}
-		s.Cache.SetAnchor(q.Source, q.EntityKey, a.Currency, a.Period, a.Price, a.Bucket)
+		s.Cache.SetAnchor(q.Source, q.EntityKey, q.AuxKey, a.Currency, a.Period, a.Price, a.Bucket)
 	}
 }
 
@@ -262,10 +262,10 @@ func (s *ChangeService) compose(q ChangeQuery) ChangeResult {
 	currencies := make(map[string]ChangeForCurrency, len(q.Currencies))
 	var newest time.Time
 	for _, cur := range q.Currencies {
-		nowPrice, nowTS, nowOK := s.Cache.GetNow(q.Source, q.EntityKey, cur)
+		nowPrice, nowTS, nowOK := s.Cache.GetNow(q.Source, q.EntityKey, q.AuxKey, cur)
 		byPeriod := make(map[prices.Period]ChangeForPeriod, len(q.Periods))
 		for _, p := range q.Periods {
-			anchorPrice, anchorTS, anchorOK := s.Cache.GetAnchor(q.Source, q.EntityKey, cur, p)
+			anchorPrice, anchorTS, anchorOK := s.Cache.GetAnchor(q.Source, q.EntityKey, q.AuxKey, cur, p)
 			cfp := ChangeForPeriod{}
 			if anchorOK {
 				cfp.AnchorFound = true

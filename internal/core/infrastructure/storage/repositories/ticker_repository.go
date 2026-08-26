@@ -127,7 +127,11 @@ func (r *TickerRepository) SaveSnapshot(
 //	        AND ts >= latest.ts - INTERVAL '25 hours'
 //	      ORDER BY ts DESC LIMIT 1
 //	  ) ago ON true
-//	  ORDER BY latest.last_price * COALESCE(latest.volume_24h_base, 0) DESC;
+//	  ORDER BY COALESCE(latest.volume_24h_base, 0) DESC;
+//
+// Ordering uses base-token volume alone (same unit for every row); the old
+// last_price × volume product mixed quote units, ranking a BTC-quoted market
+// ~60000× below a USDT one at equal real volume.
 //
 // The anchor bracket [ts-25h, ts-24h] mirrors Period.AnchorWindow's 1h budget:
 // without the lower bound an ingestion gap would anchor "24h ago" on a row
@@ -185,7 +189,7 @@ SELECT
          AND ts >= latest.ts - INTERVAL '25 hours'
        ORDER BY ts DESC LIMIT 1
   ) ago ON TRUE
-  ORDER BY (latest.last_price * COALESCE(latest.volume_24h_base, 0)) DESC NULLS LAST,
+  ORDER BY COALESCE(latest.volume_24h_base, 0) DESC NULLS LAST,
            latest.exchange_id ASC, latest.target_symbol ASC`
 
 	type row struct {

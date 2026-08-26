@@ -33,6 +33,11 @@ type TTL[T any] struct {
 	mu    sync.RWMutex
 	store map[string]ttlEntry[T]
 	clone func(T) T
+	// gen counts invalidations. GetOrLoad snapshots it before running load and
+	// stores only if unchanged — otherwise a reader that loaded pre-write data
+	// could re-cache it right after a writer's invalidate, serving stale values
+	// for a full TTL.
+	gen uint64
 }
 
 type ttlEntry[T any] struct {
@@ -90,17 +95,21 @@ func (c *TTL[T]) Store(key string, value T) {
 
 // GetOrLoad returns the cached value on a hit; on a miss it calls load,
 // stores the result on success, and returns. Errors are NOT cached — the
-// next call retries.
+// next call retries. The store is skipped when an Invalidate/Purge ran while
+// load was in flight (see TTL.gen).
 func (c *TTL[T]) GetOrLoad(ctx context.Context, key string, load func(context.Context) (T, error)) (T, error) {
 	if v, ok := c.Lookup(key); ok {
 		return v, nil
 	}
+	c.mu.RLock()
+	gen := c.gen
+	c.mu.RUnlock()
 	v, err := load(ctx)
 	if err != nil {
 		var zero T
 		return zero, err
 	}
-	c.Store(key, v)
+	c.storeIfGen(key, v, gen)
 	// Round-trip through Lookup to apply clone() consistently on the hot path.
 	if c.clone != nil {
 		return c.clone(v), nil
@@ -108,11 +117,30 @@ func (c *TTL[T]) GetOrLoad(ctx context.Context, key string, load func(context.Co
 	return v, nil
 }
 
+func (c *TTL[T]) storeIfGen(key string, value T, gen uint64) {
+	if c.ttl <= 0 {
+		return
+	}
+	if c.clone != nil {
+		value = c.clone(value)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != gen {
+		return
+	}
+	c.store[key] = ttlEntry[T]{
+		expires: time.Now().Add(c.ttl),
+		value:   value,
+	}
+}
+
 // Invalidate drops every entry whose key matches the predicate. O(n) over
 // the map; called from Save paths where n is bounded by ttl × write rate.
 func (c *TTL[T]) Invalidate(match func(key string) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.gen++
 	for k := range c.store {
 		if match(k) {
 			delete(c.store, k)
@@ -126,5 +154,6 @@ func (c *TTL[T]) Invalidate(match func(key string) bool) {
 func (c *TTL[T]) Purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.gen++
 	c.store = make(map[string]ttlEntry[T])
 }

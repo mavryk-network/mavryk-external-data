@@ -34,10 +34,14 @@ type ChangeCache struct {
 }
 
 // changeCacheKey identifies one cache slot. Period is the empty string
-// when the slot holds the "now" value for (source, entity, currency).
+// when the slot holds the "now" value for (source, entity, aux, currency).
+// Aux carries the query's side/dimension (RWA `last` today) — omitting it
+// would cross-contaminate bid/ask the day a `?side=` parameter ships, the
+// same way the singleflight key already partitions.
 type changeCacheKey struct {
 	Source   prices.Source
 	Entity   string
+	Aux      string
 	Currency string
 	Period   prices.Period
 }
@@ -81,26 +85,26 @@ func TTLFor(p prices.Period) time.Duration {
 	}
 }
 
-// GetNow returns the cached "now" entry for (source, entity, currency),
+// GetNow returns the cached "now" entry for (source, entity, aux, currency),
 // or ok=false on miss / expiry.
-func (c *ChangeCache) GetNow(source prices.Source, entity, currency string) (price decimal.Decimal, ts time.Time, ok bool) {
-	return c.get(changeCacheKey{Source: source, Entity: entity, Currency: currency, Period: ""})
+func (c *ChangeCache) GetNow(source prices.Source, entity, aux, currency string) (price decimal.Decimal, ts time.Time, ok bool) {
+	return c.get(changeCacheKey{Source: source, Entity: entity, Aux: aux, Currency: currency, Period: ""})
 }
 
-// GetAnchor returns the cached anchor entry for (source, entity, currency, period),
+// GetAnchor returns the cached anchor entry for (source, entity, aux, currency, period),
 // or ok=false on miss / expiry.
-func (c *ChangeCache) GetAnchor(source prices.Source, entity, currency string, period prices.Period) (price decimal.Decimal, ts time.Time, ok bool) {
-	return c.get(changeCacheKey{Source: source, Entity: entity, Currency: currency, Period: period})
+func (c *ChangeCache) GetAnchor(source prices.Source, entity, aux, currency string, period prices.Period) (price decimal.Decimal, ts time.Time, ok bool) {
+	return c.get(changeCacheKey{Source: source, Entity: entity, Aux: aux, Currency: currency, Period: period})
 }
 
 // SetNow stores a "now" entry with the period-derived TTL.
-func (c *ChangeCache) SetNow(source prices.Source, entity, currency string, price decimal.Decimal, ts time.Time) {
-	c.set(changeCacheKey{Source: source, Entity: entity, Currency: currency, Period: ""}, price, ts, TTLFor(""))
+func (c *ChangeCache) SetNow(source prices.Source, entity, aux, currency string, price decimal.Decimal, ts time.Time) {
+	c.set(changeCacheKey{Source: source, Entity: entity, Aux: aux, Currency: currency, Period: ""}, price, ts, TTLFor(""))
 }
 
 // SetAnchor stores an anchor entry with the period-derived TTL.
-func (c *ChangeCache) SetAnchor(source prices.Source, entity, currency string, period prices.Period, price decimal.Decimal, ts time.Time) {
-	c.set(changeCacheKey{Source: source, Entity: entity, Currency: currency, Period: period}, price, ts, TTLFor(period))
+func (c *ChangeCache) SetAnchor(source prices.Source, entity, aux, currency string, period prices.Period, price decimal.Decimal, ts time.Time) {
+	c.set(changeCacheKey{Source: source, Entity: entity, Aux: aux, Currency: currency, Period: period}, price, ts, TTLFor(period))
 }
 
 func (c *ChangeCache) get(k changeCacheKey) (decimal.Decimal, time.Time, bool) {

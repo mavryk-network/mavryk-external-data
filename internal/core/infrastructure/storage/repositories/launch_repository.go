@@ -2,7 +2,6 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -146,20 +145,32 @@ func (r *LaunchRepository) EnabledLaunches(ctx context.Context, source prices.So
 // LaunchBySymbol resolves a `{base}-{quote}` symbol to its enabled launch.
 // Comparison is case-insensitive to match the URL parsing, which lowercases.
 // found=false (not an error) when the symbol is not a primary-market asset, so
-// the caller can keep its own 404.
+// the caller can keep its own 404. Two enabled launches sharing a symbol
+// return PairAmbiguousError (409) — same contract as LookupRWAPairBySymbol —
+// instead of Take()'s planner-dependent arbitrary row.
 func (r *LaunchRepository) LaunchBySymbol(ctx context.Context, source prices.Source, base, quote string) (prices.RWALaunch, bool, error) {
-	var e entities.RWALaunchEntity
+	var rows []entities.RWALaunchEntity
 	err := r.db.WithContext(ctx).
 		Where("source_code = ? AND enabled AND lower(base_symbol) = lower(?) AND lower(quote_symbol) = lower(?)",
 			string(source), base, quote).
-		Take(&e).Error
+		Order("token_addr").
+		Limit(2).
+		Find(&rows).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return prices.RWALaunch{}, false, nil
-		}
 		return prices.RWALaunch{}, false, fmt.Errorf("lookup rwa_launch by symbol: %w", err)
 	}
-	return entityToLaunch(e), true, nil
+	switch len(rows) {
+	case 0:
+		return prices.RWALaunch{}, false, nil
+	case 1:
+		return entityToLaunch(rows[0]), true, nil
+	default:
+		return prices.RWALaunch{}, false, &prices.PairAmbiguousError{
+			Base:  base,
+			Quote: quote,
+			IDs:   []int64{int64(rows[0].LaunchID), int64(rows[1].LaunchID)},
+		}
+	}
 }
 
 func entityToLaunch(e entities.RWALaunchEntity) prices.RWALaunch {
