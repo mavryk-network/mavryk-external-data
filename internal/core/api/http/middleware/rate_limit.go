@@ -13,6 +13,8 @@ import (
 
 // RateLimit is an inbound HTTP throttle. Returns 429 with a small JSON body when
 // the per-IP (or global) bucket runs out of tokens. Disabled when cfg.RPS <= 0.
+// /healthz and /readyz are exempt — kubelet probes must never compete with
+// clients for tokens (a starved probe restarts the pod).
 //
 // Per-IP buckets are kept in an in-memory map; idle entries are evicted by a
 // background goroutine. No external dependency (Redis) required for the simplest
@@ -32,6 +34,10 @@ func RateLimit(cfg config.ServerRateLimitConfig) gin.HandlerFunc {
 	if !cfg.PerIP {
 		l := rate.NewLimiter(rate.Limit(cfg.RPS), burst)
 		return func(c *gin.Context) {
+			if isHealthRoute(c) {
+				c.Next()
+				return
+			}
 			if !l.Allow() {
 				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 					"code":    "RATE_LIMITED",
@@ -46,6 +52,10 @@ func RateLimit(cfg config.ServerRateLimitConfig) gin.HandlerFunc {
 	store := newIPLimiterStore(rate.Limit(cfg.RPS), burst)
 	go store.evictLoop(15 * time.Minute)
 	return func(c *gin.Context) {
+		if isHealthRoute(c) {
+			c.Next()
+			return
+		}
 		l := store.limiter(c.ClientIP())
 		if !l.Allow() {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
@@ -56,6 +66,11 @@ func RateLimit(cfg config.ServerRateLimitConfig) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func isHealthRoute(c *gin.Context) bool {
+	p := c.Request.URL.Path
+	return p == "/healthz" || p == "/readyz"
 }
 
 type ipBucket struct {

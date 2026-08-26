@@ -26,11 +26,15 @@ server:
   handler_timeout: "10s"
   # During shutdown /readyz returns 503 for this many seconds before HTTP shutdown.
   shutdown_drain_seconds: 5
-  # Inbound rate limit. RPS=0 disables.
+  # Inbound rate limit. RPS=0 disables. /healthz and /readyz are exempt.
+  # Env overrides: SERVER_RATE_LIMIT_{RPS,BURST,PER_IP}.
   rate_limit:
     rps: 0
     burst: 0
     per_ip: true
+  # LB/proxy CIDRs whose X-Forwarded-For is honored for per-IP limiting.
+  # Empty = trust no proxy (ClientIP = direct peer). Env: SERVER_TRUSTED_PROXIES.
+  # trusted_proxies: ["10.0.0.0/8"]
 
 # No password / ssl_mode here: this file is baked into the production image.
 # Local dev falls back to the in-code defaults (postgres / prefer); deployed

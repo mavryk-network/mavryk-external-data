@@ -194,18 +194,33 @@ func configureGinMode(cfg *config.Config) {
 	}
 }
 
+// configureTrustedProxies applies server.trusted_proxies. Empty (the default)
+// trusts NO proxy: gin's own default trusts everything, so c.ClientIP() would
+// honor a client-supplied X-Forwarded-For and let an attacker spoof a fresh IP
+// per request — bypassing the per-IP rate limiter and growing its map. A
+// deployment fronted by a known LB sets that LB's CIDR to restore real
+// per-IP limiting.
+func configureTrustedProxies(router *gin.Engine, cfg *config.Config, logger *zerolog.Logger) {
+	proxies := cfg.Server.TrustedProxies
+	if len(proxies) == 0 {
+		_ = router.SetTrustedProxies(nil)
+		return
+	}
+	if err := router.SetTrustedProxies(proxies); err != nil {
+		// Entries are CIDR/IP-validated at config load; failure here means a
+		// gin-level rejection — fall back closed rather than trusting everything.
+		logger.Error().Err(err).Strs("trusted_proxies", proxies).
+			Msg("invalid_trusted_proxies_falling_back_to_none")
+		_ = router.SetTrustedProxies(nil)
+	}
+}
+
 // buildPublicEngine returns the engine used for the external-facing listener:
 // full middleware stack and optional inbound rate limit. CORS is handled at the
 // edge (Envoy Gateway SecurityPolicy), not in the app.
 func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
-	// Trust no proxies: gin's default trusts everything, so c.ClientIP() would
-	// honor a client-supplied X-Forwarded-For and let an attacker spoof a fresh
-	// IP per request — bypassing the per-IP rate limiter and growing its map. With
-	// no trusted proxies ClientIP() is the direct peer. A deployment that fronts
-	// this with a known LB and wants real per-IP limiting should instead configure
-	// that LB's CIDR here.
-	_ = router.SetTrustedProxies(nil)
+	configureTrustedProxies(router, cfg, logger)
 	router.Use(logging.RequestIDMiddleware(""))
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())
@@ -227,7 +242,7 @@ func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 // consistent.
 func buildInternalEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
-	_ = router.SetTrustedProxies(nil) // see buildPublicEngine — never trust client XFF
+	configureTrustedProxies(router, cfg, logger)
 	router.Use(logging.RequestIDMiddleware(""))
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())

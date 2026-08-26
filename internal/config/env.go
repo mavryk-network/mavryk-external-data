@@ -43,6 +43,37 @@ func overrideWithEnv(config *Config) error {
 		}
 		config.Server.LatestQuoteCacheTTLSeconds = val
 	}
+	if v := os.Getenv("SERVER_RATE_LIMIT_RPS"); v != "" {
+		val, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("SERVER_RATE_LIMIT_RPS: invalid float %q: %w", v, err)
+		}
+		config.Server.RateLimit.RPS = val
+	}
+	if v := os.Getenv("SERVER_RATE_LIMIT_BURST"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("SERVER_RATE_LIMIT_BURST: invalid int %q: %w", v, err)
+		}
+		config.Server.RateLimit.Burst = val
+	}
+	if v := os.Getenv("SERVER_RATE_LIMIT_PER_IP"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("SERVER_RATE_LIMIT_PER_IP: invalid bool %q: %w", v, err)
+		}
+		config.Server.RateLimit.PerIP = val
+	}
+	if v := os.Getenv("SERVER_TRUSTED_PROXIES"); v != "" {
+		parts := strings.Split(v, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		config.Server.TrustedProxies = out
+	}
 	for _, e := range []struct {
 		env string
 		dst *DurationYAML

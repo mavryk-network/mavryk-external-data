@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -94,6 +95,16 @@ func (c *Config) validateServer() error {
 	}
 	if c.Server.RateLimit.Burst < 0 {
 		return fmt.Errorf("server.rate_limit.burst must be >= 0")
+	}
+	for _, p := range c.Server.TrustedProxies {
+		p = strings.TrimSpace(p)
+		if _, _, err := net.ParseCIDR(p); err == nil {
+			continue
+		}
+		if net.ParseIP(p) != nil {
+			continue
+		}
+		return fmt.Errorf("server.trusted_proxies entry %q is neither a CIDR nor an IP", p)
 	}
 	return nil
 }

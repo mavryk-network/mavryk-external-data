@@ -104,7 +104,10 @@ services:
 
       # API configuration
       API_TIMEOUT_SECONDS: ${API_TIMEOUT_SECONDS:-30}
-      API_RATE_LIMIT_RPS: ${API_RATE_LIMIT_RPS:-10}
+      # Inbound rate limit (0 = off). The old API_RATE_LIMIT_RPS var was read by
+      # nothing — these are the knobs the server actually consumes.
+      SERVER_RATE_LIMIT_RPS: ${SERVER_RATE_LIMIT_RPS:-0}
+      SERVER_RATE_LIMIT_BURST: ${SERVER_RATE_LIMIT_BURST:-0}
 
       # CoinGecko API configuration
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-api_key}

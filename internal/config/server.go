@@ -33,8 +33,15 @@ type ServerConfig struct {
 	// HandlerTimeout caps total time inside a handler (per-request ctx timeout).
 	// 0 means "no per-handler limit; rely on Server.{Read,Write}Timeout".
 	HandlerTimeout DurationYAML `yaml:"handler_timeout"`
-	// RateLimit is an optional inbound rate limit applied to all routes.
+	// RateLimit is an optional inbound rate limit applied to all routes except
+	// /healthz and /readyz (probes must not compete with clients for tokens).
 	RateLimit ServerRateLimitConfig `yaml:"rate_limit"`
+	// TrustedProxies lists the LB/proxy CIDRs (or single IPs) whose
+	// X-Forwarded-For is honored for ClientIP(). Empty (the default) trusts no
+	// proxy: ClientIP() is the direct peer, which behind an LB collapses every
+	// client into one rate-limit bucket. Set to the ingress CIDR to restore
+	// real per-IP limiting without letting external callers spoof XFF.
+	TrustedProxies []string `yaml:"trusted_proxies"`
 	// FXMaxStalenessSeconds — how old a CoinGecko FX rate may be before
 	// `?in=` responses tag it `fx.stale=true` (still served, never blocks).
 	// 0 means use the in-code default (300s).

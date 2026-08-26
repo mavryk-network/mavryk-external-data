@@ -42,3 +42,29 @@ func TestOverrideWithEnv_InvalidValuesRejected(t *testing.T) {
 		}
 	})
 }
+
+func TestOverrideWithEnv_ServerRateLimitAndTrustedProxies(t *testing.T) {
+	t.Setenv("SERVER_RATE_LIMIT_RPS", "12.5")
+	t.Setenv("SERVER_RATE_LIMIT_BURST", "25")
+	t.Setenv("SERVER_RATE_LIMIT_PER_IP", "false")
+	t.Setenv("SERVER_TRUSTED_PROXIES", "10.0.0.0/8, 192.168.1.1")
+
+	cfg := &Config{}
+	if err := overrideWithEnv(cfg); err != nil {
+		t.Fatalf("overrideWithEnv: %v", err)
+	}
+	if cfg.Server.RateLimit.RPS != 12.5 {
+		t.Errorf("rps = %v, want 12.5", cfg.Server.RateLimit.RPS)
+	}
+	if cfg.Server.RateLimit.Burst != 25 {
+		t.Errorf("burst = %d, want 25", cfg.Server.RateLimit.Burst)
+	}
+	if cfg.Server.RateLimit.PerIP {
+		t.Errorf("per_ip = true, want false")
+	}
+	if len(cfg.Server.TrustedProxies) != 2 ||
+		cfg.Server.TrustedProxies[0] != "10.0.0.0/8" ||
+		cfg.Server.TrustedProxies[1] != "192.168.1.1" {
+		t.Errorf("trusted_proxies = %v", cfg.Server.TrustedProxies)
+	}
+}
