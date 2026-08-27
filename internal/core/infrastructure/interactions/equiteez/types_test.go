@@ -27,12 +27,45 @@ func TestFlexibleFloat_UnmarshalJSON(t *testing.T) {
 	}
 }
 
-func TestFlexibleFloat_RejectsNonFinite(t *testing.T) {
-	for _, raw := range []string{`"NaN"`, `"Inf"`, `"+Inf"`, `"-Infinity"`} {
+// TestFlexibleFloat_TolerateNonFinite: NaN/Inf must decode to a flagged zero
+// rather than erroring — an error fails the whole response, blanking every
+// pair's tick and leaving the backfill cursor unable to pass the batch.
+func TestFlexibleFloat_TolerateNonFinite(t *testing.T) {
+	for _, raw := range []string{`"NaN"`, `"nan"`, `"Inf"`, `"+Inf"`, `"-Infinity"`, `"INFINITY"`} {
+		var f FlexibleFloat
+		if err := json.Unmarshal([]byte(raw), &f); err != nil {
+			t.Errorf("%s: unexpected error %v", raw, err)
+			continue
+		}
+		if !f.NonFinite() {
+			t.Errorf("%s: NonFinite() = false, want true", raw)
+		}
+		if !f.Decimal().IsZero() {
+			t.Errorf("%s: value = %v, want zero", raw, f.Decimal())
+		}
+	}
+}
+
+// Tolerance is narrow: anything else unparseable still errors the decode, so a
+// schema change cannot be silently swallowed as a zero.
+func TestFlexibleFloat_RejectsOtherGarbage(t *testing.T) {
+	for _, raw := range []string{`"abc"`, `"1,5"`, `"0x10"`, `{}`, `[]`} {
 		var f FlexibleFloat
 		if err := json.Unmarshal([]byte(raw), &f); err == nil {
 			t.Errorf("%s: expected error, parsed as %v", raw, f.Decimal())
 		}
+	}
+}
+
+// A legitimate null must NOT be flagged — a never-traded orderbook reports a
+// null last_matched_price, and that is normal, not a dropped value.
+func TestFlexibleFloat_NullIsNotFlagged(t *testing.T) {
+	var f FlexibleFloat
+	if err := json.Unmarshal([]byte(`null`), &f); err != nil {
+		t.Fatalf("null: %v", err)
+	}
+	if f.NonFinite() {
+		t.Error("null must not be flagged as non-finite")
 	}
 }
 

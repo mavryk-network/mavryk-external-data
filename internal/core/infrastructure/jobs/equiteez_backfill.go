@@ -311,10 +311,13 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 
 	next, ok := advanceOrderCursor(orders)
 	if !ok {
-		// Every row in the batch had an unparseable ended_at, so there is no safe
-		// keyset position to move to. Advancing blindly would skip the batch;
-		// staying put would re-fetch it forever. Record it as an error so backoff
-		// applies and the auto-disable threshold eventually surfaces it.
+		// EVERY row in this batch had an unparseable ended_at — a systemic
+		// upstream break, not one poisoned row (a single bad row is skipped and
+		// the cursor still advances to the newest parseable one). There is no
+		// keyset position to move to, and advancing blindly would silently drop
+		// real fills, so retry under backoff/cooldown and make it countable.
+		metrics.IngestRowsDroppedTotal.
+			WithLabelValues(string(source), entityKey, "unparseable_ts").Add(float64(len(orders)))
 		return j.recordError(ctx, &logger, st,
 			fmt.Errorf("batch of %d orders has no parseable ended_at; cannot advance cursor", len(orders)))
 	}
@@ -451,16 +454,17 @@ func ordersToLastPoints(pair prices.RWAPair, orders []equiteez.OrderbookOrder, q
 	indexByTs := make(map[int64]int, len(orders))
 	shift := -int32(quoteDecimals) //nolint:gosec // decimals is small (typically 6); int→int32 cannot overflow
 	for _, o := range orders {
-		price := o.PricePerRWAToken.Decimal()
-		if !price.IsPositive() {
+		price, reason, ok := mappablePrice(o.PricePerRWAToken, shift)
+		if !ok {
+			if reason != "" {
+				metrics.IngestRowsDroppedTotal.
+					WithLabelValues(string(pair.Source), entityKey, reason).Inc()
+			}
 			continue
 		}
 		ts, err := time.Parse(time.RFC3339, o.EndedAt)
 		if err != nil {
 			continue
-		}
-		if shift != 0 {
-			price = price.Shift(shift)
 		}
 		pt := prices.PricePoint{
 			Source:    pair.Source,

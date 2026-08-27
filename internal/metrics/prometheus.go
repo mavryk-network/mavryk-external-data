@@ -105,6 +105,19 @@ var (
 		[]string{"job", "source", "entity", "reason"},
 	)
 
+	// IngestRowsDroppedTotal — individual upstream values discarded during row
+	// mapping instead of failing the whole batch. Non-zero means the upstream
+	// sent something unstorable (a non-finite numeric, or a magnitude
+	// numeric(38,18) cannot hold). Routine skips — a zero bid on a thin
+	// orderbook — are NOT counted here, so alert on any increase.
+	IngestRowsDroppedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ingest_rows_dropped_total",
+			Help: "Upstream values discarded during row mapping, by source, entity and reason.",
+		},
+		[]string{"source", "entity", "reason"},
+	)
+
 	// JobLastSuccessTimestamp — unix time of the last tick that completed
 	// without panicking. A job whose gauge stops advancing is stalled (blocked
 	// query, dead upstream) even while the process looks healthy; alert on

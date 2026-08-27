@@ -14,6 +14,9 @@ import (
 // an accepted CoinGecko sample timestamp (no crypto price data predates it).
 const minValidMillis = 1262304000000
 
+// maxStorablePrice is 10^20 — the integer-part capacity of numeric(38,18).
+const maxStorablePrice = 1e20
+
 // MapToPricePoints converts the CoinGecko market_chart/range response (one per
 // currency) into long-format []PricePoint rows for token_prices. The forward-fill
 // behaviour from the old wide-table mapper is gone — long-format records sparse
@@ -44,8 +47,11 @@ func MapToPricePoints(
 			// it would overwrite a good price at the same (token,currency,ts) and
 			// — because token_prices doubles as the FX source — make every ?in=
 			// conversion in that minute bucket resolve to a rate of 0.
+			// maxStorablePrice bounds the integer part: price is
+			// numeric(38,18), and one oversized value aborts the whole
+			// CreateInBatches statement, taking every good row with it.
 			v := point[1]
-			if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+			if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) || v >= maxStorablePrice {
 				continue
 			}
 			// Bounds-check the timestamp before the float→int64 conversion: an

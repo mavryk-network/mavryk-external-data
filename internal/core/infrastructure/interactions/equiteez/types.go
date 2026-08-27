@@ -17,17 +17,25 @@ import (
 //
 // Backed by decimal, not float64: on-chain amounts routinely exceed float64's
 // 53-bit integer range and the wire format is exact, so the value must reach
-// numeric(38,18) storage without a lossy float hop. Non-finite inputs
-// ("NaN"/"Inf") fail to parse and error the decode instead of poisoning the
-// batch downstream.
+// numeric(38,18) storage without a lossy float hop.
+//
+// Non-finite inputs ("NaN"/"Inf"/"Infinity" — Postgres numeric NaN and float8
+// infinity, which Hasura emits as quoted strings) decode to zero with NonFinite
+// set instead of erroring. Erroring fails json.Unmarshal for the WHOLE
+// response: one poisoned field would blank every pair's live tick, and in the
+// backfill the batch would never parse, so the keyset cursor could never
+// advance past it. Zero is already skipped by the callers' positivity guards,
+// so one bad field costs one side of one row. Any OTHER parse failure still
+// errors the decode — the tolerance is deliberately narrow.
 type FlexibleFloat struct {
-	d decimal.Decimal
+	d         decimal.Decimal
+	nonFinite bool
 }
 
 func (f *FlexibleFloat) UnmarshalJSON(b []byte) error {
 	b = bytes.TrimSpace(b)
+	f.d, f.nonFinite = decimal.Decimal{}, false
 	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
-		f.d = decimal.Decimal{}
 		return nil
 	}
 	s := string(b)
@@ -38,21 +46,36 @@ func (f *FlexibleFloat) UnmarshalJSON(b []byte) error {
 		}
 		str = strings.TrimSpace(str)
 		if str == "" {
-			f.d = decimal.Decimal{}
 			return nil
 		}
 		s = str
 	}
 	d, err := decimal.NewFromString(s)
 	if err != nil {
+		if isNonFinite(s) {
+			f.nonFinite = true
+			return nil
+		}
 		return fmt.Errorf("parse numeric value %q: %w", s, err)
 	}
 	f.d = d
 	return nil
 }
 
-// Decimal returns the exact parsed value (zero for null/empty payloads).
+// isNonFinite matches the tokens Postgres/Hasura use for numeric NaN and
+// float8 infinity, in any casing or sign spelling.
+func isNonFinite(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	t = strings.TrimPrefix(strings.TrimPrefix(t, "+"), "-")
+	return t == "nan" || t == "inf" || t == "infinity"
+}
+
+// Decimal returns the exact parsed value (zero for null/empty/non-finite).
 func (f FlexibleFloat) Decimal() decimal.Decimal { return f.d }
+
+// NonFinite reports that the upstream sent NaN/Inf and the value was
+// substituted with zero. Callers must skip such values and count the drop.
+func (f FlexibleFloat) NonFinite() bool { return f.nonFinite }
 
 // FlexibleFloatFromDecimal builds a value directly (fixtures/tests).
 func FlexibleFloatFromDecimal(d decimal.Decimal) FlexibleFloat { return FlexibleFloat{d: d} }

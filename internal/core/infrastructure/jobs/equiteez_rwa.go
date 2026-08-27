@@ -15,7 +15,6 @@ import (
 	"quotes/internal/metrics"
 
 	"github.com/rs/zerolog"
-	"github.com/shopspring/decimal"
 )
 
 // EquiteezRWAJob polls Equiteez for the currently-known RWA pairs (loaded from
@@ -300,13 +299,14 @@ func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, quot
 
 	shift := -int32(quoteDecimals) //nolint:gosec // decimals is small (typically 6); int→int32 cannot overflow
 
-	add := func(side string, raw decimal.Decimal) {
-		if !raw.IsPositive() {
+	add := func(side string, v equiteez.FlexibleFloat) {
+		price, reason, ok := mappablePrice(v, shift)
+		if !ok {
+			if reason != "" {
+				metrics.IngestRowsDroppedTotal.
+					WithLabelValues(string(pair.Source), entityKey, reason).Inc()
+			}
 			return
-		}
-		price := raw
-		if shift != 0 {
-			price = price.Shift(shift)
 		}
 		out = append(out, prices.PricePoint{
 			Source:    pair.Source,
@@ -316,8 +316,8 @@ func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, quot
 			Price:     price,
 		})
 	}
-	add(string(prices.SideBid), ob.HighestBuyPrice.Decimal())
-	add(string(prices.SideAsk), ob.LowestSellPrice.Decimal())
-	add(string(prices.SideLast), ob.LastMatchedPrice.Decimal())
+	add(string(prices.SideBid), ob.HighestBuyPrice)
+	add(string(prices.SideAsk), ob.LowestSellPrice)
+	add(string(prices.SideLast), ob.LastMatchedPrice)
 	return out
 }
