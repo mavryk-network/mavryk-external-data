@@ -16,7 +16,11 @@ info:
         24h volume, 1D change %) plus volume-distribution pie chart data
         for a given token.
 
-    All prices are returned as **JSON numbers** rounded to 6 decimal places.
+    All prices are returned as **JSON numbers**: rounded to 6 decimal places
+    at or above 0.01, and to 6 significant digits below it, so a
+    sub-microunit quote (a BTC- or ETH-denominated price) keeps its value
+    instead of collapsing to `0.000001` or `0`. The relative rounding error is
+    bounded at 5e-5 across the whole range.
     Timestamps are RFC3339 in UTC.
   license:
     name: Apache 2.0
@@ -1331,7 +1335,7 @@ components:
           example: usd
         price:
           type: number
-          description: Price rounded to 6 decimal places, serialised as a JSON number.
+          description: Price at wire precision (6 dp at or above 0.01, else 6 significant digits), serialised as a JSON number.
           example: 0.071541
 
     RWAPrice:
@@ -1368,8 +1372,9 @@ components:
         price:
           type: number
           description: |
-            Last price in `native_quote`, rounded to 6 decimal places.
-            Serialised as a JSON number (not a quoted string).
+            Last price in `native_quote` at wire precision (6 dp at or above
+            0.01, else 6 significant digits). Serialised as a JSON number (not
+            a quoted string).
           example: 100.45
         market:
           type: string
@@ -1568,7 +1573,8 @@ components:
         values:
           type: object
           description: |
-            Map of currency → price, rounded to 6 decimal places and
+            Map of currency → price at wire precision (6 dp at or above 0.01,
+            else 6 significant digits) and
             serialised as a JSON number (not a quoted string).
           additionalProperties:
             type: number
@@ -1648,7 +1654,7 @@ components:
           description: Bucket start time (RFC3339 UTC).
         p:
           type: number
-          description: Bucket close price, rounded to 6 decimal places.
+          description: Bucket close price at wire precision (6 dp at or above 0.01, else 6 significant digits).
       additionalProperties:
         type: number
         description: Converted close price for a `?in=` target currency.

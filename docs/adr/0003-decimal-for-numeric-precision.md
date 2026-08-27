@@ -68,3 +68,16 @@ end-to-end:
 - Schema columns: `migrations/0003_token_prices.sql`,
   `migrations/0004_rwa_quote_prices.sql`.
 - Domain: `internal/core/domain/prices/point.go`.
+
+## Addendum (2026-08): wire precision is hybrid, not fixed 6 dp
+
+A flat 6-decimal wire grid destroyed sub-cent values: MVRK/BTC ≈ 6.8e-7
+rendered as `0.000001` (+46%) or `0`, and a `delta_abs` of `0` then
+contradicted a live `change_pct` on the same response.
+
+FT and RWA prices now round to 6 decimal places at or above 0.01 and to 6
+significant digits below it (`roundForWire`, handlers/rwa_prices.go). The
+threshold is chosen so that every collected currency except btc and eth stays
+byte-identical to the previous output for the configured tokens. Ticker
+`change_24h_pct` and `share_pct` keep a flat 6 dp — they are quoted strings on
+a different endpoint family, and their magnitudes never approach the threshold.

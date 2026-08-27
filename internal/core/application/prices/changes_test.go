@@ -82,11 +82,11 @@ func TestChangeService_HappyPath_FT_OneCurrencyOnePeriod(t *testing.T) {
 	if !per.ChangePctValid {
 		t.Fatal("change_pct must be valid")
 	}
-	// (0.071541 - 0.072100) / 0.072100 * 100 ≈ -0.7752...
+	// (0.071541 - 0.072100) / 0.072100 * 100 ≈ -0.7753...
 	wantPct := decimal.RequireFromString("0.071541").
 		Sub(decimal.RequireFromString("0.072100")).
-		Div(decimal.RequireFromString("0.072100")).
-		Mul(decimal.NewFromInt(100))
+		Mul(decimal.NewFromInt(100)).
+		DivRound(decimal.RequireFromString("0.072100"), changePctDivPrecision)
 	if !per.ChangePct.Equal(wantPct) {
 		t.Errorf("change_pct = %s, want %s", per.ChangePct, wantPct)
 	}

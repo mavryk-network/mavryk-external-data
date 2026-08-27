@@ -183,9 +183,11 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:3010/v1/rwa/mars1-usdt/
 }
 ```
 
-FT and RWA prices are JSON **numbers rounded to 6 decimal places**; ticker
-prices are full-precision JSON strings. (ADR-0003 originally specified
-string serialisation everywhere — superseded for FT/RWA, see the note in
+FT and RWA prices are JSON **numbers**: 6 decimal places at or above 0.01,
+6 significant digits below it — so BTC/ETH-denominated quotes (≈7e-7) keep
+their value instead of rounding to `0.000001` or `0`. Ticker prices are
+full-precision JSON strings. (ADR-0003 originally specified string
+serialisation everywhere — superseded for FT/RWA, see the note in
 [ADR-0003](docs/adr/0003-decimal-for-numeric-precision.md).)
 
 Errors use a stable envelope:

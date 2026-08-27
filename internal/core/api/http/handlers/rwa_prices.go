@@ -435,16 +435,64 @@ type fxMetaDTO struct {
 	Stale  bool   `json:"stale"`
 }
 
-// num6 carries a price rounded to 6 decimal places and serialises as a
-// JSON number (no quotes). Stays in decimal precision — no float64
-// round-trip — so values like 156.25 don't drift to 156.249999...
+// Wire number precision. A fixed 6-decimal grid destroys sub-cent values
+// instead of rounding them: MVRK/BTC ≈ 6.8e-7 renders as 0.000001 (+46%) or
+// 0, and a delta_abs of 0 then contradicts a non-zero change_pct. Below the
+// threshold the grid goes relative — 6 significant digits — which bounds the
+// relative quantisation error at 5e-5 everywhere.
+//
+// The threshold is 0.01 because btc and eth are the only collected currencies
+// (domain/prices/currency.go) whose prices fall below it for the configured
+// tokens, so every usd/eur/gbp/cny/jpy/krw/rub/aed price, every RWA
+// native-quote price and every percentage keeps the exact bytes it had.
+const (
+	wirePlaces    = 6
+	wireSigDigits = 6
+	// maxWirePlaces stops a corrupt exponent from asking Round() for a
+	// 10^n big.Int; numeric(38,18) never needs more than 34 places.
+	maxWirePlaces = 36
+)
+
+var wireSmallValueThreshold = decimal.New(1, -2)
+
+// num6 carries a wire-rounded price and serialises as a JSON number (no
+// quotes). Stays in decimal precision — no float64 round-trip — so values
+// like 156.25 don't drift to 156.249999...
 type num6 struct{ d decimal.Decimal }
 
-func newNum6(d decimal.Decimal) num6 { return num6{d: d.Round(6)} }
+func newNum6(d decimal.Decimal) num6 { return num6{d: roundForWire(d)} }
+
+// roundForWire applies the precision rule:
+//
+//	|d| >= 0.01 → Round(6)             — byte-for-byte the historical output
+//	|d| <  0.01 → 6 significant digits — 0.00000068464 stays 0.00000068464
+func roundForWire(d decimal.Decimal) decimal.Decimal {
+	if d.IsZero() || d.Abs().GreaterThanOrEqual(wireSmallValueThreshold) {
+		return d.Round(wirePlaces)
+	}
+	places := wireSigDigits - 1 - leadingDigitPos(d)
+	if places > maxWirePlaces {
+		places = maxWirePlaces
+	}
+	return d.Round(int32(places)) //nolint:gosec // places is bounded by maxWirePlaces
+}
+
+// leadingDigitPos returns floor(log10(|d|)) — the base-10 position of d's
+// leading digit. decimal.NumDigits() is not used: its float64 fast path
+// reports 15 for coefficients 10^15..10^15+2, and big.Int.String() is exact.
+func leadingDigitPos(d decimal.Decimal) int {
+	s := d.Coefficient().String()
+	digits := len(s)
+	if digits > 0 && s[0] == '-' {
+		digits--
+	}
+	return digits + int(d.Exponent()) - 1
+}
 
 func (n num6) MarshalJSON() ([]byte, error) {
-	// decimal.String() is the canonical form: "34", "0.5", "124.857494".
-	// No trailing zeros, no quotes — already a valid JSON number.
+	// decimal.String() is the canonical fixed-point form: "34", "0.5",
+	// "124.857494", "0.00000068464" — never scientific notation, no trailing
+	// zeros, no quotes. Already a valid JSON number.
 	return []byte(n.d.String()), nil
 }
 

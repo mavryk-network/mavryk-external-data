@@ -24,6 +24,11 @@ import (
 // connection cannot pin the flight forever.
 const changeRepoTimeout = 15 * time.Second
 
+// changePctDivPrecision is the scale the percentage quotient carries before
+// wire rounding — wider than decimal's default DivisionPrecision (16) so a
+// tiny-but-real move cannot round to a flat 0%.
+const changePctDivPrecision = 24
+
 // ChangeQuery is the application-layer parameter object for fetching
 // price-change anchors. The repository decides how to interpret EntityKey
 // and AuxKey:
@@ -273,9 +278,13 @@ func (s *ChangeService) compose(q ChangeQuery) ChangeResult {
 				cfp.FromTS = anchorTS
 				if nowOK && !anchorPrice.IsZero() {
 					cfp.DeltaAbs = nowPrice.Sub(anchorPrice)
+					// Multiply before dividing and carry more than Div's
+					// DivisionPrecision (16): rounding the raw ratio at 16 dp
+					// can zero change_pct while delta_abs survives, which is
+					// the same self-inconsistency the wire rounding avoids.
 					cfp.ChangePct = cfp.DeltaAbs.
-						Div(anchorPrice).
-						Mul(decimal.NewFromInt(100))
+						Mul(decimal.NewFromInt(100)).
+						DivRound(anchorPrice, changePctDivPrecision)
 					cfp.ChangePctValid = true
 				}
 				// If anchorPrice.IsZero() the period stays AnchorFound=true
