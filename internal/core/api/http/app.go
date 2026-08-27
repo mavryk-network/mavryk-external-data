@@ -375,6 +375,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		TokenSymbol: "mvrk",
 		SourceCode:  string(prices.SourceCoinGecko),
 		MaxLimit:    cfg.Server.MaxQueryLimit,
+		MaxSpan:     0, // 0 = handler default (90d); no config knob for a deprecated route
 	}
 	return RouterDeps{
 		DB:            deps.DB,

@@ -24,6 +24,12 @@ func setDefaults(config *Config) {
 	if config.Server.IdleTimeout == 0 {
 		config.Server.IdleTimeout = DurationYAML(120 * time.Second)
 	}
+	if config.Server.HandlerTimeout == 0 {
+		// A config without the key otherwise runs with no per-request budget at
+		// all, which is what makes an expensive public query costly. Negative
+		// is the explicit "no budget" escape hatch.
+		config.Server.HandlerTimeout = DurationYAML(10 * time.Second)
+	}
 	if config.Server.LatestQuoteCacheTTLSeconds == 0 {
 		config.Server.LatestQuoteCacheTTLSeconds = 5
 	}

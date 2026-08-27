@@ -177,3 +177,47 @@ func TestLegacyQuotes_RepoError_500WithLegacyEnvelope(t *testing.T) {
 		t.Errorf("legacy 500 envelope missing 'error' key: %v", body)
 	}
 }
+
+// TestLegacyQuotes_NoLimitFallsBackToServerCap pins the DoS fix: an absent
+// ?limit must reach the repository as the server cap, never as 0 (which the
+// repository would render as "no LIMIT" over the token's whole history).
+func TestLegacyQuotes_NoLimitFallsBackToServerCap(t *testing.T) {
+	repo := &stubLegacyRepo{}
+	r := newLegacyEngine(repo)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/quotes", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if repo.gotLm != 10000 {
+		t.Errorf("limit = %d, want 10000 (server cap)", repo.gotLm)
+	}
+}
+
+func TestLegacyQuotes_WindowExceedingMaxSpan_400(t *testing.T) {
+	repo := &stubLegacyRepo{}
+	r := newLegacyEngine(repo)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/quotes?from=1970-01-01T00:00:00Z&to=2026-01-01T00:00:00Z", nil))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if repo.gotLm != 0 || !repo.gotFr.IsZero() {
+		t.Error("repository must not be reached for an over-wide window")
+	}
+}
+
+func TestLegacyQuotes_WindowWithinMaxSpan_OK(t *testing.T) {
+	repo := &stubLegacyRepo{}
+	r := newLegacyEngine(repo)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/quotes?from=2026-01-01T00:00:00Z&to=2026-03-01T00:00:00Z", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+}

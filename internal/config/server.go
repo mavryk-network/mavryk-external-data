@@ -31,7 +31,9 @@ type ServerConfig struct {
 	// many seconds before HTTP shutdown starts. 0 disables the drain phase.
 	ShutdownDrainSeconds int `yaml:"shutdown_drain_seconds"`
 	// HandlerTimeout caps total time inside a handler (per-request ctx timeout).
-	// 0 means "no per-handler limit; rely on Server.{Read,Write}Timeout".
+	// 0 selects the 10s default; a NEGATIVE value disables the budget (note
+	// env overrides are applied before defaults, so SERVER_HANDLER_TIMEOUT=0s
+	// still yields the default — use a negative duration to switch it off).
 	HandlerTimeout DurationYAML `yaml:"handler_timeout"`
 	// RateLimit is an optional inbound rate limit applied to all routes except
 	// /healthz and /readyz (probes must not compete with clients for tokens).

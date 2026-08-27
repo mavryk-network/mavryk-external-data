@@ -132,8 +132,10 @@ paths:
         (float64 — NOT the v1 precision contract). Superseded by
         `/v1/prices/{token}`; new integrations must not use it.
 
-        `from`/`to` are RFC3339; an explicit `limit` is validated against
-        `server.max_query_limit`.
+        `from`/`to` are RFC3339 and the window `to - from` may not exceed 90
+        days (400 otherwise). `limit` is validated against
+        `server.max_query_limit` and **defaults to it** when absent, so a
+        response is always bounded.
       operationId: legacyQuotes
       parameters:
         - $ref: "#/components/parameters/From"
@@ -1128,7 +1130,10 @@ components:
       name: limit
       in: query
       required: false
-      description: Cap on returned rows. Capped server-side by `server.max_query_limit` (default 10000).
+      description: |
+        Cap on returned rows. Validated against `server.max_query_limit`
+        (default 10000) and, when a time window is requested, defaulted to it —
+        a windowed response is never unbounded.
       schema:
         type: integer
         minimum: 1

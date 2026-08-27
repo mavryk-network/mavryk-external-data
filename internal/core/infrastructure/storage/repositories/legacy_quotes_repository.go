@@ -34,9 +34,15 @@ type LegacyQuoteRow struct {
 	GBP       float64   `gorm:"column:gbp"`
 }
 
+// defaultLegacyRowCap is the LIMIT used when a caller passes limit <= 0. This
+// repository backs one public, unauthenticated route, so an unbounded pivot has
+// no legitimate caller; the cap must never be applied downward, or an operator
+// who raised server.max_query_limit would be silently overridden.
+const defaultLegacyRowCap = 10000
+
 // QueryWide returns wide-format rows for (token, source) within [from, to],
-// sorted ascending by ts, capped at limit. limit <= 0 means no cap (relies on
-// the caller having already validated against server.max_query_limit).
+// sorted ascending by ts, capped at limit. limit <= 0 falls back to
+// defaultLegacyRowCap — the pivot is never issued without a LIMIT.
 //
 // The PK index (token_symbol, source_code, quote_currency, ts) combined with
 // TimescaleDB chunk exclusion on ts keeps this O(window). FILTER aggregation
@@ -67,12 +73,11 @@ WHERE token_symbol = ? AND source_code = ?
 GROUP BY ts
 ORDER BY ts ASC
 `
-	query := sql
-	args := []any{tokenSymbol, sourceCode, from.UTC(), to.UTC()}
-	if limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, limit)
+	if limit <= 0 {
+		limit = defaultLegacyRowCap
 	}
+	query := sql + " LIMIT ?"
+	args := []any{tokenSymbol, sourceCode, from.UTC(), to.UTC(), limit}
 
 	var rows []LegacyQuoteRow
 	if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
