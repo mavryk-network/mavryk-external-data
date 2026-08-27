@@ -81,7 +81,8 @@ func (r *BackfillStateRepository) Get(ctx context.Context, source prices.Source,
 //
 // `cursor_id` is deliberately left intact so the walk resumes exactly where it
 // stopped instead of replaying history. Rows disabled for a genuinely terminal
-// or operator-owned reason (reached_floor, auto_disabled, manual) are untouched.
+// or operator-owned reason (reached_floor, manual) are untouched; legacy
+// auto_disabled rows are resumed separately by ClearAutoDisabled.
 //
 // Called at job start so a deploy self-heals pairs frozen by the old sticky
 // behaviour — no ops SQL required.

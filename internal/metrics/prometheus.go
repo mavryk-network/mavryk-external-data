@@ -146,11 +146,14 @@ var (
 		[]string{"source", "entity"},
 	)
 
-	// BackfillAutoDisabledTotal — counter of times an entity has been auto-disabled.
+	// BackfillAutoDisabledTotal — counter of times an entity crossed
+	// BackfillMaxErrors. The name is kept for dashboard/alert compatibility;
+	// crossing the threshold now parks the entity for backfillErrorCooldown
+	// rather than disabling it permanently.
 	BackfillAutoDisabledTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "backfill_auto_disabled_total",
-			Help: "Backfill auto-disable events by entity.",
+			Help: "Backfill error-threshold events by entity (entity parked for a cooldown, not permanently disabled).",
 		},
 		[]string{"source", "entity", "reason"},
 	)

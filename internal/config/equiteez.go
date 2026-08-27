@@ -36,7 +36,7 @@ type EquiteezConfig struct {
 //     hammering across replicas. Default 1000.
 //   - BackfillMaxErrors / BackoffInitialMs / BackoffMaxMs / MaxBackoffMs:
 //     same semantics as the CoinGecko backfill — exponential backoff per pair
-//     on transient errors, hard auto-disable after BackfillMaxErrors.
+//     on transient errors, then a cooldown after BackfillMaxErrors.
 type EquiteezBackfillConfig struct {
 	Enabled           bool   `yaml:"enabled"`
 	TickSeconds       int    `yaml:"tick_seconds"`

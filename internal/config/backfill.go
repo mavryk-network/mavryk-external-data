@@ -14,7 +14,8 @@ package config
 //   - MinStartFrom:         hard floor that overrides any per-token start_from — once the
 //     cursor reaches this value, the token is marked disabled with
 //     reason=reached_floor (sticky).
-//   - BackfillMaxErrors:    after this many consecutive errors the token is auto-disabled.
+//   - BackfillMaxErrors:    after this many consecutive errors the token is parked for a
+//     cooldown (never permanently disabled — a transient outage must not need ops SQL).
 //   - BackoffInitialMs /
 //     BackoffMaxMs:         exponential backoff per-token on transient errors.
 //   - MaxBackoffMs:         hard cap on the computed backoff (default 24h). Keeps a

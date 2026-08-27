@@ -310,6 +310,8 @@ func (j *CoinGeckoBackfillJob) recordError(
 	}
 
 	st.ErrorCount++
+	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
+
 	threshold := j.cfg.Backfill.BackfillMaxErrors
 	if threshold > 0 && st.ErrorCount >= threshold {
 		next := time.Now().UTC().Add(backfillErrorCooldown)
@@ -326,7 +328,6 @@ func (j *CoinGeckoBackfillJob) recordError(
 			Msg("backfill_cooldown_after_repeated_errors")
 		return fetchErr
 	}
-	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
 
 	backoff := computeBackoff(
 		st.ErrorCount,

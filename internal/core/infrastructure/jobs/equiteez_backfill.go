@@ -379,6 +379,8 @@ func (j *EquiteezBackfillJob) recordError(
 	}
 
 	st.ErrorCount++
+	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
+
 	threshold := j.cfg.Equiteez.Backfill.BackfillMaxErrors
 	if threshold > 0 && st.ErrorCount >= threshold {
 		next := time.Now().UTC().Add(backfillErrorCooldown)
@@ -395,7 +397,6 @@ func (j *EquiteezBackfillJob) recordError(
 			Msg("equiteez_backfill_cooldown_after_repeated_errors")
 		return fetchErr
 	}
-	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
 
 	backoff := computeBackoff(
 		st.ErrorCount,
