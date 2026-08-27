@@ -315,9 +315,8 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		// upstream break, not one poisoned row (a single bad row is skipped and
 		// the cursor still advances to the newest parseable one). There is no
 		// keyset position to move to, and advancing blindly would silently drop
-		// real fills, so retry under backoff/cooldown and make it countable.
-		metrics.IngestRowsDroppedTotal.
-			WithLabelValues(string(source), entityKey, "unparseable_ts").Add(float64(len(orders)))
+		// real fills, so retry under backoff/cooldown. Not counted as a drop:
+		// the rows are retried, not discarded.
 		return j.recordError(ctx, &logger, st,
 			fmt.Errorf("batch of %d orders has no parseable ended_at; cannot advance cursor", len(orders)))
 	}

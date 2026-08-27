@@ -21,6 +21,10 @@ func TestRoundForWire_Table(t *testing.T) {
 		{"1234.5678", "1234.5678"},
 		{"0.01", "0.01"},
 		{"0.0100685", "0.010069"},
+		// Pins the threshold from BELOW: lowering it would take these into the
+		// significant-digit branch and change the bytes.
+		{"0.00999999999", "0.01"},
+		{"0.0012345678", "0.00123457"},
 		{"-4.3010293112", "-4.301029"},
 		{"0", "0"},
 		// Below it: 6 significant digits instead of a destroyed value.
@@ -140,4 +144,20 @@ func significantDigits(d decimal.Decimal) int {
 		return 0
 	}
 	return len(s)
+}
+
+// The threshold must be exactly 0.01: a value just below it takes the
+// significant-digit branch, a value at it keeps plain Round(6). Raising or
+// lowering wireSmallValueThreshold breaks one of these.
+func TestRoundForWire_ThresholdIsPinnedFromBothSides(t *testing.T) {
+	// 0.009123456789 rounds differently under each rule (0.009123 vs
+	// 0.00912346), so it detects the branch actually taken.
+	justBelow := decimal.RequireFromString("0.009123456789")
+	if got, round6 := roundForWire(justBelow).String(), justBelow.Round(6).String(); got == round6 {
+		t.Errorf("just below the threshold must NOT use Round(6): got %s", got)
+	}
+	justAbove := decimal.RequireFromString("0.010123456789")
+	if got, want := roundForWire(justAbove).String(), justAbove.Round(6).String(); got != want {
+		t.Errorf("just above the threshold roundForWire = %s, want Round(6) = %s", got, want)
+	}
 }

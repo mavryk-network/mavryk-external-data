@@ -7,7 +7,10 @@ import (
 
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/interactions/equiteez"
+	"quotes/internal/metrics"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/shopspring/decimal"
 )
 
@@ -119,4 +122,74 @@ func TestOrdersToLastPoints_NonFiniteRowSkippedBatchSurvives(t *testing.T) {
 	if cur, ok := advanceOrderCursor(orders); !ok || cur.ID != 2 {
 		t.Errorf("cursor = %+v (ok=%v), want id=2", cur, ok)
 	}
+}
+
+// A tiny exponent is as dangerous as a huge one: pgx renders numeric
+// digit-by-digit, so an unbounded negative exponent burns quadratic time in
+// the encoder before Postgres sees the statement.
+func TestMappablePrice_TinyExponentRejectedCheaply(t *testing.T) {
+	for _, raw := range []string{`"1e-1000000000"`, `1e-500000`, `"0.1e-999999999"`} {
+		v := flexFromJSON(t, raw)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if _, reason, ok := mappablePrice(v, -6); ok || reason != dropReasonOutOfRange {
+				t.Errorf("%s: ok=%v reason=%q, want out_of_range", raw, ok, reason)
+			}
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: mappablePrice did not return within 2s", raw)
+		}
+	}
+}
+
+// The column rounds to scale 18, and that rounding can carry into a 21st
+// integer digit — which a check on the unrounded value would admit.
+func TestMappablePrice_RoundingCarryAtTheBoundary(t *testing.T) {
+	cases := []struct {
+		raw    string
+		wantOK bool
+	}{
+		{`"99999999999999999999.999999999999999999"`, true},   // exactly representable
+		{`"99999999999999999999.9999999999999999995"`, false}, // rounds to 10^20
+		{`"9999999999999999999.9999999999999999995"`, true},   // carries to 10^19, still fits
+		{`"0.000000000000000000000000000000000001"`, false},   // below the column scale
+	}
+	for _, c := range cases {
+		_, reason, ok := mappablePrice(flexFromJSON(t, c.raw), 0)
+		if ok != c.wantOK {
+			t.Errorf("%s: ok=%v reason=%q, want ok=%v", c.raw, ok, reason, c.wantOK)
+		}
+	}
+}
+
+// The drop counter is the only signal that a value was discarded rather than
+// stored, so assert it actually moves — otherwise both increment sites could
+// be deleted with the suite still green.
+func TestOrderbookToPoints_CountsTheDrop(t *testing.T) {
+	pair := prices.RWAPair{ID: 11, Source: prices.SourceEquiteez, QuoteSymbol: "USDT"}
+	counter := metrics.IngestRowsDroppedTotal.WithLabelValues(
+		string(prices.SourceEquiteez), "11", dropReasonNonFinite)
+	before := counterValue(t, counter)
+
+	var ob equiteez.EquiteezOrderbook
+	if err := json.Unmarshal([]byte(`{"highest_buy_price":"NaN","last_matched_price":"56250000"}`), &ob); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	orderbookToPoints(pair, &ob, 6, time.Now().UTC())
+
+	if got := counterValue(t, counter) - before; got != 1 {
+		t.Errorf("ingest_rows_dropped_total delta = %v, want 1", got)
+	}
+}
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	return m.GetCounter().GetValue()
 }

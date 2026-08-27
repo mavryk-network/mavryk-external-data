@@ -78,6 +78,16 @@ contradicted a live `change_pct` on the same response.
 FT and RWA prices now round to 6 decimal places at or above 0.01 and to 6
 significant digits below it (`roundForWire`, handlers/rwa_prices.go). The
 threshold is chosen so that every collected currency except btc and eth stays
-byte-identical to the previous output for the configured tokens. Ticker
-`change_24h_pct` and `share_pct` keep a flat 6 dp — they are quoted strings on
-a different endpoint family, and their magnitudes never approach the threshold.
+byte-identical to the previous output for the configured tokens.
+
+That byte-identity claim covers **prices**, not derived quantities. `delta_abs`
+and `change_pct` have a magnitude of their own, so any move smaller than 0.01%
+crosses the threshold and now renders with more significant digits instead of
+flattening to `0` — deliberately, since a `delta_abs` of `0` beside a non-zero
+`change_pct` was the defect. `change_pct` is also computed at a wider division
+precision than decimal's default 16, which previously zeroed tiny-but-real
+moves before rounding ever ran.
+
+Ticker `change_24h_pct` and `share_pct` keep a flat 6 dp — they are quoted
+strings on a different endpoint family, and their magnitudes never approach the
+threshold.

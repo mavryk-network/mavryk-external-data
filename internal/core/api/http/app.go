@@ -247,13 +247,16 @@ func buildInternalEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())
 	router.Use(gin.Recovery())
-	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
-		router.Use(httpmw.HandlerTimeout(to))
-	}
 	// pprof discloses stack traces, heap layout and lets anyone pin a CPU for
 	// 30s per profile request — internal listener only, never the public one.
+	// Registered BEFORE the handler timeout so a 30s CPU profile or trace is
+	// not truncated by the request budget (gin applies Use() only to routes
+	// registered after it).
 	if cfg.Server.PprofEnabled {
 		httpmw.RegisterPprof(router)
+	}
+	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
+		router.Use(httpmw.HandlerTimeout(to))
 	}
 	return router
 }

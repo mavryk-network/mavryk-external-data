@@ -1342,8 +1342,9 @@ components:
       type: object
       description: |
         One RWA price observation. `price` is the `last` trade price in
-        the orderbook's native quote currency (e.g. 56.25 USDT), rounded
-        to 6 decimal places and serialised as a JSON number.
+        the orderbook's native quote currency (e.g. 56.25 USDT), at wire
+        precision (6 dp at or above 0.01, else 6 significant digits) and
+        serialised as a JSON number.
 
         When `?in=usd,eur,...` is requested, each successfully converted
         currency appears as an additional top-level numeric key (lowercase
@@ -1412,7 +1413,7 @@ components:
         description: |
           Converted price for a target currency from `?in=`.
           Key is the lowercase ISO-4217 code (`usd`, `eur`, `aed`, …).
-          Rounded to 6 decimal places.
+          At wire precision (6 dp at or above 0.01, else 6 significant digits).
 
     RWAPrimaryIssuance:
       type: object
@@ -1759,15 +1760,15 @@ components:
         from:
           type: number
           nullable: true
-          description: Anchor price (CA bucket close), 6 d.p., or `null`.
+          description: Anchor price (CA bucket close) at wire precision, or `null`.
         delta_abs:
           type: number
           nullable: true
-          description: "`now − from`, signed, 6 d.p. `null` when `from` is missing or zero."
+          description: "`now − from`, signed, at wire precision — a sub-0.01 delta keeps 6 significant digits rather than collapsing to 0. `null` when `from` is missing or zero."
         change_pct:
           type: number
           nullable: true
-          description: "`(now − from) / from × 100`, signed, 6 d.p. `null` when `from` is missing or zero."
+          description: "`(now − from) / from × 100`, signed, at wire precision — a move under 0.01% keeps 6 significant digits rather than reading as flat. `null` when `from` is missing or zero."
 
     FTChangeForCurrency:
       type: object

@@ -382,10 +382,10 @@ type anchorFixture struct {
 	price string
 }
 
-// TODOS TICKERS-1 #1. The LATERAL anchor is "freshest row at or before
-// latest.ts - 24h" — inclusive at the boundary and, deliberately, UNBOUNDED
-// below: there is no lower bracket, so an anchor of any age is used once no
-// closer one exists (see the -25h/-40h cases).
+// TODOS TICKERS-1 #1. The LATERAL anchor is the freshest row inside
+// [latest.ts - 25h, latest.ts - 24h] — inclusive at both edges. The lower
+// bound is what stops a post-gap anchor of arbitrary age from being reported
+// as a "24h" change; an anchor outside the bracket yields null.
 //
 // The stale fence is on and the anchors are all older than it: the fence lives
 // in the `latest` CTE only, so it must never blind the LATERAL.

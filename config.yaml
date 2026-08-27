@@ -22,7 +22,8 @@ server:
   # excludes stale rows regardless of caller flag.
   ticker_stale_after: "1h"
   pprof_enabled: false
-  # Per-handler ctx timeout (request budget). 0 disables.
+  # Per-handler ctx timeout (request budget). Omitted/0 selects the 10s
+  # default; a NEGATIVE duration disables it. /debug/pprof is exempt.
   handler_timeout: "10s"
   # During shutdown /readyz returns 503 for this many seconds before HTTP shutdown.
   shutdown_drain_seconds: 5

@@ -238,9 +238,11 @@ func TestLegacyQueryWide_WindowBoundsAreInclusive(t *testing.T) {
 	}
 }
 
-// The chart path truncates newest-first; this one is ORDER BY ts ASC then
-// LIMIT, so it keeps the OLDEST rows. Opposite behaviour, worth pinning.
-func TestLegacyQueryWide_LimitKeepsOldestRows(t *testing.T) {
+// Truncation keeps the RECENT end: the pivot selects newest-first and the
+// repository reverses to the ts ASC wire order. Dropping the newest rows is
+// what a plain ORDER BY ts ASC + LIMIT would do, and it silently hides live
+// prices — the same defect class the chart path had.
+func TestLegacyQueryWide_LimitKeepsNewestRows(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
 	repo := repositories.NewLegacyQuoteRepository(db)
@@ -254,8 +256,8 @@ func TestLegacyQueryWide_LimitKeepsOldestRows(t *testing.T) {
 		limit int
 		want  []time.Time
 	}{
-		{"limit below row count", 2, []time.Time{start, start.Add(time.Minute)}},
-		{"limit of one", 1, []time.Time{start}},
+		{"limit below row count", 2, []time.Time{start.Add(3 * time.Minute), start.Add(4 * time.Minute)}},
+		{"limit of one", 1, []time.Time{start.Add(4 * time.Minute)}},
 		{"limit above row count", 50, []time.Time{
 			start,
 			start.Add(time.Minute),
@@ -301,8 +303,14 @@ func TestLegacyQueryWide_NonPositiveLimitFallsBackToRowCap(t *testing.T) {
 		// all 10001 rows into the test log.
 		require.Equalf(t, legacyRowCap, len(rows),
 			"limit=%d must fall back to the row cap, not run unbounded", limit)
-		require.True(t, rows[0].Timestamp.Equal(start),
-			"the cap drops the newest rows, keeping the oldest")
+		require.False(t, rows[0].Timestamp.Equal(start),
+			"the cap must drop the OLDEST rows, not the newest")
+		require.True(t, rows[len(rows)-1].Timestamp.After(rows[0].Timestamp),
+			"rows stay ts ASC on the wire")
+		var newest time.Time
+		require.NoError(t, db.Raw(`SELECT max(ts) FROM token_prices`).Scan(&newest).Error)
+		require.True(t, rows[len(rows)-1].Timestamp.Equal(newest.UTC()),
+			"the most recent timestamp must survive truncation")
 		require.Containsf(t, strings.ToUpper(rec.last(t)), "LIMIT "+strconv.Itoa(legacyRowCap),
 			"limit=%d must still emit a LIMIT — the pivot is never issued unbounded", limit)
 	}

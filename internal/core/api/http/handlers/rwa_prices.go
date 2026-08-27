@@ -442,9 +442,12 @@ type fxMetaDTO struct {
 // relative quantisation error at 5e-5 everywhere.
 //
 // The threshold is 0.01 because btc and eth are the only collected currencies
-// (domain/prices/currency.go) whose prices fall below it for the configured
-// tokens, so every usd/eur/gbp/cny/jpy/krw/rub/aed price, every RWA
-// native-quote price and every percentage keeps the exact bytes it had.
+// (domain/prices/currency.go) whose PRICES fall below it for the configured
+// tokens, so every usd/eur/gbp/cny/jpy/krw/rub/aed price and every RWA
+// native-quote price keeps the exact bytes it had. Derived quantities are a
+// different matter: delta_abs and change_pct have their own magnitude, so a
+// move under 0.01% now renders with more digits than before instead of
+// flattening to 0 — which is the point.
 const (
 	wirePlaces    = 6
 	wireSigDigits = 6
