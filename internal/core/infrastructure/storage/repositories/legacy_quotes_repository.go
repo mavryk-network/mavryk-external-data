@@ -42,8 +42,15 @@ const defaultLegacyRowCap = 10000
 
 // QueryWide returns wide-format rows for (token, source) within [from, to],
 // sorted ascending by ts, capped at limit. limit <= 0 falls back to
-// defaultLegacyRowCap — the pivot is never issued without a LIMIT. When the
-// window holds more timestamps than the cap, the NEWEST ones are kept.
+// defaultLegacyRowCap — the pivot is never issued without a LIMIT.
+//
+// Truncation drops the NEWEST rows, matching both v0.1.0 and the v1 window
+// query (TokenPriceRepository.Query). That direction is load-bearing: legacy
+// clients page forward by re-issuing with `from` just past the last ts seen
+// (both bounds are inclusive), which only advances while a truncated window
+// returns the rows immediately after `from`. Keeping the recent end instead
+// would make every next page jump to the window end and silently skip the
+// history in between.
 //
 // The PK index (token_symbol, source_code, quote_currency, ts) combined with
 // TimescaleDB chunk exclusion on ts keeps this O(window). FILTER aggregation
@@ -72,7 +79,7 @@ FROM token_prices
 WHERE token_symbol = ? AND source_code = ?
   AND ts >= ? AND ts <= ?
 GROUP BY ts
-ORDER BY ts DESC
+ORDER BY ts ASC
 `
 	if limit <= 0 {
 		limit = defaultLegacyRowCap
@@ -83,11 +90,6 @@ ORDER BY ts DESC
 	var rows []LegacyQuoteRow
 	if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("legacy /quotes pivot: %w", err)
-	}
-	// Selected newest-first so a window with more timestamps than the cap keeps
-	// the RECENT end; reversed here because the wire contract is ts ASC.
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
 	}
 	return rows, nil
 }

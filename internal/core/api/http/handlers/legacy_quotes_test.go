@@ -195,29 +195,24 @@ func TestLegacyQuotes_NoLimitFallsBackToServerCap(t *testing.T) {
 	}
 }
 
-func TestLegacyQuotes_WindowExceedingMaxSpan_400(t *testing.T) {
+// TestLegacyQuotes_WideWindowServedNotRejected pins the frozen v0.1.0 contract:
+// a multi-year window is answered, bounded by the server row cap, exactly as
+// /v1/prices/{token} answers one. A 400 here would break clients that have
+// always fetched full history in a single call.
+func TestLegacyQuotes_WideWindowServedNotRejected(t *testing.T) {
 	repo := &stubLegacyRepo{}
 	r := newLegacyEngine(repo)
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
 		"/quotes?from=1970-01-01T00:00:00Z&to=2026-01-01T00:00:00Z", nil))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
-	}
-	if repo.gotLm != 0 || !repo.gotFr.IsZero() {
-		t.Error("repository must not be reached for an over-wide window")
-	}
-}
-
-func TestLegacyQuotes_WindowWithinMaxSpan_OK(t *testing.T) {
-	repo := &stubLegacyRepo{}
-	r := newLegacyEngine(repo)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
-		"/quotes?from=2026-01-01T00:00:00Z&to=2026-03-01T00:00:00Z", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	if repo.gotLm != 10000 {
+		t.Errorf("limit = %d, want 10000 (server cap bounds the wide window)", repo.gotLm)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !repo.gotFr.Equal(want) {
+		t.Errorf("from = %v, want %v (window passed through untouched)", repo.gotFr, want)
 	}
 }

@@ -136,10 +136,12 @@ paths:
         (float64 — NOT the v1 precision contract). Superseded by
         `/v1/prices/{token}`; new integrations must not use it.
 
-        `from`/`to` are RFC3339 and the window `to - from` may not exceed 90
-        days (400 otherwise). `limit` is validated against
-        `server.max_query_limit` and **defaults to it** when absent, so a
-        response is always bounded.
+        `from`/`to` are RFC3339 and the window is unbounded. `limit` is
+        validated against `server.max_query_limit` and **defaults to it** when
+        absent, so a response is always bounded. When a window holds more
+        timestamps than the limit, the **oldest** are returned: re-issue with
+        `from` set just past the last timestamp seen (both window bounds are
+        inclusive) to page forward through history.
       operationId: legacyQuotes
       parameters:
         - $ref: "#/components/parameters/From"

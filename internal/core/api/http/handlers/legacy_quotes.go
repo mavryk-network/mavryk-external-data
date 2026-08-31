@@ -33,17 +33,7 @@ type LegacyQuotesDeps struct {
 	TokenSymbol string // "mvrk"
 	SourceCode  string // "coingecko"
 	MaxLimit    int    // server.max_query_limit
-	// MaxSpan caps (to-from). 0 selects defaultLegacyMaxSpan; negative disables
-	// the cap (same escape-hatch convention as api.outbound_max_response_bytes).
-	MaxSpan time.Duration
 }
-
-// defaultLegacyMaxSpan bounds one /quotes window. 90 days is wider than any
-// window the row cap can return complete (backfilled history is 5-minutely,
-// ~288 timestamps/day, so 10000 rows ≈ 35 days), so it rejects only requests
-// that were already being truncated — while keeping the pivot's worst-case
-// input off the table's full 2-year retention.
-const defaultLegacyMaxSpan = 90 * 24 * time.Hour
 
 // legacyQuoteOut mirrors the v0.1.0 wire shape exactly: lowercase currency
 // keys, JSON numbers (no quoting), UTC RFC3339 timestamp. Anchors a snapshot
@@ -69,8 +59,12 @@ type legacyQuoteOut struct {
 //
 // Query params:
 //   - from  RFC3339, default now-24h
-//   - to    RFC3339, default now; (to-from) may not exceed MaxSpan
+//   - to    RFC3339, default now
 //   - limit positive int, capped by server.max_query_limit and defaulted to it
+//
+// The window itself is unbounded, matching v0.1.0 and /v1/prices/{token}: an
+// over-wide window is answered with the capped row set, never rejected, so
+// clients pinned to the frozen route keep working.
 func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		fromStr := c.Query("from")
@@ -104,17 +98,6 @@ func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 				"Invalid time range: 'from' must be before 'to'")
 			return
 		}
-		span := d.MaxSpan
-		if span == 0 {
-			span = defaultLegacyMaxSpan
-		}
-		if span > 0 && to.Sub(from) > span {
-			// 400, not 416: the legacy envelope and status set are frozen for
-			// clients that never learned the v1 error codes.
-			legacyError(c, http.StatusBadRequest,
-				"Invalid time range: window exceeds the maximum supported span")
-			return
-		}
 
 		limit := 0
 		if limitStr != "" {
@@ -132,10 +115,10 @@ func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 			limit = parsed
 		}
 		// This route is always in window mode (from/to always resolve), so an
-		// absent ?limit must fall back to the server cap — otherwise the
-		// repository emits no LIMIT at all and `?from=1970-01-01T00:00:00Z`
-		// pivots the token's entire history on a public unauthenticated route.
-		// Mirrors the v1 window-mode clamp in common/query.go.
+		// absent ?limit falls back to the server cap, keeping the operator's
+		// server.max_query_limit authoritative over the repository's fixed
+		// defaultLegacyRowCap backstop. Mirrors the v1 window-mode clamp in
+		// common/query.go.
 		if limit == 0 && d.MaxLimit > 0 {
 			limit = d.MaxLimit
 		}

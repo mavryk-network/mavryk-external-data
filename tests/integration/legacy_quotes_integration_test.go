@@ -238,11 +238,12 @@ func TestLegacyQueryWide_WindowBoundsAreInclusive(t *testing.T) {
 	}
 }
 
-// Truncation keeps the RECENT end: the pivot selects newest-first and the
-// repository reverses to the ts ASC wire order. Dropping the newest rows is
-// what a plain ORDER BY ts ASC + LIMIT would do, and it silently hides live
-// prices — the same defect class the chart path had.
-func TestLegacyQueryWide_LimitKeepsNewestRows(t *testing.T) {
+// Truncation keeps the OLDEST end, matching v0.1.0 and the v1 window query.
+// This is what makes forward pagination work: a client that re-requests with
+// from=<last ts seen> walks the window contiguously. Keeping the recent end
+// instead would make each next page jump to the window end and silently skip
+// everything in between.
+func TestLegacyQueryWide_LimitKeepsOldestRows(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
 	repo := repositories.NewLegacyQuoteRepository(db)
@@ -256,8 +257,8 @@ func TestLegacyQueryWide_LimitKeepsNewestRows(t *testing.T) {
 		limit int
 		want  []time.Time
 	}{
-		{"limit below row count", 2, []time.Time{start.Add(3 * time.Minute), start.Add(4 * time.Minute)}},
-		{"limit of one", 1, []time.Time{start.Add(4 * time.Minute)}},
+		{"limit below row count", 2, []time.Time{start, start.Add(time.Minute)}},
+		{"limit of one", 1, []time.Time{start}},
 		{"limit above row count", 50, []time.Time{
 			start,
 			start.Add(time.Minute),
@@ -273,6 +274,41 @@ func TestLegacyQueryWide_LimitKeepsNewestRows(t *testing.T) {
 			require.Equal(t, tc.want, legacyQuoteTimestamps(rows))
 		})
 	}
+}
+
+// Walks a window in limit-sized pages the way a v0.1.0 client does, re-issuing
+// with from=<last ts seen>. Every page must advance and the concatenation must
+// reproduce the series exactly — the property that breaks the moment truncation
+// keeps the recent end instead of the oldest.
+func TestLegacyQueryWide_ForwardPaginationCoversWindow(t *testing.T) {
+	db := openGorm(t)
+	truncateTokenPrices(t, db)
+	repo := repositories.NewLegacyQuoteRepository(db)
+
+	start := time.Date(2026, 5, 7, 8, 0, 0, 0, time.UTC)
+	const total = 5
+	legacyInsertSeries(t, db, "mvrk", "coingecko", start, total)
+	to := start.Add(time.Hour)
+
+	var walked []time.Time
+	from := start.Add(-time.Hour)
+	for page := 0; page < total; page++ {
+		rows, err := repo.QueryWide(context.Background(), "mvrk", "coingecko", from, to, 2)
+		require.NoError(t, err)
+		if len(rows) == 0 {
+			break
+		}
+		walked = append(walked, legacyQuoteTimestamps(rows)...)
+		// Legacy clients advance past the last row they saw; the window bounds
+		// are inclusive, so step one microsecond beyond it.
+		from = rows[len(rows)-1].Timestamp.Add(time.Microsecond)
+	}
+
+	want := make([]time.Time, 0, total)
+	for i := 0; i < total; i++ {
+		want = append(want, start.Add(time.Duration(i)*time.Minute))
+	}
+	require.Equal(t, want, walked, "paging must cover the window contiguously, skipping nothing")
 }
 
 // limit <= 0 must fall back to defaultLegacyRowCap — the pivot is never issued
@@ -303,14 +339,14 @@ func TestLegacyQueryWide_NonPositiveLimitFallsBackToRowCap(t *testing.T) {
 		// all 10001 rows into the test log.
 		require.Equalf(t, legacyRowCap, len(rows),
 			"limit=%d must fall back to the row cap, not run unbounded", limit)
-		require.False(t, rows[0].Timestamp.Equal(start),
-			"the cap must drop the OLDEST rows, not the newest")
+		require.True(t, rows[0].Timestamp.Equal(start),
+			"the cap must keep the window's oldest end so forward paging can advance")
 		require.True(t, rows[len(rows)-1].Timestamp.After(rows[0].Timestamp),
 			"rows stay ts ASC on the wire")
 		var newest time.Time
 		require.NoError(t, db.Raw(`SELECT max(ts) FROM token_prices`).Scan(&newest).Error)
-		require.True(t, rows[len(rows)-1].Timestamp.Equal(newest.UTC()),
-			"the most recent timestamp must survive truncation")
+		require.False(t, rows[len(rows)-1].Timestamp.Equal(newest.UTC()),
+			"fixture exceeds the cap by one row, so the newest timestamp is the one dropped")
 		require.Containsf(t, strings.ToUpper(rec.last(t)), "LIMIT "+strconv.Itoa(legacyRowCap),
 			"limit=%d must still emit a LIMIT — the pivot is never issued unbounded", limit)
 	}
