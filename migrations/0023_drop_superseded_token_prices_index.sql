@@ -1,0 +1,12 @@
+-- 0023_drop_superseded_token_prices_index.sql
+-- Drop the index 0022 replaced.
+--
+-- Split out of 0022 so that file can stay a single statement: its
+-- transaction_per_chunk build refuses to run inside a transaction block, and
+-- the integration harness wraps any multi-statement file in one.
+--
+-- Ordering matters — the replacement must exist before the old index goes, or
+-- latest-point reads lose their index between the two migrations. Cheap on its
+-- own: DROP INDEX takes a brief ACCESS EXCLUSIVE lock rather than rebuilding
+-- anything.
+DROP INDEX IF EXISTS idx_token_prices_latest;

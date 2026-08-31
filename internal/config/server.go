@@ -44,8 +44,13 @@ type ServerConfig struct {
 	// client into one rate-limit bucket. Set to the ingress CIDR to restore
 	// real per-IP limiting without letting external callers spoof XFF.
 	TrustedProxies []string `yaml:"trusted_proxies"`
-	// FXMaxStalenessSeconds — how old a CoinGecko FX rate may be before
-	// `?in=` responses tag it `fx.stale=true` (still served, never blocks).
+	// FXMaxStalenessSeconds — how old a CoinGecko FX rate may be before `?in=`
+	// responses tag it `fx.stale=true`. A stale rate is still served. Refusal
+	// happens only past the separate, fixed hard cap
+	// (prices.FXHardStalenessCap, 26h); a refused rate drops the currency from
+	// the flat `?in=` shapes and surfaces as `error: no_rate` on tickers.
+	// Validation requires this budget to stay below that cap, so `fx.stale`
+	// always has room to appear between the two.
 	// 0 means use the in-code default (300s).
 	FXMaxStalenessSeconds int `yaml:"fx_max_staleness_seconds"`
 	// MaxInCurrencies — cap on the number of comma-separated currencies a

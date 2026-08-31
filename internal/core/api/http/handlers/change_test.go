@@ -428,6 +428,14 @@ type rwaChangeResponse struct {
 }
 
 func TestChangeRWA_InConversion_StaleRateFlagged(t *testing.T) {
+	// Registered here rather than inherited from a neighbouring test: the token
+	// registry is process-wide, and any test that registers a different set
+	// (registerTestTokens installs mvrk only) evicts usdt. Without this the
+	// quote token no longer resolves, the conversion is refused instead of
+	// served stale, and the assertion below fails under -shuffle or -count=2.
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
 	pair := prices.RWAPair{ID: 42, BaseSymbol: "mars1", QuoteSymbol: "usdt"}
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	repo := &stubChangeRepo{

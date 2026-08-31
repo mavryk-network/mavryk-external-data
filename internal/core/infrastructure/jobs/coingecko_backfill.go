@@ -114,8 +114,8 @@ func (j *CoinGeckoBackfillJob) Start(ctx context.Context) {
 		Msg("backfill_job_starting")
 
 	safeGo(&j.wg, j.logger, "backfill", func() {
-		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, "backfill", func(c context.Context) {
-			j.tickAllTokens(c)
+		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, "backfill", func(c context.Context) error {
+			return j.tickAllTokens(c)
 		})
 	})
 }
@@ -128,15 +128,19 @@ func (j *CoinGeckoBackfillJob) Stop() {
 
 // tickAllTokens processes tokens in a deterministic order; per-token errors are
 // logged and swallowed so one failing token cannot block its siblings.
-func (j *CoinGeckoBackfillJob) tickAllTokens(ctx context.Context) {
+func (j *CoinGeckoBackfillJob) tickAllTokens(ctx context.Context) error {
+	var out tickOutcome
 	for _, info := range j.tokens {
-		if err := ctx.Err(); err != nil {
-			return
+		if ctx.Err() != nil {
+			break
 		}
-		if err := j.stepToken(ctx, info); err != nil {
+		err := j.stepToken(ctx, info)
+		out.record(err)
+		if err != nil && !errors.Is(err, errBackfillCoolingDown) {
 			j.logger.Warn().Err(err).Str("token", string(info.Symbol)).Msg("backfill_step_error")
 		}
 	}
+	return out.verdict(ctx, "coingecko backfill tick")
 }
 
 // stepToken performs one reverse-chunk step for a single token.
@@ -159,13 +163,16 @@ func (j *CoinGeckoBackfillJob) stepToken(ctx context.Context, info prices.TokenI
 	}
 	if st.Disabled {
 		logger.Debug().Str("reason", st.DisabledReason).Msg("backfill_skipped_disabled")
-		return nil
+		return errBackfillSkipped
 	}
 
 	now := time.Now().UTC()
 	if st.NextAttemptAt != nil && st.NextAttemptAt.After(now) {
 		logger.Debug().Time("retry_at", *st.NextAttemptAt).Msg("backfill_skipped_backoff")
-		return nil
+		if errorDrivenPause(st) {
+			return errBackfillCoolingDown
+		}
+		return errBackfillSkipped
 	}
 
 	if st.OldestTs == nil {
@@ -176,7 +183,7 @@ func (j *CoinGeckoBackfillJob) stepToken(ctx context.Context, info prices.TokenI
 		if !s.Found {
 			// Live job hasn't produced the first anchor yet.
 			logger.Debug().Msg("backfill_awaiting_live_anchor")
-			return nil
+			return errBackfillSkipped
 		}
 		ts := s.TS
 		st.OldestTs = &ts
@@ -426,6 +433,38 @@ func parseBackfillTime(s string) (time.Time, error) {
 		return t.UTC(), nil
 	}
 	return time.Time{}, errors.New("must be RFC3339 or YYYY-MM-DD")
+}
+
+// errBackfillCoolingDown marks an entity skipped because an ERROR-driven
+// backoff/cooldown has not elapsed. Shared by both backfill jobs.
+//
+// It is a skip, not a step failure, so callers do not log it again — the step
+// already logged it at Debug. It is still counted as a failed attempt for the
+// tick verdict: a tick in which EVERY entity is serving out an error cooldown
+// has accomplished nothing, and stamping job_last_success_timestamp_seconds for
+// it would report a stalled backfill as healthy.
+//
+// A NextAttemptAt in the future is not on its own enough to conclude that,
+// because the Equiteez walk also parks a caught-up pair that way — a success.
+// errorDrivenPause is the discriminator: every recordError path stamps
+// LastError and no success path leaves it set (stepToken clears it on a
+// successful chunk, pauseUntilNextFill clears it when the pair reaches the head
+// of the log). ErrorCount alone would not do: the threshold branch resets it to
+// zero while parking the entity for the full cooldown.
+var errBackfillCoolingDown = errors.New("backfill entity is in its error cooldown")
+
+// errBackfillSkipped marks an entity that had nothing to do this tick — it is
+// disabled (caught up, floor reached), waiting on another job, or not yet
+// wired up. Distinct from both success and failure: these states persist for
+// every subsequent tick, so counting them as successes would let one finished
+// entity keep the job's last-success gauge fresh while every other entity
+// fails. tickOutcome lets them abstain instead.
+var errBackfillSkipped = errors.New("backfill entity had nothing to do")
+
+// errorDrivenPause reports whether a future NextAttemptAt was set by a failure
+// rather than by a healthy pause.
+func errorDrivenPause(st *repositories.BackfillState) bool {
+	return st.LastError != ""
 }
 
 // computeBackoff returns initialMs * 2^(errorCount-1) clamped to maxMs and the

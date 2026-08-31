@@ -138,8 +138,8 @@ func (j *EquiteezBackfillJob) Start(ctx context.Context) {
 		Msg("equiteez_backfill_starting")
 
 	safeGo(&j.wg, j.logger, "equiteez_backfill", func() {
-		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, "equiteez_backfill", func(c context.Context) {
-			j.tickAllPairs(c)
+		runTickerLoop(ctx, j.stopCh, tick, jitter, j.logger, "equiteez_backfill", func(c context.Context) error {
+			return j.tickAllPairs(c)
 		})
 	})
 }
@@ -152,25 +152,29 @@ func (j *EquiteezBackfillJob) Stop() {
 
 // tickAllPairs loads the current pair list and processes each one. Per-pair
 // errors are logged and swallowed so one bad pair can't stall the rest.
-func (j *EquiteezBackfillJob) tickAllPairs(ctx context.Context) {
+func (j *EquiteezBackfillJob) tickAllPairs(ctx context.Context) error {
 	pairs, err := j.lookup.RWAPairs(ctx)
 	if err != nil {
 		j.logger.Error().Err(err).Msg("equiteez_backfill_load_pairs_failed")
-		return
+		return err
 	}
 	enabled := filterBackfillablePairs(pairs)
 	if len(enabled) == 0 {
 		j.logger.Debug().Msg("equiteez_backfill_no_enabled_pairs")
-		return
+		return nil
 	}
+	var out tickOutcome
 	for _, p := range enabled {
-		if err := ctx.Err(); err != nil {
-			return
+		if ctx.Err() != nil {
+			break
 		}
-		if err := j.stepPair(ctx, p); err != nil {
-			j.logger.Warn().Err(err).Int64("pair_id", p.ID).Msg("equiteez_backfill_step_error")
+		stepErr := j.stepPair(ctx, p)
+		out.record(stepErr)
+		if stepErr != nil && !errors.Is(stepErr, errBackfillCoolingDown) && !errors.Is(stepErr, errBackfillSkipped) {
+			j.logger.Warn().Err(stepErr).Int64("pair_id", p.ID).Msg("equiteez_backfill_step_error")
 		}
 	}
+	return out.verdict(ctx, "equiteez backfill tick")
 }
 
 // stepPair performs one batch fetch for a single pair and advances the cursor.
@@ -189,7 +193,7 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		// Sync hasn't populated the indexer ID yet. Skip silently — a successful
 		// SyncRWAPairs run will fix it on the next tick.
 		logger.Debug().Msg("equiteez_backfill_skipping_no_orderbook_id")
-		return nil
+		return errBackfillSkipped
 	}
 
 	st, err := j.state.Get(ctx, source, entityKey)
@@ -201,13 +205,20 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 	}
 	if st.Disabled {
 		logger.Debug().Str("reason", st.DisabledReason).Msg("equiteez_backfill_skipped_disabled")
-		return nil
+		return errBackfillSkipped
 	}
 
 	now := time.Now().UTC()
 	if st.NextAttemptAt != nil && st.NextAttemptAt.After(now) {
 		logger.Debug().Time("retry_at", *st.NextAttemptAt).Msg("equiteez_backfill_skipped_backoff")
-		return nil
+		// A caught-up pair is parked exactly the same way (pauseUntilNextFill),
+		// and that is the healthy steady state of this job — reporting it as a
+		// failed attempt would freeze the last-success gauge on ~9 of every 10
+		// ticks and alert on a working backfill.
+		if errorDrivenPause(st) {
+			return errBackfillCoolingDown
+		}
+		return errBackfillSkipped
 	}
 
 	quoteDecimals, ok := lookupQuoteDecimals(pair.QuoteSymbol)
@@ -223,8 +234,12 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		if perr := j.state.Upsert(ctx, st); perr != nil {
 			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_on_error")
 		}
+		metrics.JobErrorsTotal.WithLabelValues("equiteez_backfill", string(source), entityKey, "unknown_quote").Inc()
 		logger.Warn().Str("quote_symbol", pair.QuoteSymbol).Msg("equiteez_backfill_paused_unknown_quote")
-		return nil
+		// Reported as a failure, matching every tick of the cooldown this just
+		// created: the same unchanging registry gap must not read as success on
+		// the tick that discovers it and failure on the 59 that follow.
+		return errBackfillCoolingDown
 	}
 
 	startFrom, err := parseBackfillTime(j.cfg.Equiteez.Backfill.StartFrom)

@@ -76,8 +76,8 @@ func (j *RWAPairSyncJob) Start(ctx context.Context) {
 	j.logger.Info().Dur("interval", interval).Msg("rwa_pair_sync_job_starting")
 
 	safeGo(&j.wg, j.logger, "rwa_pair_sync", func() {
-		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa_pair_sync", func(c context.Context) {
-			j.syncOnce(c)
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa_pair_sync", func(c context.Context) error {
+			return j.syncOnce(c)
 		})
 	})
 }
@@ -89,9 +89,10 @@ func (j *RWAPairSyncJob) Stop() {
 }
 
 // syncOnce runs one discovery pass under its own timeout so a hung indexer
-// cannot stall the ticker. Errors are logged, never fatal: the collector keeps
-// serving whatever rwa_pairs already holds and the next tick retries.
-func (j *RWAPairSyncJob) syncOnce(ctx context.Context) {
+// cannot stall the ticker. Errors are logged and returned, never fatal: the
+// collector keeps serving whatever rwa_pairs already holds and the next tick
+// retries. Returning the error only withholds the tick's last-success stamp.
+func (j *RWAPairSyncJob) syncOnce(ctx context.Context) error {
 	timeout := time.Duration(j.cfg.API.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -99,7 +100,12 @@ func (j *RWAPairSyncJob) syncOnce(ctx context.Context) {
 	syncCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Both catalogs are tallied through the same rule the entity-walking ticks
+	// use: refreshing one of the two is still progress, and only a tick that
+	// refreshed neither withholds the last-success stamp.
+	var out tickOutcome
 	enabled, err := SyncRWAPairs(syncCtx, j.cfg, j.lookup, j.logger)
+	out.record(err)
 	if err != nil {
 		j.logger.Error().Err(err).Msg("rwa_pair_sync_failed")
 		// Fall through: launches are an independent catalog. An orderbook-side
@@ -112,10 +118,12 @@ func (j *RWAPairSyncJob) syncOnce(ctx context.Context) {
 	// never produce an rwa_pairs row and would otherwise be absent from GET /v1/rwa.
 	if j.launches != nil {
 		stored, lErr := SyncRWALaunches(syncCtx, j.cfg, j.launches, j.logger)
+		out.record(lErr)
 		if lErr != nil {
 			j.logger.Error().Err(lErr).Msg("rwa_launch_sync_failed")
-			return
+		} else {
+			j.logger.Debug().Int("launches", stored).Msg("rwa_launch_sync_ok")
 		}
-		j.logger.Debug().Int("launches", stored).Msg("rwa_launch_sync_ok")
 	}
+	return out.verdict(ctx, "rwa pair sync tick")
 }

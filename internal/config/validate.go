@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	apiprices "quotes/internal/core/application/prices"
 )
 
 // Validate checks required fields and formats after defaults and env overrides
@@ -68,6 +70,15 @@ func (c *Config) validateServer() error {
 	}
 	if c.Server.FXMaxStalenessSeconds < 0 {
 		return fmt.Errorf("server.fx_max_staleness_seconds must be >= 0, got %d", c.Server.FXMaxStalenessSeconds)
+	}
+	// The soft budget only tags a rate stale; the hard cap refuses it outright.
+	// A budget at or above the cap inverts them: every rate the budget meant to
+	// serve flagged stale is refused first, so `fx.stale` becomes unreachable
+	// and the knob silently does nothing. Refuse that config instead.
+	if hardCap := int(apiprices.FXHardStalenessCap / time.Second); c.Server.FXMaxStalenessSeconds >= hardCap {
+		return fmt.Errorf(
+			"server.fx_max_staleness_seconds must be < %d (the hard staleness cap past which conversions are refused), got %d",
+			hardCap, c.Server.FXMaxStalenessSeconds)
 	}
 	if c.Server.MaxInCurrencies < 0 {
 		return fmt.Errorf("server.max_in_currencies must be >= 0, got %d", c.Server.MaxInCurrencies)

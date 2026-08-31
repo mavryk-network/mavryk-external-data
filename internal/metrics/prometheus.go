@@ -118,14 +118,21 @@ var (
 		[]string{"source", "entity", "reason"},
 	)
 
-	// JobLastSuccessTimestamp — unix time of the last tick that completed
-	// without panicking. A job whose gauge stops advancing is stalled (blocked
-	// query, dead upstream) even while the process looks healthy; alert on
-	// now() - job_last_success_timestamp_seconds > a few intervals.
+	// JobLastSuccessTimestamp — unix time of the last tick that actually did its
+	// work: the tick reported no error and did not panic. A tick that logged a
+	// failed fetch or save, or in which every entity failed, leaves the gauge
+	// where it was, so a job whose gauge stops advancing is stalled OR failing
+	// (blocked query, dead upstream) even while the process looks healthy;
+	// alert on now() - job_last_success_timestamp_seconds > a few intervals.
+	// Seeded at job start so a job that never succeeds still exports a series.
+	//
+	// It answers "is the job erroring", not "is data arriving": an upstream that
+	// answers 200 with an empty payload is a successful tick here. Pair it with
+	// job_rows_affected_total to catch that.
 	JobLastSuccessTimestamp = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "job_last_success_timestamp_seconds",
-			Help: "Unix timestamp of the last background-job tick that completed without panicking.",
+			Help: "Unix timestamp of the last background-job tick that completed its work without error.",
 		},
 		[]string{"job"},
 	)

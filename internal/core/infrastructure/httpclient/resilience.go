@@ -70,8 +70,8 @@ func (s ResilienceSettings) Normalized() ResilienceSettings {
 // gives logical-request count.
 //
 // The circuit breaker is applied separately via WrapCircuitBreaker so clients
-// can place it OUTSIDE the rate limiter: an open breaker then fast-fails
-// before a limiter token is consumed (and before the caller blocks in Wait).
+// can place it INSIDE the rate limiter — see that function for why the order
+// matters.
 func WrapResilientTransport(base http.RoundTripper, s ResilienceSettings) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
@@ -85,7 +85,23 @@ func WrapResilientTransport(base http.RoundTripper, s ResilienceSettings) http.R
 }
 
 // WrapCircuitBreaker wraps rt with the component's shared circuit breaker
-// (no-op when disabled). Intended as the OUTERMOST layer of the client stack.
+// (no-op when disabled). It must be applied UNDER the rate limiter, never over
+// it: gobreaker counts every non-nil error as an upstream failure, so a limiter
+// Wait that fast-fails with "would exceed context deadline" — pure self-inflicted
+// throttling, the upstream never contacted — would trip the shared breaker and
+// fast-fail all traffic for a component whose upstream is perfectly healthy.
+// That is worst exactly where throttling bites hardest (a low configured RPS
+// with live, backfill and tickers jobs sharing one limiter).
+//
+// Layering alone is not sufficient, because retryTransport runs INSIDE the
+// breaker and charges the same limiter per retry: that path deliberately
+// returns the upstream response/error rather than a throttling error, so the
+// breaker still only ever judges the upstream (see retryTransport.RoundTrip).
+//
+// The cost of this order is that an open breaker still spends a limiter token
+// before fast-failing. That waste is bounded by the tick cadence, but it is not
+// free at a low configured RPS: a caller can block in Wait for a token it will
+// only spend on a fast-fail.
 func WrapCircuitBreaker(rt http.RoundTripper, s ResilienceSettings) http.RoundTripper {
 	s = s.Normalized()
 	if s.CircuitBreakerDisabled {
@@ -243,14 +259,19 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if attempt >= attempts || !retryableErr(err) {
 				return nil, err
 			}
-			if comp != "" {
-				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
-			}
+			// Being unable to stage the retry (deadline reached, no limiter
+			// token in time) is OUR constraint, not the upstream's. Surface the
+			// upstream error we already have instead: the circuit breaker sits
+			// above this transport and must judge the upstream, never our own
+			// throttling.
 			if werr := waitContext(req.Context(), bo.NextBackOff()); werr != nil {
-				return nil, werr
+				return nil, err
 			}
 			if werr := limiterWait(req.Context(), lim, comp); werr != nil {
-				return nil, werr
+				return nil, err
+			}
+			if comp != "" {
+				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
 			}
 			continue
 		}
@@ -264,15 +285,23 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if ra := retryAfter(resp); ra > 0 {
 				wait = ra
 			}
-			_ = resp.Body.Close()
-			if comp != "" {
-				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
-			}
+			// Buffer and close the body BEFORE waiting: an unclosed body pins
+			// its pooled connection for the whole Retry-After (which upstreams
+			// set to minutes), starving every other caller of that host. The
+			// buffered copy keeps the response usable, because if the retry
+			// cannot be staged the caller — and the breaker above — must see the
+			// real upstream status. Returning a throttling error there instead
+			// is what let a pure 429 storm trip the breaker with no upstream
+			// failure at all.
+			bufferErrorBody(resp)
 			if werr := waitContext(req.Context(), wait); werr != nil {
-				return nil, werr
+				return resp, nil
 			}
 			if werr := limiterWait(req.Context(), lim, comp); werr != nil {
-				return nil, werr
+				return resp, nil
+			}
+			if comp != "" {
+				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
 			}
 			continue
 		}
@@ -313,6 +342,19 @@ func sharedBreaker(s ResilienceSettings) *gobreaker.CircuitBreaker {
 	cb := newBreaker(s)
 	sharedBreakers[s.Component] = cb
 	return cb
+}
+
+// ResetSharedBreakers drops every entry from the shared breaker registry, so a
+// component's breaker starts closed again. Test helper mirroring
+// ResetSharedLimiters — without it a test that trips a breaker leaks an open
+// one into every later test using the same component name (and into a repeat
+// run under -count). Production code never calls this.
+func ResetSharedBreakers() {
+	sharedBreakersMu.Lock()
+	defer sharedBreakersMu.Unlock()
+	for k := range sharedBreakers {
+		delete(sharedBreakers, k)
+	}
 }
 
 func newBreaker(s ResilienceSettings) *gobreaker.CircuitBreaker {
@@ -361,6 +403,27 @@ func cbStateValue(s gobreaker.State) float64 {
 	}
 }
 
+// maxBufferedErrorBody bounds what bufferErrorBody keeps from a retryable
+// response. Error payloads are small; anything larger is truncated rather than
+// held in memory across a retry wait.
+const maxBufferedErrorBody = 32 << 10
+
+// bufferErrorBody replaces resp.Body with an in-memory copy and closes the
+// original, releasing its pooled connection. Used on the retry path so the
+// response stays returnable to the caller without holding a connection for the
+// duration of a backoff or Retry-After wait.
+func bufferErrorBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	buf, _ := io.ReadAll(io.LimitReader(resp.Body, maxBufferedErrorBody))
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(buf))
+	// Keep the header honest about what the body now holds — a truncated body
+	// under the original ContentLength mis-frames Response.Write/DumpResponse.
+	resp.ContentLength = int64(len(buf))
+}
+
 // errUpstream5xx is an internal sentinel: the callback returns it alongside a
 // real 5xx response so gobreaker records a failure, then RoundTrip unwraps it and
 // hands the caller the real response. Without this the breaker only ever sees
@@ -371,6 +434,13 @@ var errUpstream5xx = errors.New("upstream returned 5xx (counted as circuit-break
 func (c *circuitBreakerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if c.next == nil {
 		c.next = http.DefaultTransport
+	}
+	// An already-cancelled caller (job shutdown, expired tick budget) says
+	// nothing about upstream health. Fail before Execute so gobreaker — which
+	// has no "neutral" outcome — does not record it as a failure and inch the
+	// shared breaker toward tripping during an ordinary drain.
+	if err := req.Context().Err(); err != nil {
+		return nil, err
 	}
 	v, err := c.cb.Execute(func() (interface{}, error) {
 		resp, rerr := c.next.RoundTrip(req)

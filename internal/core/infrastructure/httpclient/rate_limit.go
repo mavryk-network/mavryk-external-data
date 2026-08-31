@@ -99,9 +99,12 @@ func ResetSharedLimiters() {
 //
 // The limiter charges one token for the logical request (attempt 1). Retries live
 // below it inside retryTransport, which charges a token per retry via
-// lookupSharedLimiter so a 429 storm cannot exceed the configured RPS. Per-component
-// limiters are shared process-wide so that additional HTTP clients (new tokens,
-// backfill workers) do not multiply the RPS actually sent to the upstream API.
+// lookupSharedLimiter so a 429 storm cannot exceed the configured RPS — and when
+// that retry-side token cannot be had in time, retryTransport surfaces the
+// upstream outcome rather than the throttling error, so the breaker one layer up
+// never sees our own back-pressure. Per-component limiters are shared
+// process-wide so that additional HTTP clients (new tokens, backfill workers) do
+// not multiply the RPS actually sent to the upstream API.
 func WrapRateLimited(next http.RoundTripper, s RateLimitSettings) http.RoundTripper {
 	if next == nil {
 		next = http.DefaultTransport

@@ -212,7 +212,7 @@ func TestCoinGeckoLiveJob_CollectOnce_MapsAllCurrenciesToRepository(t *testing.T
 	job := NewCoinGeckoLiveJob(cfg, repo, nil, nil)
 
 	rowsBefore := cgCounterValue(t, cgRowsAffected())
-	job.collectOnce(context.Background(), newCGCollector(cfg))
+	_ = job.collectOnce(context.Background(), newCGCollector(cfg))
 
 	if got := repo.saveCount(); got != 1 {
 		t.Fatalf("Save calls = %d, want 1", got)
@@ -312,7 +312,7 @@ func TestCoinGeckoLiveJob_CollectOnce_OutboundRequestShape(t *testing.T) {
 			cfg := cgLiveTestConfig(fake.URL+c.basePath, c.apiKey)
 			job := NewCoinGeckoLiveJob(cfg, &stubPriceRepo{}, nil, nil)
 
-			job.collectOnce(context.Background(), newCGCollector(cfg))
+			_ = job.collectOnce(context.Background(), newCGCollector(cfg))
 
 			reqs := fake.requests()
 			currencies := prices.AllSupportedCurrencies()
@@ -378,7 +378,7 @@ func TestCoinGeckoLiveJob_CollectOnce_UpstreamErrorWritesNothing(t *testing.T) {
 	job := NewCoinGeckoLiveJob(cfg, repo, nil, nil)
 
 	errsBefore := cgCounterValue(t, cgFetchErrors())
-	job.collectOnce(context.Background(), newCGCollector(cfg))
+	_ = job.collectOnce(context.Background(), newCGCollector(cfg))
 
 	if got := repo.saveCount(); got != 0 {
 		t.Errorf("Save calls = %d, want 0 (no partial write on upstream failure)", got)
@@ -412,7 +412,7 @@ func TestCoinGeckoLiveJob_CollectOnce_OneDeadCurrencyKeepsTheRest(t *testing.T) 
 	job := NewCoinGeckoLiveJob(cfg, repo, nil, nil)
 
 	errsBefore := cgCounterValue(t, cgFetchErrors())
-	job.collectOnce(context.Background(), newCGCollector(cfg))
+	_ = job.collectOnce(context.Background(), newCGCollector(cfg))
 
 	if got := cgCounterValue(t, cgFetchErrors()) - errsBefore; got != 1 {
 		t.Errorf("job_errors_total{reason=fetch} delta = %v, want 1", got)

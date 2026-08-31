@@ -43,13 +43,13 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	}
 	rt := httpclient.MaxBytesReader(httpclient.SharedTransport(), maxBytes)
 	rt = httpclient.WrapResilientTransport(rt, res)
+	rt = httpclient.WrapCircuitBreaker(rt, res)
 	rt = &logging.HTTPTransport{
 		Base:      rt,
 		Logger:    componentLogger,
 		Component: "equiteez",
 	}
 	rt = httpclient.WrapRateLimited(rt, rl)
-	rt = httpclient.WrapCircuitBreaker(rt, res)
 	return &Client{
 		indexerURL: indexerRequestURL(eq.IndexerURL, eq.IndexerPassword),
 		httpClient: &http.Client{

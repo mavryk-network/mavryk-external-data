@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -83,8 +84,8 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 	// resolved per tick (see collectTick), so a pair discovered later — by the
 	// periodic RWAPairSyncJob or by an operator — is picked up without a restart.
 	safeGo(&j.wg, j.logger, "rwa", func() {
-		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa", func(c context.Context) {
-			j.collectTick(c)
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa", func(c context.Context) error {
+			return j.collectTick(c)
 		})
 	})
 }
@@ -97,18 +98,18 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 // Previously the list was snapshotted at Start and frozen for the process
 // lifetime, so both required a restart. The reload is one indexed SELECT per
 // tick, negligible next to the outbound GraphQL round-trip that follows.
-func (j *EquiteezRWAJob) collectTick(ctx context.Context) {
+func (j *EquiteezRWAJob) collectTick(ctx context.Context) error {
 	pairs, err := j.lookup.RWAPairs(ctx)
 	if err != nil {
 		j.logger.Error().Err(err).Msg("rwa_load_pairs_failed")
-		return
+		return err
 	}
 	enabled := filterEnabledPairs(pairs, prices.SourceEquiteez)
 	if len(enabled) == 0 {
 		j.logger.Debug().Msg("rwa_no_enabled_pairs")
-		return
+		return nil
 	}
-	j.collectOnce(ctx, enabled)
+	return j.collectOnce(ctx, enabled)
 }
 
 // Stop signals the goroutine and waits.
@@ -124,7 +125,7 @@ func (j *EquiteezRWAJob) Stop() {
 // then resolve the right orderbook by `orderbook_addr` — a single token may
 // own multiple orderbooks (different quote currencies / regulatory tranches),
 // so we match each pair against its specific orderbook contract.
-func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair) {
+func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair) error {
 	start := time.Now()
 	defer func() {
 		metrics.JobTickDurationSeconds.WithLabelValues("rwa", string(prices.SourceEquiteez), "all").
@@ -133,10 +134,14 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 
 	// Group pairs by token address so one GraphQL request covers all pairs of
 	// the same token; resolve the right orderbook on the response side.
+	// Reached with enabled pairs in hand, so an empty result here is a catalog
+	// break (no pair carries a token address), not an idle tick: the job can
+	// collect nothing at all until it is fixed, and reporting success would
+	// keep the last-success gauge fresh through exactly that outage.
 	byTokenAddr, tokenAddresses := groupPairsByToken(pairs)
 	if len(tokenAddresses) == 0 {
-		j.logger.Debug().Msg("rwa_no_pairs_with_token_addr")
-		return
+		j.logger.Warn().Int("pairs", len(pairs)).Msg("rwa_no_pairs_with_token_addr")
+		return fmt.Errorf("rwa tick: none of the %d enabled pairs has a token address", len(pairs))
 	}
 
 	// Resolve quote-currency decimals once per pair. Equiteez orderbooks
@@ -148,29 +153,31 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 	// large with no way for the consumer to know.
 	pairDecimals := j.resolveQuoteDecimals(pairs)
 	if len(pairDecimals) == 0 {
-		j.logger.Warn().Msg("rwa_no_pairs_with_known_quote_decimals")
-		return
+		// Same class as the empty token-address case: a registry break that
+		// stops the job dead until an operator fixes it.
+		j.logger.Warn().Int("pairs", len(pairs)).Msg("rwa_no_pairs_with_known_quote_decimals")
+		return fmt.Errorf("rwa tick: no quote decimals registered for any of the %d enabled pairs", len(pairs))
 	}
 
 	tokens, err := j.client.GetTokensWithOrderbooks(ctx, tokenAddresses)
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "fetch").Inc()
 		j.logger.Error().Err(err).Msg("rwa_fetch_failed")
-		return
+		return err
 	}
 
 	now := time.Now().UTC()
 	points := buildPointsFromOrderbooks(tokens, byTokenAddr, pairDecimals, now)
 	if len(points) == 0 {
 		j.logger.Debug().Msg("rwa_no_points_collected")
-		return
+		return nil
 	}
 
 	n, err := j.repo.Save(ctx, points)
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "save").Inc()
 		j.logger.Error().Err(err).Msg("rwa_save_failed")
-		return
+		return err
 	}
 	metrics.JobRowsAffectedTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all").
 		Add(float64(n))
@@ -179,6 +186,7 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 		Int("points", len(points)).
 		Int64("rows_affected", n).
 		Msg("rwa_collected")
+	return nil
 }
 
 // groupPairsByToken returns a map (tokenAddr → pairs of that token) plus a

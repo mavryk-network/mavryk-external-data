@@ -204,7 +204,16 @@ func configureGinMode(cfg *config.Config) {
 // deployment fronted by a known LB sets that LB's CIDR to restore real
 // per-IP limiting.
 func configureTrustedProxies(router *gin.Engine, cfg *config.Config, logger *zerolog.Logger) {
-	proxies := cfg.Server.TrustedProxies
+	// Trim to match Validate, which checks TrimSpace(entry): a padded YAML entry
+	// (" 10.0.0.0/8") passes config validation but gin rejects it as an invalid
+	// CIDR, and the fallback below would then silently trust no proxy at all —
+	// collapsing every client behind an LB into one rate-limit bucket.
+	proxies := make([]string, 0, len(cfg.Server.TrustedProxies))
+	for _, p := range cfg.Server.TrustedProxies {
+		if p = strings.TrimSpace(p); p != "" {
+			proxies = append(proxies, p)
+		}
+	}
 	if len(proxies) == 0 {
 		_ = router.SetTrustedProxies(nil)
 		return

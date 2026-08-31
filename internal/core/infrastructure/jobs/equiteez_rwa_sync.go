@@ -134,6 +134,13 @@ func SyncRWAPairs(
 		Int("upsert_failed", upsertFailed).
 		Msg("rwa_pair_sync_completed")
 
+	// Upstream had pairs and not one of them landed: the catalog was not
+	// refreshed at all (typically the DB refusing writes). Report it so the
+	// caller's tick counts as failed rather than stamping a last-success that
+	// says the allowlist is current.
+	if upsertFailed > 0 && len(keepIDs) == 0 {
+		return 0, fmt.Errorf("rwa pair sync: all %d upserts failed", upsertFailed)
+	}
 	return len(keepIDs), nil
 }
 

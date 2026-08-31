@@ -1995,7 +1995,10 @@ components:
           type: boolean
           description: |
             True when the FX rate is older than `server.fx_max_staleness_seconds`
-            (default 300s). Still served; UI may want to flag.
+            (default 300s). Still served; UI may want to flag. Past a fixed 26h
+            hard cap the conversion is refused instead — here the block is
+            returned with `error: no_rate`, while the flat `?in=` shapes drop
+            the currency key entirely.
         error:
           type: string
           enum: [no_rate, unsupported_target, unregistered_source, query_error]

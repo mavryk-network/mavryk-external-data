@@ -363,3 +363,54 @@ func TestConverter_ConcurrentSafe(t *testing.T) {
 		t.Errorf("upstream queries = %d under heavy concurrency, expected ~1-3", got)
 	}
 }
+
+// TestConverter_StaleReachableUpToHardCap pins the relationship config
+// validation enforces: between the soft budget and the fixed hard cap a rate is
+// SERVED and flagged stale; only past the cap is the conversion refused (and
+// the currency dropped from the wire). A budget that swallowed the whole range
+// would make fx.stale unobservable.
+func TestConverter_StaleReachableUpToHardCap(t *testing.T) {
+	registerFXTokens(t)
+	// The widest budget config validation permits.
+	budget := FXHardStalenessCap - time.Second
+
+	cases := []struct {
+		name      string
+		age       time.Duration
+		wantStale bool
+		wantErr   bool
+	}{
+		{name: "inside the budget", age: budget - time.Hour, wantStale: false},
+		{name: "between budget and hard cap", age: budget + 100*time.Millisecond, wantStale: true},
+		{name: "past the hard cap", age: FXHardStalenessCap + time.Minute, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Now().UTC()
+			source := &fakeFXSource{points: []prices.PricePoint{{
+				Source:    prices.SourceCoinGecko,
+				EntityKey: "usdt",
+				Timestamp: at.Add(-tc.age),
+				Metric:    "usd",
+				Price:     decimal.NewFromInt(2),
+			}}}
+			conv := NewTokenFXConverter(source, budget, prices.SourceCoinGecko)
+
+			res, err := conv.Convert(context.Background(), prices.Token("usdt"),
+				prices.Currency("usd"), decimal.NewFromInt(1), at)
+			if tc.wantErr {
+				if !errors.Is(err, ErrNoFXRate) {
+					t.Fatalf("err = %v, want ErrNoFXRate", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("convert: %v", err)
+			}
+			if res.Stale != tc.wantStale {
+				t.Errorf("Stale = %v, want %v for a rate %s old (budget %s, hard cap %s)",
+					res.Stale, tc.wantStale, tc.age, budget, FXHardStalenessCap)
+			}
+		})
+	}
+}

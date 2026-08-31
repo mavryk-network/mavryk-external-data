@@ -309,6 +309,11 @@ Schema highlights:
 - `http_*` — request counts, latency histograms, response classes.
 - `outbound_http_*` — retries, CB transitions, CB current state, RL wait.
 - `job_tick_duration_seconds`, `job_errors_total`, `job_rows_affected_total`.
+- `job_last_success_timestamp_seconds` (gauge), `job_tick_panics_total` — a job
+  whose gauge stops advancing is failing or stalled even while the process looks
+  healthy, so alert on `now() - job_last_success_timestamp_seconds` exceeding a
+  few tick intervals. It reports whether the job is erroring, not whether data
+  is arriving; pair it with `job_rows_affected_total` for the latter.
 - `backfill_oldest_ts_seconds` (gauge), `backfill_auto_disabled_total`.
 - `db_pool_*` — open / in-use / idle / wait-duration.
 

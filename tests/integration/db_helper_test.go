@@ -57,3 +57,19 @@ func refreshCA(t *testing.T, db *gorm.DB, view string) {
 	require.NoError(t,
 		db.Exec(`CALL refresh_continuous_aggregate(?, NULL, NULL)`, view).Error)
 }
+
+// recordingGorm opens a connection whose logger captures the statements gorm
+// emits (bindings inlined), so a test can EXPLAIN the exact SQL a repository
+// produced instead of a hand-copy that can silently drift from it.
+func recordingGorm(t *testing.T, rec *legacySQLRecorder) *gorm.DB {
+	t.Helper()
+	require.NotEmpty(t, pgDSN, "pgDSN unset — TestMain didn't run; missing build tag?")
+	db, err := gorm.Open(postgres.Open(pgDSN), &gorm.Config{Logger: rec})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}

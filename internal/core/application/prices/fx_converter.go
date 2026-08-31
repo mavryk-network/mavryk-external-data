@@ -28,12 +28,19 @@ const maxFXCacheEntries = 50_000
 // fxCacheSweepEvery triggers an opportunistic expired-entry sweep every N writes.
 const fxCacheSweepEvery = 512
 
-// fxHardStalenessCap is where a coarse rate becomes a dead feed: past this age
-// the conversion is refused (ErrNoFXRate → dropped from the wire) instead of
-// served as if fresh. Sits above 24h because deep CoinGecko history is
-// daily-granularity, so legitimate historical lookups can trail `ts` by up to
-// a day regardless of the soft fx_max_staleness budget.
-const fxHardStalenessCap = 26 * time.Hour
+// FXHardStalenessCap is the age at which a coarse rate becomes a dead feed:
+// past it the conversion is refused (ErrNoFXRate → the currency is dropped from
+// the wire) instead of served as if fresh. Sits above 24h because deep
+// CoinGecko history is daily-granularity, so legitimate historical lookups can
+// trail `ts` by up to a day regardless of the soft budget.
+//
+// It is deliberately a constant and not derived from the operator's
+// fx_max_staleness_seconds: this is the guard that says the feed is dead, and
+// widening it from config would let a misconfigured budget serve arbitrarily
+// old rates. Config validation instead requires the soft budget to stay below
+// this cap, so the two can never invert and `fx.stale` always has room to be
+// observed between them.
+const FXHardStalenessCap = 26 * time.Hour
 
 // HistoricalFXSource returns the freshest FX rate row for
 // (source, token, currency) whose timestamp is at or before `at`.
@@ -138,7 +145,7 @@ func (c *tokenFXConverter) Convert(
 	// (ts in the past) it's "how stale was the FX feed at the moment we're
 	// asking about", which is the honest question.
 	age := ts.Sub(rateTS)
-	if age > fxHardStalenessCap {
+	if age > FXHardStalenessCap {
 		return ConversionResult{}, ErrNoFXRate
 	}
 	stale := age > c.maxStaleness

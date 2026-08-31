@@ -201,23 +201,100 @@ func (r *TokenPriceRepository) OldestTimestamp(ctx context.Context, source price
 	return parseSentinel(*ts.MinTs)
 }
 
-// LatestTimestamp returns MAX(ts) across all metrics for (token, source).
-func (r *TokenPriceRepository) LatestTimestamp(ctx context.Context, source prices.Source, tokenSymbol string) (sentinel, error) {
-	var holder struct {
-		MaxTs *string
-	}
-	row := r.db.WithContext(ctx).Raw(
-		`SELECT MAX(ts)::text AS max_ts
-		   FROM token_prices
-		  WHERE token_symbol = ? AND source_code = ?`,
-		tokenSymbol, string(source))
-	if err := row.Scan(&holder).Error; err != nil {
-		return sentinel{}, fmt.Errorf("latest token_prices ts: %w", err)
-	}
-	if holder.MaxTs == nil || *holder.MaxTs == "" {
+// LatestCommonTimestamp returns the newest ts that EVERY metric in `metrics`
+// has reached for (token, source) — MIN over the per-metric MAX(ts) — counting
+// only metrics whose own frontier is at or after notOlderThan.
+//
+// A plain MAX(ts) across all metrics would answer "how fresh is the freshest
+// currency", which is the wrong anchor for a live catch-up window: the live
+// fetch saves partial results, so one currency erroring for hours while the
+// others keep saving would hold a global MAX at ~now and the failing
+// currency's gap would never be re-fetched by anyone (backfill only walks
+// older than its own cursor). Taking the laggiest metric instead pulls the
+// window back over exactly that hole until it is filled.
+//
+// `metrics` scopes the answer to the currencies the caller still collects, so a
+// currency dropped from the supported set cannot freeze the anchor at its final
+// timestamp; an empty list yields Found=false (MIN over no metrics). Metrics
+// with no rows at all are ignored — they have no history to heal.
+//
+// notOlderThan is what keeps the anchor from sticking, and it applies only to a
+// metric that lags its PEERS. A metric whose frontier is beyond the caller's
+// catch-up horizon while others are current means upstream has stopped
+// producing that one: widening the window cannot repair it, and letting it pin
+// the anchor would re-fetch the entire horizon on every tick forever, so it
+// drops out of the MIN. The caller's normal lookback still covers it, so it
+// heals forward the moment upstream produces anything again.
+//
+// When EVERY metric is beyond the horizon the situation is the opposite — the
+// whole feed was down — and the answer is the horizon itself, so the caller
+// still covers as much of the outage as one window can reach. Returning
+// "nothing" there would leave a total outage with no catch-up at all, which is
+// worse than having no horizon in the first place.
+//
+// The per-metric LATERAL is deliberate: an unfiltered MAX(ts) per metric is a
+// seek on the (token, source, currency) index prefix, and the horizon is
+// applied to the ten resulting rows rather than to the scan. The equivalent
+// GROUP BY formulation cannot use that index and degrades into a scan of every
+// chunk in retention, on a query that runs once per token per live tick.
+func (r *TokenPriceRepository) LatestCommonTimestamp(
+	ctx context.Context,
+	source prices.Source,
+	tokenSymbol string,
+	metrics []string,
+	notOlderThan time.Time,
+) (sentinel, error) {
+	if len(metrics) == 0 {
 		return sentinel{Found: false}, nil
 	}
-	return parseSentinel(*holder.MaxTs)
+	args := make([]any, 0, len(metrics)+3)
+	args = append(args, notOlderThan.UTC())
+	for _, m := range metrics {
+		args = append(args, m)
+	}
+	args = append(args, tokenSymbol, string(source))
+
+	var holder struct {
+		CommonTs *string
+		NewestTs *string
+	}
+	row := r.db.WithContext(ctx).Raw(
+		`SELECT MIN(m.max_ts) FILTER (WHERE m.max_ts >= ?)::text AS common_ts,
+		        MAX(m.max_ts)::text AS newest_ts
+		   FROM (VALUES `+metricValuesFragment(len(metrics))+`) AS c(metric)
+		   CROSS JOIN LATERAL (
+		         SELECT MAX(ts) AS max_ts
+		           FROM token_prices
+		          WHERE token_symbol = ? AND source_code = ?
+		            AND quote_currency = c.metric
+		   ) m`,
+		args...)
+	if err := row.Scan(&holder).Error; err != nil {
+		return sentinel{}, fmt.Errorf("latest common token_prices ts: %w", err)
+	}
+	if holder.CommonTs != nil && *holder.CommonTs != "" {
+		return parseSentinel(*holder.CommonTs)
+	}
+	// No metric is inside the horizon. If any has history at all, the whole feed
+	// is stalled: anchor at the horizon so the caller covers what it can.
+	if holder.NewestTs != nil && *holder.NewestTs != "" {
+		return sentinel{Found: true, TS: notOlderThan.UTC()}, nil
+	}
+	return sentinel{Found: false}, nil
+}
+
+// metricValuesFragment renders `(?::text),(?::text),...` for a VALUES list.
+// The cast is defensive rather than required — Postgres does infer text from
+// the `quote_currency = c.metric` comparison — but it pins the column type at
+// the VALUES row instead of leaving it to inference across a LATERAL.
+//
+// Returns "" for n <= 0, which would be invalid SQL — callers must not reach
+// here with an empty metric set (LatestCommonTimestamp returns early instead).
+func metricValuesFragment(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("(?::text),", n), ",")
 }
 
 // metricFilterFragment renders an optional `AND quote_currency IN (?,?,...)`
