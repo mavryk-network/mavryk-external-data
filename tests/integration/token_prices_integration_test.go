@@ -20,23 +20,16 @@ import (
 	"quotes/internal/core/infrastructure/storage/repositories"
 )
 
-// FT serving-path integration tests: TokenPriceRepository.Query (window +
-// latest modes) and Count against a real TimescaleDB hypertable.
-//
-// token_prices FKs into tokens(symbol) and sources(code), so fixtures may
-// only use symbols/codes seeded by 0009_seed.sql — tokens `mvrk` / `usdt`,
-// sources `coingecko` / `equiteez`. quote_currency is free-form text.
+// token_prices FKs into tokens(symbol) and sources(code), so fixtures may only
+// use symbols/codes seeded by 0009_seed.sql: mvrk/usdt, coingecko/equiteez.
 
-// tokenPriceRow is one fixture row: an offset from the test's anchor, a
-// quote currency and a price literal.
 type tokenPriceRow struct {
 	offset   time.Duration
 	currency string
 	price    string
 }
 
-// saveTokenPriceRows writes multi-currency rows at explicit anchor offsets
-// through the production Save() path.
+// saveTokenPriceRows writes rows at anchor offsets through the production Save().
 func saveTokenPriceRows(
 	t *testing.T,
 	db *gorm.DB,
@@ -61,8 +54,7 @@ func saveTokenPriceRows(
 	require.Equal(t, int64(len(pts)), n, "Save returned unexpected RowsAffected")
 }
 
-// pointLabels renders results as "<offsetSeconds>s/<currency>" so ordering
-// assertions collapse to one slice comparison.
+// pointLabels renders results as "<offsetSeconds>s/<currency>".
 func pointLabels(pts []prices.PricePoint, anchor time.Time) []string {
 	out := make([]string, len(pts))
 	for i, p := range pts {
@@ -79,12 +71,9 @@ func metricsOf(pts []prices.PricePoint) []string {
 	return out
 }
 
-// windowAnchor is the base timestamp for the window-mode fixtures.
 var windowAnchor = time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
 
-// seedWindowFixture lays out three timestamps × up-to-four currencies for
-// (mvrk, coingecko). Insertion order is deliberately unsorted so a missing
-// ORDER BY cannot pass by accident.
+// Insertion order is deliberately unsorted so a missing ORDER BY cannot pass.
 func seedWindowFixture(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	saveTokenPriceRows(t, db, "mvrk", prices.SourceCoinGecko, windowAnchor, []tokenPriceRow{
@@ -98,8 +87,6 @@ func seedWindowFixture(t *testing.T, db *gorm.DB) {
 		{0, "jpy", "149.00"},
 	})
 }
-
-// --- WINDOW mode: ordering ---
 
 func TestTokenPriceQuery_Window_OrdersByTsThenCurrency(t *testing.T) {
 	db := openGorm(t)
@@ -123,8 +110,6 @@ func TestTokenPriceQuery_Window_OrdersByTsThenCurrency(t *testing.T) {
 	require.Equal(t, prices.SourceCoinGecko, got[0].Source)
 	require.Equal(t, "mvrk", got[0].EntityKey)
 }
-
-// --- WINDOW mode: From/To are inclusive on both ends ---
 
 func TestTokenPriceQuery_Window_BoundsAreInclusive(t *testing.T) {
 	db := openGorm(t)
@@ -183,8 +168,6 @@ func TestTokenPriceQuery_Window_BoundsAreInclusive(t *testing.T) {
 	}
 }
 
-// --- WINDOW mode: metric filter with multiple values ---
-
 func TestTokenPriceQuery_Window_MetricFilter(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -232,8 +215,6 @@ func TestTokenPriceQuery_Window_MetricFilter(t *testing.T) {
 	}
 }
 
-// --- WINDOW mode: Limit truncates the ordered result ---
-
 func TestTokenPriceQuery_Window_Limit(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -276,8 +257,6 @@ func TestTokenPriceQuery_Window_LimitCombinesWithMetricFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"0s/eur", "0s/usd", "60s/eur"}, pointLabels(got, windowAnchor))
 }
-
-// --- WINDOW mode: isolation by token and by source ---
 
 func TestTokenPriceQuery_Window_IsolatedByTokenAndSource(t *testing.T) {
 	db := openGorm(t)
@@ -324,15 +303,11 @@ func TestTokenPriceQuery_Window_IsolatedByTokenAndSource(t *testing.T) {
 	require.Empty(t, window("usdt", prices.SourceEquiteez))
 }
 
-// --- LATEST mode ---
-
-// latestAnchor is "now" for the latest-mode fixtures; rows are placed at
-// negative offsets from it.
+// latestAnchor is "now"; fixture rows sit at negative offsets from it.
 var latestAnchor = time.Date(2026, 6, 2, 15, 0, 0, 0, time.UTC)
 
-// seedLatestFixture writes several samples per currency with staggered
-// timestamps so DISTINCT ON has something to collapse, and so the newest
-// row per currency is not the newest row overall.
+// Staggered so DISTINCT ON has something to collapse, and so the newest row
+// per currency is not the newest row overall.
 func seedLatestFixture(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	saveTokenPriceRows(t, db, "mvrk", prices.SourceCoinGecko, latestAnchor, []tokenPriceRow{
@@ -380,9 +355,8 @@ func TestTokenPriceQuery_Latest_DistinctOnPerCurrency(t *testing.T) {
 	}
 }
 
-// The multi-value case is the regression guard for metricFilterFragment:
-// binding q.Metrics as a Go slice in the raw SQL fails under pgx with
-// "malformed array literal".
+// Multi-value guards metricFilterFragment: binding q.Metrics as a Go slice in
+// the raw SQL fails under pgx with "malformed array literal".
 func TestTokenPriceQuery_Latest_MetricFilter(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -415,9 +389,8 @@ func TestTokenPriceQuery_Latest_MetricFilter(t *testing.T) {
 	}
 }
 
-// Limit runs after deduplication: with 9 rows collapsing to 4 currencies,
-// Limit=2 must yield the 2 freshest-per-currency rows, not the first 2 raw
-// rows the scan happens to hit.
+// Limit runs after deduplication: 9 rows collapse to 4 currencies, so Limit=2
+// must yield 2 freshest-per-currency rows, not the first 2 raw rows scanned.
 func TestTokenPriceQuery_Latest_LimitAppliedAfterDedup(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -500,8 +473,6 @@ func TestTokenPriceQuery_Latest_EmptyTable(t *testing.T) {
 	require.Empty(t, got)
 }
 
-// --- Count ---
-
 func TestTokenPriceCount(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -542,10 +513,9 @@ func TestTokenPriceCount_EmptyTable(t *testing.T) {
 	require.Zero(t, n)
 }
 
-// LatestCommonTimestamp anchors the live catch-up window. It must answer with
-// the LAGGIEST currency's newest point, not the freshest overall: the live
-// fetch saves partial results, so one currency failing while the others keep
-// saving must still pull the window back over the resulting hole.
+// The anchor must be the LAGGIEST currency's newest point, not the freshest
+// overall: the live fetch saves partial results, so the window has to reach
+// back over the hole one failing currency leaves behind.
 func TestTokenPriceLatestCommonTimestamp(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -573,8 +543,7 @@ func TestTokenPriceLatestCommonTimestamp(t *testing.T) {
 	})
 
 	t.Run("ignores currencies no longer collected", func(t *testing.T) {
-		// Dropping btc from the collected set must release the anchor —
-		// otherwise a retired currency would freeze the window forever.
+		// Otherwise a retired currency would freeze the window forever.
 		got, err := repo.LatestCommonTimestamp(ctx, prices.SourceCoinGecko, "mvrk",
 			[]string{"usd", "eur"}, horizon)
 		require.NoError(t, err)
@@ -592,9 +561,8 @@ func TestTokenPriceLatestCommonTimestamp(t *testing.T) {
 			"a currency with no rows has no history to heal; got %v", got.TS)
 	})
 
-	// The anti-pinning rule: a currency stalled beyond the caller's catch-up
-	// horizon cannot be repaired by widening one window, so it must drop out of
-	// the anchor instead of holding it at the horizon on every future tick.
+	// Anti-pinning: a currency stalled beyond the horizon cannot be repaired by
+	// widening one window, so it must drop out rather than pin every future tick.
 	t.Run("a currency stalled past the horizon drops out", func(t *testing.T) {
 		got, err := repo.LatestCommonTimestamp(ctx, prices.SourceCoinGecko, "mvrk",
 			[]string{"usd", "eur", "btc"}, anchor.Add(-time.Hour))
@@ -604,11 +572,8 @@ func TestTokenPriceLatestCommonTimestamp(t *testing.T) {
 			"btc is stalled past the horizon and must not pin the anchor; got %v", got.TS)
 	})
 
-	// The mirror image of the rule above: when EVERY metric is past the horizon
-	// the feed as a whole was down, so the answer is the horizon itself and the
-	// caller still covers as much of the outage as one window reaches. Returning
-	// "no anchor" here would leave a total outage with no catch-up at all —
-	// worse than having no horizon in the first place.
+	// Mirror image: when EVERY metric is past the horizon the feed was down, and
+	// "no anchor" would leave that outage with no catch-up at all.
 	t.Run("every metric past the horizon anchors at the horizon", func(t *testing.T) {
 		horizonPastAll := anchor.Add(time.Hour)
 		got, err := repo.LatestCommonTimestamp(ctx, prices.SourceCoinGecko, "mvrk",
@@ -644,15 +609,9 @@ func TestTokenPriceLatestCommonTimestamp(t *testing.T) {
 }
 
 // The anchor query runs once per token on every live tick, so its cost must not
-// scale with retained history: each metric's frontier is a seek on the
-// (token, source, currency) index prefix. A GROUP BY formulation cannot use
-// that index and reads every row instead.
-//
-// The plan is measured on the statement the REPOSITORY emits (captured through
-// a gorm logger), not a hand-copy, so the assertion still guards the query if
-// the SQL is ever rewritten. Buffers are the metric rather than plan-node names:
-// a scan of this table also reports "Index Only Scan", so node names prove
-// nothing — only pages read separate a seek from a scan.
+// scale with history: each metric's frontier is a seek on the (token, source,
+// currency) index prefix, where a GROUP BY would read every row. The plan is
+// measured on the statement the REPOSITORY emits, so a SQL rewrite stays covered.
 func TestTokenPriceLatestCommonTimestamp_ReadsFewPages(t *testing.T) {
 	rec := &legacySQLRecorder{}
 	db := recordingGorm(t, rec)
@@ -684,9 +643,8 @@ func TestTokenPriceLatestCommonTimestamp_ReadsFewPages(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(raw), &explained))
 	require.NotEmpty(t, explained)
 
-	// Rows actually emitted by scan nodes, not pages: on a fixture small enough
-	// to run fast, a scan and a seek read a similar number of PAGES, but a seek
-	// emits one row per metric where a scan emits every sample.
+	// Rows, not pages: at a fixture size small enough to run fast a scan and a
+	// seek read similar PAGE counts, but a seek emits one row per metric.
 	rowsScanned := scannedRows(explained[0].Plan)
 	maxRows := 4 * len(currencies) // one frontier row per metric, plus the VALUES rows
 	require.LessOrEqualf(t, rowsScanned, maxRows,
@@ -694,8 +652,7 @@ func TestTokenPriceLatestCommonTimestamp_ReadsFewPages(t *testing.T) {
 		rowsScanned, samplesPerCurrency*len(currencies), raw)
 }
 
-// scannedRows sums actual rows × loops over every scan node in an EXPLAIN JSON
-// plan tree.
+// scannedRows sums rows × loops over every scan node of an EXPLAIN JSON plan.
 func scannedRows(node map[string]any) int {
 	total := 0
 	if nt, _ := node["Node Type"].(string); strings.Contains(nt, "Scan") {
@@ -713,17 +670,9 @@ func scannedRows(node map[string]any) int {
 	return total
 }
 
-// TestTokenPricesLatestIndexBuiltNonBlockingOnUpgrade exercises the real
-// transition 0022/0023 perform on an EXISTING database, which the suite's
-// fresh-DB run never reaches: there 0003 already created the replacement, so
-// 0022 short-circuits on IF NOT EXISTS.
-//
-// The load-bearing part is that the build runs WITH
-// (timescaledb.transaction_per_chunk) — it commits per chunk instead of locking
-// the whole hypertable for the duration — which Postgres only permits outside a
-// transaction block. That is why the two statements live in separate files, and
-// this test would fail if they were merged back together.
-func TestTokenPricesLatestIndexBuiltNonBlockingOnUpgrade(t *testing.T) {
+// The runners re-apply every migration on each deploy, so the edited 0003 must
+// swap the old latest index (pre-source_code key) for the aligned one in place.
+func TestTokenPricesLatestIndexSwappedOnReplay(t *testing.T) {
 	db := openGorm(t)
 	dir, err := findMigrationsDir()
 	require.NoError(t, err)
@@ -735,7 +684,7 @@ func TestTokenPricesLatestIndexBuiltNonBlockingOnUpgrade(t *testing.T) {
 		return n > 0
 	}
 
-	// Recreate the pre-0022 shape: the superseded index present, the new one gone.
+	// Recreate the pre-swap shape: the superseded index present, the new one gone.
 	require.NoError(t, db.Exec(`DROP INDEX IF EXISTS idx_token_prices_latest_source`).Error)
 	require.NoError(t, db.Exec(
 		`CREATE INDEX IF NOT EXISTS idx_token_prices_latest
@@ -747,11 +696,7 @@ func TestTokenPricesLatestIndexBuiltNonBlockingOnUpgrade(t *testing.T) {
 			   ON token_prices (token_symbol, source_code, quote_currency, ts DESC)`).Error
 	})
 
-	// Replay EVERY migration in deploy order, not just 0022/0023: the runners
-	// have no migration-tracking table and re-apply the whole directory on each
-	// deploy, so an earlier file creating the same index with a plain
-	// CREATE INDEX would win the race and silently make 0022's non-blocking
-	// build a no-op. Only a full replay can catch that.
+	// The swap must hold through a full directory re-apply, not just 0003.
 	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
@@ -762,31 +707,6 @@ func TestTokenPricesLatestIndexBuiltNonBlockingOnUpgrade(t *testing.T) {
 		require.NoErrorf(t, db.Exec(string(body)).Error, "applying %s", filepath.Base(path))
 	}
 
-	require.True(t, indexExists("idx_token_prices_latest_source"), "0022 must build the replacement index")
-	require.False(t, indexExists("idx_token_prices_latest"), "0023 must drop the superseded index")
-
-	// The build must be the non-blocking one, which only holds if 0022 is the
-	// sole creator — grep the whole directory rather than trusting the outcome
-	// above, which an earlier plain build would also satisfy.
-	creators := make([]string, 0, 1)
-	for _, path := range files {
-		body, readErr := os.ReadFile(path)
-		require.NoError(t, readErr)
-		if strings.Contains(string(body), "CREATE INDEX IF NOT EXISTS idx_token_prices_latest_source") {
-			creators = append(creators, filepath.Base(path))
-		}
-	}
-	require.Equal(t, []string{"0022_token_prices_latest_index.sql"}, creators,
-		"exactly one migration may create this index, and it must be the transaction_per_chunk one")
-
-	// Pin the reason for the split: merged into one file, the same two
-	// statements become a single implicit transaction and the non-blocking
-	// build is rejected outright.
-	require.NoError(t, db.Exec(`DROP INDEX IF EXISTS idx_token_prices_latest_source`).Error)
-	merged := `CREATE INDEX IF NOT EXISTS idx_token_prices_latest_source
-	             ON token_prices (token_symbol, source_code, quote_currency, ts DESC)
-	             WITH (timescaledb.transaction_per_chunk);
-	           DROP INDEX IF EXISTS idx_token_prices_latest;`
-	require.Error(t, db.Exec(merged).Error,
-		"merging 0022 and 0023 must fail — that is why they are separate files")
+	require.True(t, indexExists("idx_token_prices_latest_source"), "replay must build the aligned index")
+	require.False(t, indexExists("idx_token_prices_latest"), "replay must drop the superseded index")
 }

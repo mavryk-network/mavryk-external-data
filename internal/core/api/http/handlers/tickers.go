@@ -18,10 +18,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// TickerDeps wires the tickers HTTP layer.
-//
-// Converter is optional — when nil, requests with ?in= return 400 (matches the
-// RWA endpoints under the same posture). Source defaults to CoinGecko.
+// TickerDeps wires the tickers HTTP layer. Converter is optional — when nil,
+// requests with ?in= return 400, matching the RWA endpoints.
 type TickerDeps struct {
 	Service          apitickers.QueryService
 	Converter        apiprices.PriceConverter
@@ -32,13 +30,10 @@ type TickerDeps struct {
 
 // LatestByToken — GET /v1/tickers/:token/latest
 //
-// Query params:
+//	?in=usd,eur,...     — convert price+volume to these currencies (ADR-0013)
+//	?include_stale=true — return rows older than TickerStaleAfter
 //
-//	?in=usd,eur,...           — convert price+volume to these currencies (see ADR-0013)
-//	?include_stale=true       — return rows older than TickerStaleAfter (default hides them)
-//
-// Response: TickersSnapshotDTO. 200 on success (even with empty tickers — cold
-// start), 404 when token unknown, 400 on bad ?in= or unsupported currency.
+// 404 when the token is unknown; an empty ticker list is still a 200.
 func (d TickerDeps) LatestByToken() gin.HandlerFunc {
 	type request struct {
 		Token        prices.Token
@@ -79,9 +74,8 @@ func (d TickerDeps) LatestByToken() gin.HandlerFunc {
 
 // Distribution — GET /v1/tickers/:token/distribution?group_by=exchange|target&in=usd
 //
-// Returns one row per group with summed volume and share_pct. Stale rows are
-// always excluded server-side regardless of any caller flag — the pie chart is
-// about current market structure, not historical noise.
+// One row per group with summed volume and share_pct. Stale rows are always
+// excluded server-side regardless of any caller flag.
 func (d TickerDeps) Distribution() gin.HandlerFunc {
 	type request struct {
 		Token     prices.Token
@@ -150,8 +144,8 @@ func parseBoolQuery(c *gin.Context, key string, def bool) bool {
 	}
 }
 
-// parseInQuery mirrors the RWA pattern (rwa_prices.go). Empty returns nil.
-// Unknown values or > MaxInCurrencies → 400.
+// parseInQuery mirrors the RWA pattern: empty → nil, unknown values or more
+// than MaxInCurrencies → 400.
 func (d TickerDeps) parseInQuery(c *gin.Context) ([]prices.Currency, error) {
 	raw := strings.TrimSpace(c.Query("in"))
 	if raw == "" {
@@ -208,18 +202,15 @@ type TickerRowDTO struct {
 	In              map[string]ConvertedTickerBlock `json:"in,omitempty"`
 }
 
-// ConvertedTickerBlock carries the per-`?in=` projection for one row.
-//
-// Either Price+Volume are present (success) or FX.Error is populated and the
-// numeric fields are omitted (per-target failure, parent response stays 200).
+// ConvertedTickerBlock carries the per-`?in=` projection for one row: either
+// Price+Volume, or FX.Error alone on a per-target failure (parent stays 200).
 type ConvertedTickerBlock struct {
 	Price     string  `json:"price,omitempty"`
 	Volume24h *string `json:"volume_24h,omitempty"`
 	FX        FXMeta  `json:"fx"`
 }
 
-// FXMeta — per-conversion metadata for ticker responses. RWA flat shapes carry
-// a smaller marker (fxMetaDTO: rate_ts + stale, emitted only when stale).
+// FXMeta is per-conversion metadata; RWA flat shapes use the smaller fxMetaDTO.
 type FXMeta struct {
 	Rate   string `json:"rate,omitempty"`
 	Source string `json:"source,omitempty"`
@@ -254,8 +245,8 @@ type DistributionRowDTO struct {
 	In         map[string]ConvertedVolumeBlock `json:"in,omitempty"`
 }
 
-// ConvertedVolumeBlock is a slimmer version of ConvertedTickerBlock — pie rows
-// only convert volume, never a price.
+// ConvertedVolumeBlock is ConvertedTickerBlock minus the price — pie rows only
+// convert volume.
 type ConvertedVolumeBlock struct {
 	Volume24h string `json:"volume_24h,omitempty"`
 	FX        FXMeta `json:"fx"`
@@ -341,11 +332,9 @@ func (d TickerDeps) buildDistributionDTO(
 	return out
 }
 
-// convertRowTargets builds the in.<target> map for one ticker row. The price
-// converts from `target_symbol` → currency (FX(target → currency) × last_price);
-// the volume converts from `token` → currency (FX(token → currency) × volume).
-// Per-target failures populate fx.error and omit the numeric fields. Parent
-// response stays 200.
+// convertRowTargets builds the in.<target> map for one ticker row: the price
+// converts target_symbol → currency, the volume token → currency. Per-target
+// failures populate fx.error and keep the parent response at 200.
 func (d TickerDeps) convertRowTargets(
 	ctx context.Context,
 	token prices.Token,
@@ -356,7 +345,6 @@ func (d TickerDeps) convertRowTargets(
 		return nil
 	}
 	out := make(map[string]ConvertedTickerBlock, len(targets))
-	// Resolve target_symbol → Token (so we can use it as a converter source).
 	targetTok, targetOK := promoteTickerTargetToken(row.TargetSymbol)
 
 	for _, cur := range targets {
@@ -386,9 +374,7 @@ func (d TickerDeps) convertRowTargets(
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(cur)).Inc()
 		}
 
-		// Volume: token → cur. We use the token (e.g. mvrk) as the source so
-		// the converter looks up FX(mvrk → currency) — works whether the row
-		// is MVRK/BTC or MVRK/USDT.
+		// Volume: token → cur, so it works for MVRK/BTC and MVRK/USDT alike.
 		if row.VolumeBase != nil {
 			volRes, volErr := timedConvert(ctx, d.Converter, token, cur, *row.VolumeBase, row.Timestamp)
 			if volErr == nil {
@@ -470,10 +456,8 @@ func optDec(p *decimal.Decimal) *string {
 	return &s
 }
 
-// promoteTickerTargetToken upgrades the ticker target_symbol string to a
-// registered Token (so PriceConverter.Convert can use it as a source). Returns
-// (zero, false) when the symbol isn't in the registry — handler drops that
-// row's converted block with fx.error="unregistered_source".
+// promoteTickerTargetToken upgrades target_symbol to a registered Token for use
+// as a converter source; (zero, false) means unregistered.
 func promoteTickerTargetToken(target string) (prices.Token, bool) {
 	tok, err := prices.NewToken(target)
 	if err != nil {

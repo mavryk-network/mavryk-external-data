@@ -89,7 +89,8 @@ func (j *CoinGeckoTickersJob) Start(ctx context.Context) {
 	}
 
 	safeGo(&j.wg, j.logger, "tickers:"+j.tokenSymbol, func() {
-		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "tickers", func(c context.Context) error {
+		// Per-token loop name — same masking rationale as the live job.
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "tickers:"+j.tokenSymbol, func(c context.Context) error {
 			return j.collectOnce(c, tok)
 		})
 	})

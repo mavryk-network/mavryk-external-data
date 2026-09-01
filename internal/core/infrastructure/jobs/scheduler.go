@@ -18,22 +18,13 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// runTickerLoop runs `tick` once immediately, then on every interval, until the
-// context is cancelled or the stop channel closes. Centralizes the boilerplate
-// each job otherwise duplicates (immediate first call, ticker, ctx-aware exit,
-// per-tick correlation id).
+// runTickerLoop runs `tick` immediately, then every interval, until ctx is
+// cancelled or stopCh closes. jitter (> 0) delays the FIRST tick by a random
+// duration in [0, jitter) so replicas don't hammer upstream in lockstep.
 //
-// jitter (when > 0) delays the FIRST tick by a random duration in [0, jitter) —
-// good practice for multi-replica deployments to avoid synchronized hammering of
-// upstream on a coordinated restart.
-//
-// Each tick gets a fresh `tick_id` (uuid) propagated via context so all log
-// lines emitted while the tick is running can be correlated post-hoc.
-// A tick returns an error when it could not do its work — a failed fetch or
-// save, or (for ticks that walk many entities) every entity failing. That
-// verdict, not merely "returned without panicking", is what advances
-// metrics.JobLastSuccessTimestamp, so the staleness alert on that gauge can
-// actually see a dead upstream.
+// A tick returns an error when it could not do its work; only a successful one
+// advances metrics.JobLastSuccessTimestamp, so its staleness alert can see a
+// dead upstream.
 func runTickerLoop(
 	ctx context.Context,
 	stopCh <-chan struct{},
@@ -42,11 +33,8 @@ func runTickerLoop(
 	name string,
 	tick func(ctx context.Context) error,
 ) {
-	// Seed the gauge before the jitter sleep, not after: a GaugeVec with no
-	// children is absent from /metrics entirely, so until this runs the job
-	// exports nothing at all and a from-boot outage cannot alert. The hourly
-	// pair-sync jitters up to six minutes, and a fast crash-loop would never
-	// reach the tick.
+	// Seed BEFORE the jitter sleep: a GaugeVec with no children is absent from
+	// /metrics entirely, so a from-boot outage could not alert.
 	metrics.JobLastSuccessTimestamp.WithLabelValues(name).SetToCurrentTime()
 
 	if jitter > 0 {
@@ -85,10 +73,9 @@ func runTickerLoop(
 	}
 }
 
-// tickBudget bounds one tick: without a deadline a TCP black hole or a
-// lock-blocked query stalls the (single-goroutine) job silently forever, and
-// Stop() blocks shutdown until SIGKILL. Generous — max(2×interval, 5m) — so
-// slow-but-progressing work (backfill CAGG refreshes) never gets cut.
+// tickBudget bounds one tick — without it a TCP black hole stalls the job
+// forever and Stop() blocks until SIGKILL. max(2×interval, 5m) keeps
+// slow-but-progressing work from being cut.
 func tickBudget(interval time.Duration) time.Duration {
 	const floor = 5 * time.Minute
 	if b := 2 * interval; b > floor {
@@ -97,22 +84,15 @@ func tickBudget(interval time.Duration) time.Duration {
 	return floor
 }
 
-// defaultJitter staggers the first tick across replicas: a tenth of the
-// interval breaks fleet-synchronized upstream hammering after a coordinated
-// restart without materially delaying the first collection.
+// defaultJitter staggers the first tick across replicas.
 func defaultJitter(interval time.Duration) time.Duration {
 	return interval / 10
 }
 
 // runTickWithCorrelation injects a fresh tick_id into ctx (re-using the
-// request_id key so logging.RequestLogger and HTTPTransport pick it up
-// transparently) and recovers from a panic in the tick.
-//
-// The recover MUST live here, per-tick, not only in safeGo: a panic that
-// unwinds past this frame terminates the whole ticker goroutine, silently
-// stopping the job (for the shared backfill goroutine, ALL tokens/pairs) until
-// process restart. Recovering per tick logs + counts the panic and lets the
-// loop keep running; safeGo's recover stays as a last resort.
+// request_id key, so the logger and HTTPTransport pick it up) and recovers
+// panics PER TICK — a panic unwinding past this frame would kill the ticker
+// goroutine and silently stop the job until restart.
 func runTickWithCorrelation(ctx context.Context, timeout time.Duration, logger *zerolog.Logger, name string, tick func(context.Context) error) {
 	tickID := "tick-" + uuid.NewString()
 	tickCtx := logging.WithRequestID(ctx, tickID)
@@ -129,19 +109,10 @@ func runTickWithCorrelation(ctx context.Context, timeout time.Duration, logger *
 			}
 		}
 	}()
-	// Only a tick that reported success advances the gauge. Stamping it after
-	// every non-panicking tick made the metric answer "is the goroutine alive",
-	// not "is the pipeline working" — a hard-down upstream kept it fresh forever
-	// while nothing was ingested, defeating the alert its own doc prescribes.
-	//
-	// The verdict is logged here rather than left to the tick body: aggregate
-	// verdicts (tickOutcome) are built at this level and would otherwise never
-	// be surfaced, and the ctx-cancellation exits do not log at all.
 	if err := tick(tickCtx); err != nil {
 		if logger != nil {
-			// A cancelled tick is an ordinary drain, not an incident: every
-			// in-flight tick reports one on shutdown, so keep it out of the
-			// warning stream while still withholding the success stamp.
+			// A cancelled tick is an ordinary shutdown drain, not an incident —
+			// keep it out of the warning stream, but still withhold the stamp.
 			level := logger.Warn()
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				level = logger.Debug()
@@ -153,14 +124,10 @@ func runTickWithCorrelation(ctx context.Context, timeout time.Duration, logger *
 	metrics.JobLastSuccessTimestamp.WithLabelValues(name).SetToCurrentTime()
 }
 
-// tickOutcome tallies per-entity results inside a tick that walks many
-// entities, so such a tick can report one honest verdict to runTickerLoop.
-//
-// Three outcomes, not two. An entity that was SKIPPED — nothing to do, not a
-// failure — must not vote, because skips are permanent states here: a backfill
-// token that reaches its floor is skipped on every tick forever after. Counting
-// that as a success would mean one completed token keeps the job's last-success
-// gauge fresh no matter how badly every other token is failing.
+// tickOutcome tallies per-entity results so a tick walking many entities can
+// report one verdict. Skips abstain rather than counting as successes: they are
+// permanent states here (a token at its floor skips forever), and one finished
+// token must not keep the last-success gauge fresh while the rest fail.
 type tickOutcome struct {
 	worked  int
 	failed  int
@@ -178,12 +145,8 @@ func (o *tickOutcome) record(err error) {
 	}
 }
 
-// verdict reports failure only when NOTHING got through: every entity that
-// could act failed, or the tick was cut short (expired budget, shutdown) before
-// a single one succeeded. A partial success is real progress and must keep the
-// last-success gauge advancing — otherwise one permanently broken entity would
-// mask the health of every other one behind the same job. A tick with only
-// skips is a healthy idle job.
+// verdict fails only when NOTHING got through. Partial success is progress, or
+// one broken entity would mask every healthy one behind the same job.
 func (o tickOutcome) verdict(ctx context.Context, what string) error {
 	if o.worked > 0 {
 		return nil
@@ -194,8 +157,7 @@ func (o tickOutcome) verdict(ctx context.Context, what string) error {
 	if o.skipped > 0 {
 		return nil // nothing to do this tick
 	}
-	// Nothing was attempted at all: either there was no work (nil) or the tick
-	// was cancelled before it could start.
+	// Nothing attempted: no work at all (nil), or cancelled before starting.
 	return ctx.Err()
 }
 

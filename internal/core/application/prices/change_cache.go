@@ -33,11 +33,9 @@ type ChangeCache struct {
 	items map[changeCacheKey]changeCacheEntry
 }
 
-// changeCacheKey identifies one cache slot. Period is the empty string
-// when the slot holds the "now" value for (source, entity, aux, currency).
-// Aux carries the query's side/dimension (RWA `last` today) — omitting it
-// would cross-contaminate bid/ask the day a `?side=` parameter ships, the
-// same way the singleflight key already partitions.
+// changeCacheKey identifies one cache slot; Period is empty for the "now"
+// value. Aux carries the query's side (RWA `last` today) — without it bid/ask
+// would cross-contaminate the day a `?side=` parameter ships.
 type changeCacheKey struct {
 	Source   prices.Source
 	Entity   string

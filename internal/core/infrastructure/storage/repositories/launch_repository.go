@@ -23,12 +23,9 @@ func NewLaunchRepository(db *gorm.DB) *LaunchRepository {
 	return &LaunchRepository{db: db}
 }
 
-// Upsert writes one launch, creating the row on first sight.
-//
-// `enabled` follows the LookupRepository.UpsertRWAPair contract: set on
-// INSERT, and re-set to true on conflict only for rows the sync itself
-// disabled (disabled_reason='sync_missing' — the launch is back upstream).
-// Operator disables (reason NULL/other) are never resurrected by a sync.
+// Upsert writes one launch, creating the row on first sight. `enabled` follows
+// the UpsertRWAPair contract: re-set on conflict only for rows the sync itself
+// disabled; operator disables are never resurrected.
 func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now time.Time) error {
 	if l.Source == "" || l.TokenAddr == "" {
 		return fmt.Errorf("launch source and token_addr are required")
@@ -103,10 +100,9 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 	return nil
 }
 
-// DisableMissingLaunches soft-disables every enabled launch for `source` whose
-// token_addr is NOT in keepAddrs, stamping disabled_reason='sync_missing' so a
-// later sync that sees the launch again re-enables it (see Upsert). Callers
-// must only pass a keep-set built from a complete, non-empty upstream view.
+// DisableMissingLaunches soft-disables enabled launches absent from keepAddrs,
+// stamping 'sync_missing' so a later sync can re-enable them (see Upsert).
+// Callers must pass a keep-set from a complete, non-empty upstream view.
 func (r *LaunchRepository) DisableMissingLaunches(ctx context.Context, source prices.Source, keepAddrs []string) (int64, error) {
 	tx := r.db.WithContext(ctx).Model(&entities.RWALaunchEntity{}).
 		Where("source_code = ? AND enabled = ?", string(source), true)

@@ -14,10 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// insertLookupPair seeds one `rwa_pairs` row with an explicit orderbook
-// address. The natural key is (source_code, orderbook_addr) — not
-// (base_symbol, quote_symbol) — so distinct addresses are what let a test
-// reach the ambiguity state the schema permits.
+// The natural key is (source_code, orderbook_addr), not the symbols — distinct
+// addresses are what reach the ambiguity state.
 func insertLookupPair(t *testing.T, db *gorm.DB, base, quote, orderbook string, enabled bool) int64 {
 	t.Helper()
 	var id int64
@@ -63,10 +61,8 @@ func TestLookupRWAPairBySymbol_MatchesRegardlessOfStoredCase(t *testing.T) {
 	}
 }
 
-// LookupRWAPairBySymbol lowercases the column, not the argument: the contract
-// is that callers pass lowercase (handlers do, via parseRWASymbol). Pinning
-// it here so a future caller that skips that step fails loudly instead of
-// silently 404-ing in production.
+// The query lowercases the column, not the argument: a caller that skips
+// parseRWASymbol silently 404s.
 func TestLookupRWAPairBySymbol_ArgumentMustAlreadyBeLowercase(t *testing.T) {
 	db := openGorm(t)
 	truncatePairs(t, db)
@@ -117,8 +113,7 @@ func TestLookupRWAPairBySymbol_DisabledRowIsInvisible(t *testing.T) {
 	require.False(t, byID.Enabled)
 }
 
-// The operator's fix for an ambiguity is to disable the spare row; that must
-// leave a clean single-row resolution, not a 409.
+// Disabling the spare row is the operator's fix for an ambiguity.
 func TestLookupRWAPairBySymbol_DisabledDuplicateDoesNotTriggerAmbiguity(t *testing.T) {
 	db := openGorm(t)
 	truncatePairs(t, db)
@@ -140,8 +135,8 @@ func TestLookupRWAPairBySymbol_TwoEnabledRowsAreAmbiguous(t *testing.T) {
 	repo := repositories.NewLookupRepository(db)
 	ctx := context.Background()
 
-	// Addresses descend lexically while ids ascend, so an accidental drop of
-	// `ORDER BY id` would surface as a wrong IDs slice rather than passing.
+	// Addresses descend lexically while ids ascend, so a dropped `ORDER BY id`
+	// shows up as a wrong IDs slice instead of passing.
 	firstID := insertLookupPair(t, db, "mars1", "usdt", "KT1BookZ", true)
 	secondID := insertLookupPair(t, db, "MARS1", "USDT", "KT1BookA", true)
 	require.Less(t, firstID, secondID)
@@ -157,8 +152,7 @@ func TestLookupRWAPairBySymbol_TwoEnabledRowsAreAmbiguous(t *testing.T) {
 	require.NotErrorIs(t, err, prices.ErrPairNotFound)
 }
 
-// LIMIT 2 is deliberate: detecting the collision is enough, enumerating every
-// duplicate is not. Three rows must still report exactly the two lowest ids.
+// LIMIT 2 is deliberate: detecting the collision is enough.
 func TestLookupRWAPairBySymbol_ThreeDuplicatesReportFirstTwoIDs(t *testing.T) {
 	db := openGorm(t)
 	truncatePairs(t, db)

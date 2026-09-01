@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -19,23 +20,14 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// MBIOJWT builds a Gin middleware that verifies RS256 Bearer JWTs issued by the
-// MBIO Identity Provider and forwarded by the MBIO API Gateway.
+// MBIOJWT verifies RS256 Bearer JWTs issued by the MBIO Identity Provider,
+// against cached JWKS by default or, when a local RSA public key is configured,
+// against that key instead (intended for dev/CI, accepted in any gin mode).
 //
-// Verification path:
-//   - JWKS over HTTP (default): keyfunc fetches and caches {base}/.well-known/jwks.json
-//     with refresh interval = cfg.JWKSCacheTTL.
-//   - Local RSA public key (when cfg.LocalJWTVerifyConfigured is true): the key
-//     is read from cfg.JWTLocalVerifyPublicKeyBase64 (base64 of PEM) — used for
-//     local dev / CI where contacting the real MBIO is impractical.
-//
-// Claim checks: iss (mandatory), exp/nbf (jwt/v5 default), sub (must be present).
-// Audience is enforced only when cfg.MBIOJWTAudience is set; MBIO currently mints
-// tokens without `aud`, so the default is "no aud check". A startup warn-log
-// fires once when aud is empty so the missing check stays visible in ops logs.
-//
-// On any failure the middleware writes a JSON error envelope via httpCommon.RespondError
-// and aborts the gin chain. No fallthrough — the wrapped handler never runs.
+// It checks iss, exp/nbf and sub. Audience is enforced only when
+// cfg.MBIOJWTAudience is set, since MBIO currently mints tokens without `aud`;
+// a startup warn-log keeps the missing check visible. Any failure aborts the
+// gin chain — the wrapped handler never runs.
 func MBIOJWT(cfg *config.AuthConfig, logger *zerolog.Logger) (gin.HandlerFunc, error) {
 	log := logger.With().Str("component", "mbio_jwt").Logger()
 
@@ -68,10 +60,8 @@ func MBIOJWT(cfg *config.AuthConfig, logger *zerolog.Logger) (gin.HandlerFunc, e
 			return
 		}
 
-		// We only consume RegisteredClaims (RFC 7519). The token's `sub` is the
-		// MBIO Gateway service identity; this middleware's whole job is to
-		// verify signature + issuer + audience + expiry. Per-user authorization
-		// is not performed here (this service serves cross-tenant market data).
+		// Only signature + issuer + audience + expiry are verified here; this
+		// service serves cross-tenant market data, so there is no per-user authz.
 		var claims jwt.RegisteredClaims
 		token, err := jwt.ParseWithClaims(tokenString, &claims, keyFunc, parserOpts...)
 		if err != nil {
@@ -131,7 +121,24 @@ func buildKeyFunc(cfg *config.AuthConfig, log *zerolog.Logger) (jwt.Keyfunc, err
 		return nil, fmt.Errorf("jwks init for %s: %w", jwksURL, err)
 	}
 	log.Debug().Str("jwks_url", jwksURL).Msg("jwt_verify_mode=jwks")
-	return kf.Keyfunc, nil
+	return minRSABitsKeyfunc(kf.Keyfunc), nil
+}
+
+// minRSABitsKeyfunc applies the 2048-bit RSA floor to JWKS-served keys too — a
+// weak key in the external MBIO JWKS must not verify tokens here.
+func minRSABitsKeyfunc(next jwt.Keyfunc) jwt.Keyfunc {
+	return func(t *jwt.Token) (interface{}, error) {
+		key, err := next(t)
+		if err != nil {
+			return nil, err
+		}
+		if pub, ok := key.(*rsa.PublicKey); ok {
+			if bits := pub.N.BitLen(); bits < 2048 {
+				return nil, fmt.Errorf("jwks key %v is %d-bit RSA; refusing keys below 2048 bits", t.Header["kid"], bits)
+			}
+		}
+		return key, nil
+	}
 }
 
 func extractBearer(authHeader string) (string, error) {
@@ -172,9 +179,8 @@ type jwtHeader struct {
 	Typ string `json:"typ"`
 }
 
-// requireJWTHeaderTyp rejects tokens whose header `typ` is set to something other
-// than `JWT` (case-insensitive). When `typ` is absent we accept — jwt/v5 already
-// validates the signing algorithm via WithValidMethods.
+// requireJWTHeaderTyp rejects a header `typ` that is present and not `JWT`. An
+// absent typ is accepted — WithValidMethods already pins the algorithm.
 func requireJWTHeaderTyp(token string) error {
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {

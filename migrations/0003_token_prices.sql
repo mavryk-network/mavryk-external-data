@@ -26,12 +26,12 @@ BEGIN
     END IF;
 END $$ LANGUAGE plpgsql;
 
--- The hot-path index for latest price per (token, source, currency) is built by
--- 0022, NOT here. The runners have no migration-tracking table and re-apply
--- every file on every deploy, so a plain CREATE INDEX at this point would win
--- the race on an existing database and do the blocking build before 0022's
--- non-blocking one could — leaving 0022 to report "already exists, skipping".
--- Creating it in exactly one place keeps that build non-blocking.
+-- Hot path: latest price per (token, source, currency). The DROP retires the
+-- old narrower index on databases that built it before source_code joined the
+-- key (its absence degraded latest reads to per-token scans).
+DROP INDEX IF EXISTS idx_token_prices_latest;
+CREATE INDEX IF NOT EXISTS idx_token_prices_latest_source
+    ON token_prices (token_symbol, source_code, quote_currency, ts DESC);
 
 -- Range scans by source (rare, but cheap to maintain on a hypertable).
 CREATE INDEX IF NOT EXISTS idx_token_prices_source_ts

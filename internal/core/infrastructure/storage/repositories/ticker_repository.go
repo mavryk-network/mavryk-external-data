@@ -15,16 +15,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// TickerRepository serves long-format per-exchange ticker data.
-//
-// Two physical tables back this:
-//   - `exchanges`     — small lookup, UPSERT on every job tick.
-//   - `token_tickers` — hypertable, INSERT ON CONFLICT DO NOTHING (idempotent
-//     under repeat ticks at the same `ts`).
-//
-// SaveSnapshot writes BOTH inside one transaction — the FK invariant on
-// `token_tickers.exchange_id` requires exchanges to land before any tickers
-// referencing a brand-new exchange.
+// TickerRepository serves long-format per-exchange ticker data over two tables:
+// `exchanges` (lookup, upserted per tick) and the `token_tickers` hypertable
+// (INSERT ON CONFLICT DO NOTHING). SaveSnapshot writes both in one transaction
+// — the FK on token_tickers.exchange_id needs exchanges to land first.
 type TickerRepository struct {
 	db        *gorm.DB
 	batchSize int
@@ -53,9 +47,7 @@ func exchangeUpsert() clause.OnConflict {
 }
 
 func tickerInsert() clause.OnConflict {
-	// Idempotent re-ingest under the 5-min cadence — if the upstream returns
-	// the same row twice (we never lower granularity below the CG cadence),
-	// keep the existing row. Numbers don't get rewritten on conflict.
+	// Idempotent re-ingest: a repeated upstream row keeps the stored one.
 	return clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "token_symbol"}, {Name: "source_code"},
@@ -101,45 +93,16 @@ func (r *TickerRepository) SaveSnapshot(
 	return total, nil
 }
 
-// LatestSnapshot returns one row per (exchange, target) for `token`, freshest
-// first, with 1D change% joined in via LATERAL against the same table.
+// LatestSnapshot returns one row per (exchange, target) for `token`, ordered by
+// 24h base-token volume, with 1D change% joined via LATERAL.
 //
-// Query shape:
+// Ordering uses base volume alone — the old last_price × volume product mixed
+// quote units, ranking a BTC-quoted market ~60000× below a USDT one at equal
+// real volume. The anchor bracket [ts-25h, ts-24h] mirrors Period.AnchorWindow:
+// without the lower bound an ingestion gap would report a multi-week move as a
+// 24h change; no row in the bracket → change_24h_pct is null.
 //
-//	WITH latest AS (
-//	    SELECT DISTINCT ON (exchange_id, target_symbol) *
-//	      FROM token_tickers
-//	     WHERE token_symbol = ? AND source_code = ?
-//	     [AND ts >= now - stale_after]
-//	     ORDER BY exchange_id, target_symbol, ts DESC
-//	)
-//	SELECT latest.*, ago.last_price AS price_24h_ago,
-//	       exchanges.name AS exchange_name, exchanges.logo_url, exchanges.kind
-//	  FROM latest
-//	  JOIN exchanges ON exchanges.id = latest.exchange_id
-//	  LEFT JOIN LATERAL (
-//	     SELECT last_price FROM token_tickers
-//	      WHERE token_symbol = latest.token_symbol
-//	        AND source_code  = latest.source_code
-//	        AND exchange_id  = latest.exchange_id
-//	        AND target_symbol = latest.target_symbol
-//	        AND ts <= latest.ts - INTERVAL '24 hours'
-//	        AND ts >= latest.ts - INTERVAL '25 hours'
-//	      ORDER BY ts DESC LIMIT 1
-//	  ) ago ON true
-//	  ORDER BY COALESCE(latest.volume_24h_base, 0) DESC;
-//
-// Ordering uses base-token volume alone (same unit for every row); the old
-// last_price × volume product mixed quote units, ranking a BTC-quoted market
-// ~60000× below a USDT one at equal real volume.
-//
-// The anchor bracket [ts-25h, ts-24h] mirrors Period.AnchorWindow's 1h budget:
-// without the lower bound an ingestion gap would anchor "24h ago" on a row
-// arbitrarily far back and report a multi-week move as a 24h change. No row in
-// the bracket → change_24h_pct is null.
-//
-// All filters parameterised. is_stale derived in Go from the returned `ts`
-// against the caller's StaleAfter window.
+// is_stale is derived in Go from the returned `ts`.
 func (r *TickerRepository) LatestSnapshot(
 	ctx context.Context,
 	q apitickers.LatestQuery,

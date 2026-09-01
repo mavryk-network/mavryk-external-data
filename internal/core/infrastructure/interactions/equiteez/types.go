@@ -10,23 +10,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// FlexibleFloat unmarshals JSON numbers or quoted numeric strings (Hasura /
-// bigint fields). Equiteez orderbook prices come back as JSON-quoted strings
-// for big numbers (`"56250000"`) and as bare floats for small ones — this
-// type tolerates both.
+// FlexibleFloat unmarshals a JSON number or a quoted numeric string: Hasura
+// sends bigint fields quoted (`"56250000"`) and small ones bare. Backed by
+// decimal, not float64, since on-chain amounts exceed float64's 53-bit exact
+// range and must reach numeric(38,18) storage intact.
 //
-// Backed by decimal, not float64: on-chain amounts routinely exceed float64's
-// 53-bit integer range and the wire format is exact, so the value must reach
-// numeric(38,18) storage without a lossy float hop.
-//
-// Non-finite inputs ("NaN"/"Inf"/"Infinity" — Postgres numeric NaN and float8
-// infinity, which Hasura emits as quoted strings) decode to zero with NonFinite
-// set instead of erroring. Erroring fails json.Unmarshal for the WHOLE
-// response: one poisoned field would blank every pair's live tick, and in the
-// backfill the batch would never parse, so the keyset cursor could never
-// advance past it. Zero is already skipped by the callers' positivity guards,
-// so one bad field costs one side of one row. Any OTHER parse failure still
-// errors the decode — the tolerance is deliberately narrow.
+// Non-finite inputs ("NaN"/"Inf"/"Infinity", which Postgres/Hasura emit as
+// quoted strings) decode to zero with NonFinite set rather than erroring, since
+// one poisoned field would fail json.Unmarshal for the whole response and stall
+// the backfill cursor. Any other parse failure still errors.
 type FlexibleFloat struct {
 	d         decimal.Decimal
 	nonFinite bool
@@ -62,8 +54,7 @@ func (f *FlexibleFloat) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// isNonFinite matches the tokens Postgres/Hasura use for numeric NaN and
-// float8 infinity, in any casing or sign spelling.
+// isNonFinite matches Postgres/Hasura NaN and infinity tokens, any casing or sign.
 func isNonFinite(s string) bool {
 	t := strings.ToLower(strings.TrimSpace(s))
 	t = strings.TrimPrefix(strings.TrimPrefix(t, "+"), "-")
@@ -73,8 +64,8 @@ func isNonFinite(s string) bool {
 // Decimal returns the exact parsed value (zero for null/empty/non-finite).
 func (f FlexibleFloat) Decimal() decimal.Decimal { return f.d }
 
-// NonFinite reports that the upstream sent NaN/Inf and the value was
-// substituted with zero. Callers must skip such values and count the drop.
+// NonFinite reports that the upstream sent NaN/Inf and zero was substituted.
+// Callers must skip such values and count the drop.
 func (f FlexibleFloat) NonFinite() bool { return f.nonFinite }
 
 // FlexibleFloatFromDecimal builds a value directly (fixtures/tests).
@@ -86,19 +77,15 @@ type TokenQuoteToken struct {
 	TokenID int    `json:"token_id"`
 }
 
-// OrderbookCurrency is one quote currency row for an orderbook
-// (matches Hasura `orderbook_currency`).
+// OrderbookCurrency is one Hasura `orderbook_currency` row.
 type OrderbookCurrency struct {
 	Token        *TokenQuoteToken `json:"token"`
 	CurrencyName string           `json:"currency_name"`
 }
 
-// EquiteezOrderbook is one orderbook row nested under `token.orderbooks`
-// (matches indexer `orderbook` table).
-//
-// ID is the indexer's internal integer identifier (Hasura `orderbook.id`).
-// Cached on `rwa_pairs.equiteez_orderbook_id` so the backfill job can join
-// against `orderbook_order` without resolving the address every batch.
+// EquiteezOrderbook is one indexer `orderbook` row nested under
+// `token.orderbooks`. ID is cached on `rwa_pairs.equiteez_orderbook_id` so the
+// backfill can join `orderbook_order` without re-resolving the address.
 type EquiteezOrderbook struct {
 	ID               int                 `json:"id"`
 	Address          string              `json:"address"`
@@ -111,8 +98,7 @@ type EquiteezOrderbook struct {
 	Currencies       []OrderbookCurrency `json:"currencies"`
 }
 
-// QuoteSymbol returns the human-readable currency name for the orderbook
-// (the first row of `currencies`); empty when not reported.
+// QuoteSymbol returns the currency name from the first `currencies` row, or "".
 func (o *EquiteezOrderbook) QuoteSymbol() string {
 	if o == nil || len(o.Currencies) == 0 {
 		return ""
@@ -120,9 +106,8 @@ func (o *EquiteezOrderbook) QuoteSymbol() string {
 	return o.Currencies[0].CurrencyName
 }
 
-// QuoteTokenAddress returns the on-chain contract address of the orderbook's
-// quote token (the first row of `currencies`, same selection as QuoteSymbol);
-// empty when the indexer reported no currency rows or no nested token.
+// QuoteTokenAddress returns the quote token's contract address from the first
+// `currencies` row, or "" when the indexer reported none.
 func (o *EquiteezOrderbook) QuoteTokenAddress() string {
 	if o == nil || len(o.Currencies) == 0 || o.Currencies[0].Token == nil {
 		return ""
@@ -130,8 +115,7 @@ func (o *EquiteezOrderbook) QuoteTokenAddress() string {
 	return o.Currencies[0].Token.Address
 }
 
-// TokenWithOrderbooks is one token row from the GraphQL queries
-// (`GetTokensWithOrderbooks` / `GetAllowlistedTokensAndOrderbooks`).
+// TokenWithOrderbooks is one token row from the GraphQL token queries.
 type TokenWithOrderbooks struct {
 	Address       string              `json:"address"`
 	TokenID       int                 `json:"token_id"`
@@ -142,21 +126,11 @@ type TokenWithOrderbooks struct {
 	Orderbooks    []EquiteezOrderbook `json:"orderbooks"`
 }
 
-// OrderbookOrder is one row from `orderbook_order` — the indexer's per-order
-// event log. Used by the Equiteez backfill job to reconstruct historical
-// `last`-side prices from filled orders.
-//
-// Numeric fields come back as JSON-quoted strings for bigint columns and as
-// bare numbers for ints; FlexibleFloat normalizes both. Timestamps are RFC3339
-// (Hasura default).
 // OrderCursor is the keyset position of a forward walk over filled orders: the
-// (ended_at, id) of the last row already ingested. A zero EndedAt means "no
-// cursor yet" — the caller starts from its configured floor.
-//
-// Fill time leads and id is only the tie-break for orders that filled in the
-// same instant. Ordering by id alone is unsafe: id is assigned at order
-// CREATION, so a resting limit order that fills long after the cursor passed its
-// id would never be returned.
+// (ended_at, id) of the last ingested row, a zero EndedAt meaning "no cursor
+// yet". Fill time leads and id only breaks ties — ordering by id alone is
+// unsafe because id is assigned at order CREATION, so a resting order filling
+// after the cursor passed its id would never be returned.
 type OrderCursor struct {
 	EndedAt time.Time
 	ID      int64
@@ -165,6 +139,9 @@ type OrderCursor struct {
 // Set reports whether the cursor holds a real position.
 func (c OrderCursor) Set() bool { return !c.EndedAt.IsZero() }
 
+// OrderbookOrder is one `orderbook_order` row from the indexer's per-order
+// event log; the backfill reconstructs historical `last` prices from filled
+// ones. EndedAt is RFC3339 (Hasura default).
 type OrderbookOrder struct {
 	ID               int64         `json:"id"`
 	OrderType        int           `json:"order_type"`

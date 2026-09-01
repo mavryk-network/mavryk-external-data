@@ -89,9 +89,8 @@ func (j *RWAPairSyncJob) Stop() {
 }
 
 // syncOnce runs one discovery pass under its own timeout so a hung indexer
-// cannot stall the ticker. Errors are logged and returned, never fatal: the
-// collector keeps serving whatever rwa_pairs already holds and the next tick
-// retries. Returning the error only withholds the tick's last-success stamp.
+// cannot stall the ticker. A returned error is never fatal — it only withholds
+// the tick's last-success stamp; the collector serves what rwa_pairs holds.
 func (j *RWAPairSyncJob) syncOnce(ctx context.Context) error {
 	timeout := time.Duration(j.cfg.API.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -100,9 +99,8 @@ func (j *RWAPairSyncJob) syncOnce(ctx context.Context) error {
 	syncCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Both catalogs are tallied through the same rule the entity-walking ticks
-	// use: refreshing one of the two is still progress, and only a tick that
-	// refreshed neither withholds the last-success stamp.
+	// Refreshing either catalog is progress; only a tick that refreshed neither
+	// withholds the last-success stamp.
 	var out tickOutcome
 	enabled, err := SyncRWAPairs(syncCtx, j.cfg, j.lookup, j.logger)
 	out.record(err)

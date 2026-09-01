@@ -6,23 +6,20 @@ import (
 	"quotes/internal/core/infrastructure/httpclient"
 )
 
-// APIConfig holds shared outbound HTTP settings (timeout, retry, circuit breaker,
-// transport pooling) applied to every third-party client. Per-service rate limits
-// live in the service configs (see CoinGeckoConfig.RateLimit, EquiteezConfig.RateLimit).
+// APIConfig holds outbound HTTP settings shared by every third-party client.
+// Per-service rate limits live in the service configs instead.
 type APIConfig struct {
 	TimeoutSeconds int `yaml:"timeout_seconds"`
 
-	// Transport pooling. 0 keeps the in-code defaults
-	// (max_idle_conns=100, max_idle_conns_per_host=10, max_conns_per_host=100,
-	// idle_conn_timeout=90s, tls_handshake_timeout=10s).
+	// 0 keeps the in-code defaults (100 idle conns, 10 per host, 100 conns per
+	// host, 90s idle timeout, 10s TLS handshake).
 	TransportMaxIdleConns        int          `yaml:"transport_max_idle_conns"`
 	TransportMaxIdleConnsPerHost int          `yaml:"transport_max_idle_conns_per_host"`
 	TransportMaxConnsPerHost     int          `yaml:"transport_max_conns_per_host"`
 	TransportIdleConnTimeout     DurationYAML `yaml:"transport_idle_conn_timeout"`
 	TransportTLSHandshakeTimeout DurationYAML `yaml:"transport_tls_handshake_timeout"`
 
-	// Max bytes accepted from any single outbound HTTP response (post-decompress).
-	// 0 disables the cap. Recommended production: 16 << 20 (16 MiB).
+	// Max bytes per outbound response, post-decompress. 0 disables the cap.
 	OutboundMaxResponseBytes int64 `yaml:"outbound_max_response_bytes"`
 
 	OutboundHTTPRetryMaxAttempts int `yaml:"outbound_http_retry_max_attempts"`
@@ -36,8 +33,8 @@ type APIConfig struct {
 	OutboundHTTPCircuitBreakerTripAfterFailures   uint32 `yaml:"outbound_http_circuit_breaker_trip_after_failures"`
 }
 
-// OutboundResilience builds retry + circuit-breaker settings tagged with the
-// given component name (used for metrics labels and the CB registry key).
+// OutboundResilience builds retry + circuit-breaker settings for a component
+// (the name is the metrics label and the CB registry key).
 func (c *APIConfig) OutboundResilience(component string) httpclient.ResilienceSettings {
 	if c == nil {
 		return httpclient.ResilienceSettings{Component: component}.Normalized()

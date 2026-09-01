@@ -16,11 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// These tests drive the ASSEMBLED App — NewApp -> buildPublicEngine /
-// buildInternalEngine -> SetupRoutes — through the real middleware chain, so
-// deleting the RWA auth wrapper (or the rate limiter, or the /metrics gate)
-// from the router turns them red. They reach the engines via the unexported
-// App.publicServer / App.internalServer, which is why they live in-package.
+// These tests drive the ASSEMBLED App through its real middleware chain, so
+// dropping the RWA auth wrapper, the rate limiter or the /metrics gate turns
+// them red. They are in-package to reach the unexported *Server fields.
 
 const (
 	appTestIssuer   = "https://mbio.test/app-issuer"
@@ -37,13 +35,10 @@ type appTestEnv struct {
 	priv     *rsa.PrivateKey
 }
 
-// newAppTestEnv builds a real App. mutate customises the config after the
-// local-key auth defaults are in place (gin_mode=test keeps config's
-// release-mode refusal of local-key verification out of the picture).
-//
-// configureGinMode writes the process-global gin mode and gin.Recovery captures
-// gin.DefaultErrorWriter at construction time, so both globals are pinned here.
-// No test in this file may call t.Parallel().
+// mutate customises the config after the local-key auth defaults (gin_mode=test
+// keeps gin out of release so the single-port /metrics branch is predictable).
+// The gin mode and gin.DefaultErrorWriter are globals pinned here: never call
+// t.Parallel().
 func newAppTestEnv(t *testing.T, mutate func(*config.Config)) appTestEnv {
 	t.Helper()
 	appTestPinGlobals(t)
@@ -83,9 +78,8 @@ func appTestPinGlobals(t *testing.T) {
 	})
 }
 
-// authHeader mints a Bearer header signed with the key this env's engine trusts.
-// Issuer and audience default to the configured values; Subject is left to the
-// caller so the missing-`sub` path can be minted.
+// Signed with the key this engine trusts; Subject is the caller's, so a token
+// with no `sub` can be minted.
 func (e appTestEnv) authHeader(t *testing.T, opts testutil.LocalJWTOpts) string {
 	t.Helper()
 	if opts.Issuer == "" {
@@ -132,9 +126,7 @@ func appTestErrCode(t *testing.T, body []byte) string {
 	return env.Code
 }
 
-// appTestGuardedPaths derives the concrete request paths the RWA auth wrapper is
-// meant to cover from the engine's own route table, so a newly added /v1/rwa/*
-// route is exercised without editing this file.
+// Read off the engine's own route table, so new /v1/rwa/* routes are covered.
 func appTestGuardedPaths(t *testing.T, engine *gin.Engine) []string {
 	t.Helper()
 	var paths []string
@@ -220,17 +212,15 @@ func TestApp_PublicEngine_ValidTokenCrossesAuthBoundary(t *testing.T) {
 
 	for _, path := range appTestGuardedPaths(t, env.public) {
 		w := appTestGet(t, env.public, path, auth)
-		// Handler deps are nil in this App, so routes that reach their handler may
-		// 500 through gin.Recovery. Any status other than 401/403 proves the auth
-		// middleware handed the request on.
+		// Handler deps are nil here, so anything but 401/403 (a 500 through
+		// gin.Recovery included) means auth passed the request on.
 		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
 			t.Errorf("GET %s with a valid token: status = %d, want the request past auth; body=%s",
 				path, w.Code, w.Body.String())
 		}
 	}
 
-	// /ohlcv is the one guarded route with no dependencies: a 501 shows the
-	// request reached its handler rather than merely a recovered panic.
+	// /ohlcv is the one guarded route with no deps, so its 501 proves a handler ran.
 	w := appTestGet(t, env.public, "/v1/rwa/"+appTestSymbol+"/ohlcv", auth)
 	if w.Code != http.StatusNotImplemented {
 		t.Fatalf("GET /v1/rwa/%s/ohlcv with a valid token: status = %d, want 501; body=%s",
@@ -331,9 +321,8 @@ func TestApp_RateLimit_ThroughAssembledChain(t *testing.T) {
 	}
 }
 
-// Probes are exempt from the limiter. With per_ip=false every anonymous caller
-// shares one global bucket, so without the exemption a traffic burst would push
-// the kubelet's liveness probe into 429 and restart the pod.
+// With per_ip=false every anonymous caller shares one bucket, so without the
+// probe exemption a traffic burst would 429 liveness and restart the pod.
 func TestApp_RateLimit_ExemptsHealthProbes(t *testing.T) {
 	env := newAppTestEnv(t, func(cfg *config.Config) {
 		cfg.Server.RateLimit = config.ServerRateLimitConfig{RPS: 1, Burst: 2}
@@ -363,6 +352,24 @@ func TestApp_PerIPRateLimit_IgnoresClientSuppliedXFF(t *testing.T) {
 	w := appTestGetForwardedFor(t, env.public, "/openapi.yaml", "198.51.100.20")
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("second request from a different X-Forwarded-For: status = %d, want 429 — spoofed XFF must not open a fresh bucket", w.Code)
+	}
+}
+
+// The positive half of trusted_proxies: XFF from the configured proxy is
+// honored. httptest.NewRequest's fixed RemoteAddr 192.0.2.1 plays the trusted LB.
+func TestApp_PerIPRateLimit_HonorsXFFFromTrustedProxy(t *testing.T) {
+	env := newAppTestEnv(t, func(cfg *config.Config) {
+		cfg.Server.TrustedProxies = []string{"192.0.2.1"}
+		cfg.Server.RateLimit = config.ServerRateLimitConfig{RPS: 1, Burst: 1, PerIP: true}
+	})
+	if w := appTestGetForwardedFor(t, env.public, "/openapi.yaml", "203.0.113.10"); w.Code != http.StatusOK {
+		t.Fatalf("client A first request: status = %d, want 200", w.Code)
+	}
+	if w := appTestGetForwardedFor(t, env.public, "/openapi.yaml", "198.51.100.20"); w.Code != http.StatusOK {
+		t.Fatalf("client B behind the trusted proxy: status = %d, want 200 (own bucket)", w.Code)
+	}
+	if w := appTestGetForwardedFor(t, env.public, "/openapi.yaml", "203.0.113.10"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("client A second request: status = %d, want 429 (same bucket)", w.Code)
 	}
 }
 
@@ -408,9 +415,8 @@ func TestApp_MetricsExposure(t *testing.T) {
 	})
 }
 
-// pprof discloses stack traces and lets a caller pin a CPU for 30s per profile
-// request, and /debug/pprof sits outside the JWT-guarded /v1/rwa group — so it
-// must never reach the internet-facing engine.
+// pprof leaks stack traces, pins a CPU for 30s per profile, and sits outside the
+// JWT-guarded /v1/rwa group.
 func TestApp_PprofEnabled_MountsOnInternalEngineOnly(t *testing.T) {
 	env := newAppTestEnv(t, func(cfg *config.Config) {
 		cfg.Server.PprofEnabled = true

@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -18,19 +17,15 @@ import (
 	"quotes/internal/metrics"
 
 	"github.com/rs/zerolog"
-	"github.com/sony/gobreaker"
 )
 
-// caughtUpRecheckInterval is how long a pair rests after the forward walk
-// reaches the newest indexed fill. Short enough that post-downtime gaps and a
-// brand-new pair's first trades land promptly; long enough that idle pairs cost
-// ~one cheap indexed query per interval instead of one per tick.
+// caughtUpRecheckInterval is how long a pair rests once the walk reaches the
+// newest indexed fill, so idle pairs cost one query per interval, not per tick.
 const caughtUpRecheckInterval = 5 * time.Minute
 
-// pauseUntilNextFill parks a caught-up pair without disabling it: the walk
-// resumes from the persisted (CursorTs, CursorID) after caughtUpRecheckInterval. Error
-// bookkeeping is reset because reaching the head of the log is a success, not a
-// failure. Pure (no I/O) so the decision is unit-testable.
+// pauseUntilNextFill parks a caught-up pair without disabling it; the walk
+// resumes from its persisted cursor. Error bookkeeping is cleared — reaching
+// the head of the log is a success.
 func pauseUntilNextFill(st *repositories.BackfillState, now time.Time) {
 	next := now.Add(caughtUpRecheckInterval)
 	st.NextAttemptAt = &next
@@ -40,18 +35,13 @@ func pauseUntilNextFill(st *repositories.BackfillState, now time.Time) {
 	st.LastError = ""
 }
 
-// EquiteezBackfillJob ingests historical orderbook fills from the Equiteez
-// indexer's `orderbook_order` event log and writes one `last`-side
-// PricePoint per filled order into rwa_quote_prices.
+// EquiteezBackfillJob ingests historical orderbook fills from the indexer's
+// `orderbook_order` log into rwa_quote_prices (one `last` point per fill).
 //
-// Forward-walks per pair by FILL time — keyset (ended_at, id) — with the cursor
-// persisted in backfill_state under (source=equiteez, entity=pair_id). id alone
-// is unsafe: it is assigned at order creation, so a resting limit order filling
-// after the walk passed its id would be skipped forever.
-// Bid/ask reconstruction is out of scope (see ADR-0014 §"Stage 2 deferred").
-//
-// Concurrency: one ticker iterates pairs sequentially; per-pair errors are
-// logged and don't block siblings. Same shape as CoinGeckoBackfillJob.
+// Forward-walks per pair by FILL time — keyset (ended_at, id), cursor persisted
+// in backfill_state. id alone is unsafe: it is assigned at order creation, so a
+// resting order filling after the walk passed its id would be skipped forever.
+// Bid/ask reconstruction is out of scope (ADR-0014 §"Stage 2 deferred").
 type EquiteezBackfillJob struct {
 	cfg    *config.Config
 	repo   apiprices.Repository
@@ -108,11 +98,8 @@ func (j *EquiteezBackfillJob) Start(ctx context.Context) {
 		return
 	}
 
-	// Self-heal: earlier builds permanently disabled pairs on catch-up
-	// (disabled_reason=caught_up) or after repeated errors (auto_disabled), so
-	// pairs frozen by that behaviour would stay dead across deploys. Resume
-	// them from their persisted cursor. Operator/terminal disables
-	// (manual, reached_floor) survive.
+	// Self-heal pairs frozen by older builds (caught_up / auto_disabled);
+	// operator disables (manual, reached_floor) survive.
 	if resumed, err := j.state.ClearCaughtUp(ctx, prices.SourceEquiteez); err != nil {
 		j.logger.Warn().Err(err).Msg("equiteez_backfill_clear_caught_up_failed")
 	} else if resumed > 0 {
@@ -170,7 +157,7 @@ func (j *EquiteezBackfillJob) tickAllPairs(ctx context.Context) error {
 		}
 		stepErr := j.stepPair(ctx, p)
 		out.record(stepErr)
-		if stepErr != nil && !errors.Is(stepErr, errBackfillCoolingDown) && !errors.Is(stepErr, errBackfillSkipped) {
+		if stepErr != nil && shouldLogBackfillStepError(stepErr) {
 			j.logger.Warn().Err(stepErr).Int64("pair_id", p.ID).Msg("equiteez_backfill_step_error")
 		}
 	}
@@ -211,10 +198,8 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 	now := time.Now().UTC()
 	if st.NextAttemptAt != nil && st.NextAttemptAt.After(now) {
 		logger.Debug().Time("retry_at", *st.NextAttemptAt).Msg("equiteez_backfill_skipped_backoff")
-		// A caught-up pair is parked exactly the same way (pauseUntilNextFill),
-		// and that is the healthy steady state of this job — reporting it as a
-		// failed attempt would freeze the last-success gauge on ~9 of every 10
-		// ticks and alert on a working backfill.
+		// A caught-up pair parks the same way and is the healthy steady state —
+		// only an error-driven pause may count as a failed attempt.
 		if errorDrivenPause(st) {
 			return errBackfillCoolingDown
 		}
@@ -223,22 +208,19 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 
 	quoteDecimals, ok := lookupQuoteDecimals(pair.QuoteSymbol)
 	if !ok {
-		// Without decimals we'd write raw smallest-unit prices into the table.
-		// Rest and retry rather than permanently disabling under a misleading
-		// 'manual' reason: the registry is loaded at startup, so registering the
-		// quote token heals this on the next deploy with no operator SQL (the
-		// live collector likewise just skips such pairs).
+		// Without decimals we'd store raw smallest-unit prices. Rest and retry
+		// rather than disable: the registry loads at startup, so registering
+		// the quote token heals this on the next deploy with no operator SQL.
 		next := now.Add(backfillErrorCooldown)
 		st.NextAttemptAt = &next
 		st.LastError = fmt.Sprintf("unknown quote symbol %q in tokens registry", pair.QuoteSymbol)
 		if perr := j.state.Upsert(ctx, st); perr != nil {
 			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_on_error")
 		}
-		metrics.JobErrorsTotal.WithLabelValues("equiteez_backfill", string(source), entityKey, "unknown_quote").Inc()
+		// job label "backfill" matches recordError's series.
+		metrics.JobErrorsTotal.WithLabelValues("backfill", string(source), entityKey, "unknown_quote").Inc()
 		logger.Warn().Str("quote_symbol", pair.QuoteSymbol).Msg("equiteez_backfill_paused_unknown_quote")
-		// Reported as a failure, matching every tick of the cooldown this just
-		// created: the same unchanging registry gap must not read as success on
-		// the tick that discovers it and failure on the 59 that follow.
+		// Same verdict as every later tick of the cooldown this just created.
 		return errBackfillCoolingDown
 	}
 
@@ -247,11 +229,9 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		return fmt.Errorf("invalid equiteez.backfill.start_from: %w", err)
 	}
 
-	// Keyset cursor over FILL time. A nil CursorTs means either a fresh pair or a
-	// row written by the old id-only walk: in both cases we deliberately ignore
-	// the legacy CursorID and restart from start_from. That one-off re-walk is
-	// what recovers the late-filled orders the id-only cursor skipped, and it is
-	// safe because rwa_quote_prices upserts on (pair_id, side, ts).
+	// A nil CursorTs (fresh pair, or a row from the old id-only walk) restarts
+	// from start_from: the one-off re-walk recovers late-filled orders the
+	// id-only cursor skipped, and upserts on (pair_id, side, ts) make it safe.
 	var cursor equiteez.OrderCursor
 	if st.CursorTs != nil {
 		cursor.EndedAt = *st.CursorTs
@@ -350,10 +330,8 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 
 // advanceOrderCursor returns the greatest (ended_at, id) in the batch — the
 // keyset position the next fetch resumes strictly after. ok=false when no row
-// carried a parseable ended_at.
-//
-// It takes the max rather than the last element so a mis-ordered upstream
-// response cannot rewind the cursor and cause an endless re-fetch loop.
+// carried a parseable ended_at. Max, not last element: a mis-ordered upstream
+// response must not rewind the cursor into an endless re-fetch loop.
 func advanceOrderCursor(orders []equiteez.OrderbookOrder) (equiteez.OrderCursor, bool) {
 	var out equiteez.OrderCursor
 	found := false
@@ -371,66 +349,45 @@ func advanceOrderCursor(orders []equiteez.OrderbookOrder) (equiteez.OrderCursor,
 	return out, found
 }
 
-// recordError tracks a failed step: breaker-open pauses without counting, and
-// crossing the error threshold converts into a long cooldown (never a
-// permanent disable). Always returns the original error.
-//
-// Mirrors CoinGeckoBackfillJob.recordError for behavioural symmetry.
+// recordError tracks a failed step via applyBackfillError (shared with the
+// CoinGecko job); this wrapper persists, counts and logs. Always returns the
+// original error.
 func (j *EquiteezBackfillJob) recordError(
 	ctx context.Context,
 	logger *zerolog.Logger,
 	st *repositories.BackfillState,
 	fetchErr error,
 ) error {
-	st.LastError = truncateError(fetchErr)
-
-	if errors.Is(fetchErr, gobreaker.ErrOpenState) || errors.Is(fetchErr, gobreaker.ErrTooManyRequests) {
-		next := time.Now().UTC().Add(breakerOpenRetryDelay)
-		st.NextAttemptAt = &next
-		if perr := j.state.Upsert(ctx, st); perr != nil {
-			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_on_error")
-		}
+	threshold := j.cfg.Equiteez.Backfill.BackfillMaxErrors
+	kind, wait := applyBackfillError(st,
+		threshold,
+		j.cfg.Equiteez.Backfill.BackoffInitialMs,
+		j.cfg.Equiteez.Backfill.BackoffMaxMs,
+		j.cfg.Equiteez.Backfill.MaxBackoffMs,
+		time.Now().UTC(), fetchErr)
+	if perr := j.state.Upsert(ctx, st); perr != nil {
+		logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_on_error")
+	}
+	switch kind {
+	case backfillErrBreakerPaused:
 		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "breaker_open").Inc()
 		logger.Warn().Err(fetchErr).Msg("equiteez_backfill_paused_breaker_open")
-		return fetchErr
-	}
-
-	st.ErrorCount++
-	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
-
-	threshold := j.cfg.Equiteez.Backfill.BackfillMaxErrors
-	if threshold > 0 && st.ErrorCount >= threshold {
-		next := time.Now().UTC().Add(backfillErrorCooldown)
-		st.NextAttemptAt = &next
-		st.ErrorCount = 0
-		if perr := j.state.Upsert(ctx, st); perr != nil {
-			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_after_cooldown")
-		}
+	case backfillErrCooldown:
+		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
 		metrics.BackfillAutoDisabledTotal.WithLabelValues(string(st.Source), st.EntityKey, "errors_threshold").Inc()
 		logger.Error().
 			Err(fetchErr).
 			Int("threshold", threshold).
-			Dur("cooldown", backfillErrorCooldown).
+			Dur("cooldown", wait).
 			Msg("equiteez_backfill_cooldown_after_repeated_errors")
-		return fetchErr
+	default:
+		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
+		logger.Warn().
+			Err(fetchErr).
+			Int("error_count", st.ErrorCount).
+			Dur("backoff", wait).
+			Msg("equiteez_backfill_transient_error")
 	}
-
-	backoff := computeBackoff(
-		st.ErrorCount,
-		j.cfg.Equiteez.Backfill.BackoffInitialMs,
-		j.cfg.Equiteez.Backfill.BackoffMaxMs,
-		j.cfg.Equiteez.Backfill.MaxBackoffMs,
-	)
-	next := time.Now().UTC().Add(backoff)
-	st.NextAttemptAt = &next
-	if perr := j.state.Upsert(ctx, st); perr != nil {
-		logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_on_error")
-	}
-	logger.Warn().
-		Err(fetchErr).
-		Int("error_count", st.ErrorCount).
-		Dur("backoff", backoff).
-		Msg("equiteez_backfill_transient_error")
 	return fetchErr
 }
 

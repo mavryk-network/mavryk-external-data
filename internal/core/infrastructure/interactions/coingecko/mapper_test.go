@@ -101,3 +101,23 @@ func TestMapToPricePoints_DedupsDuplicateTimestamps(t *testing.T) {
 		}
 	}
 }
+
+// A >=1e20 value overflows numeric(38,18) and would abort the whole INSERT
+// batch — it must be dropped, not mapped.
+func TestMapToPricePoints_DropsUnstorableMagnitude(t *testing.T) {
+	data := map[prices.Currency]*MarketChartRangeResponse{
+		prices.CurrencyUSD: {
+			Prices: [][]float64{
+				{1700000000000, 1e20},   // at the bound — dropped
+				{1700000060000, 9.9e19}, // just under — kept
+			},
+		},
+	}
+	points := MapToPricePoints(prices.SourceCoinGecko, "mvrk", data)
+	if len(points) != 1 {
+		t.Fatalf("len = %d, want 1 (>=1e20 dropped, 9.9e19 kept)", len(points))
+	}
+	if points[0].Timestamp.UnixMilli() != 1700000060000 {
+		t.Fatalf("kept the wrong sample: ts=%d", points[0].Timestamp.UnixMilli())
+	}
+}

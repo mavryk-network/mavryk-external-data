@@ -46,11 +46,9 @@ var (
 		[]string{"component"},
 	)
 
-	// OutboundHTTPRequestsTotal counts every RoundTrip that actually hit the
-	// network — one increment per attempt, so retries are counted separately.
-	// `total - outbound_http_retries_total` ≈ logical requests issued by callers.
-	// outcome ∈ {2xx, 4xx, 5xx, error}; `error` covers network/transport errors
-	// where no HTTP status was received.
+	// One increment per network attempt, so retries count separately:
+	// `total - outbound_http_retries_total` ≈ logical requests from callers.
+	// outcome ∈ {2xx, 4xx, 5xx, error}; `error` = no HTTP status received.
 	OutboundHTTPRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "outbound_http_requests_total",
@@ -67,8 +65,6 @@ var (
 		[]string{"component", "from_state", "to_state"},
 	)
 
-	// OutboundHTTPCircuitBreakerState is the current CB state per component.
-	// 0 = closed, 1 = open, 2 = half-open. Updated by the CB layer on transitions.
 	OutboundHTTPCircuitBreakerState = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "outbound_http_circuit_breaker_state",
@@ -86,7 +82,6 @@ var (
 		[]string{"component"},
 	)
 
-	// JobTickDurationSeconds — time taken for one tick of a background job.
 	JobTickDurationSeconds = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "job_tick_duration_seconds",
@@ -96,7 +91,6 @@ var (
 		[]string{"job", "source", "entity"},
 	)
 
-	// JobErrorsTotal — counter of tick-level errors per (job, source, reason).
 	JobErrorsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "job_errors_total",
@@ -105,11 +99,9 @@ var (
 		[]string{"job", "source", "entity", "reason"},
 	)
 
-	// IngestRowsDroppedTotal — individual upstream values discarded during row
-	// mapping instead of failing the whole batch. Non-zero means the upstream
-	// sent something unstorable (a non-finite numeric, or a magnitude
-	// numeric(38,18) cannot hold). Routine skips — a zero bid on a thin
-	// orderbook — are NOT counted here, so alert on any increase.
+	// Values dropped instead of failing the batch: the upstream sent something
+	// unstorable (non-finite, or beyond numeric(38,18)). Routine skips such as a
+	// zero bid are NOT counted, so alert on any increase.
 	IngestRowsDroppedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ingest_rows_dropped_total",
@@ -118,17 +110,10 @@ var (
 		[]string{"source", "entity", "reason"},
 	)
 
-	// JobLastSuccessTimestamp — unix time of the last tick that actually did its
-	// work: the tick reported no error and did not panic. A tick that logged a
-	// failed fetch or save, or in which every entity failed, leaves the gauge
-	// where it was, so a job whose gauge stops advancing is stalled OR failing
-	// (blocked query, dead upstream) even while the process looks healthy;
-	// alert on now() - job_last_success_timestamp_seconds > a few intervals.
-	// Seeded at job start so a job that never succeeds still exports a series.
-	//
-	// It answers "is the job erroring", not "is data arriving": an upstream that
-	// answers 200 with an empty payload is a successful tick here. Pair it with
-	// job_rows_affected_total to catch that.
+	// Advances only on a tick that reported no error and did not panic, so a
+	// gauge that stops moving means stalled OR failing; alert on now() - gauge >
+	// a few intervals. Seeded at job start. An empty-but-200 upstream still
+	// counts as success here — pair with job_rows_affected_total.
 	JobLastSuccessTimestamp = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "job_last_success_timestamp_seconds",
@@ -137,9 +122,8 @@ var (
 		[]string{"job"},
 	)
 
-	// JobTickPanicsTotal — counter of panics recovered inside a single job tick.
-	// A non-zero value means a tick paniced but the loop survived (see
-	// runTickerLoop); alert on any increase.
+	// Non-zero means a tick panicked but runTickerLoop survived; alert on any
+	// increase.
 	JobTickPanicsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "job_tick_panics_total",
@@ -148,7 +132,6 @@ var (
 		[]string{"job"},
 	)
 
-	// JobRowsAffectedTotal — total rows written by a job (Save() return).
 	JobRowsAffectedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "job_rows_affected_total",
@@ -157,7 +140,6 @@ var (
 		[]string{"job", "source", "entity"},
 	)
 
-	// BackfillOldestTsSeconds — Unix timestamp of the current oldest_ts cursor.
 	BackfillOldestTsSeconds = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "backfill_oldest_ts_seconds",
@@ -166,10 +148,8 @@ var (
 		[]string{"source", "entity"},
 	)
 
-	// BackfillAutoDisabledTotal — counter of times an entity crossed
-	// BackfillMaxErrors. The name is kept for dashboard/alert compatibility;
-	// crossing the threshold now parks the entity for backfillErrorCooldown
-	// rather than disabling it permanently.
+	// Counts entities crossing BackfillMaxErrors. The "disabled" name is kept for
+	// dashboard compatibility; crossing only parks the entity for a cooldown.
 	BackfillAutoDisabledTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "backfill_auto_disabled_total",
@@ -178,8 +158,7 @@ var (
 		[]string{"source", "entity", "reason"},
 	)
 
-	// DBOpenConnections / DBInUseConnections — sql.DB pool stats. Exported via a
-	// background goroutine (or pull collector) that reads db.Stats() periodically.
+	// sql.DB pool stats, refreshed from db.Stats() by a background goroutine.
 	DBOpenConnections = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "db_pool_open_connections",
@@ -205,8 +184,6 @@ var (
 		},
 	)
 
-	// FXConversionDurationSeconds — wall time of one PriceConverter.Convert
-	// call (cache hit or miss). Histogram per (source_token, target).
 	FXConversionDurationSeconds = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "fx_conversion_duration_seconds",
@@ -216,8 +193,8 @@ var (
 		[]string{"source_token", "target"},
 	)
 
-	// FXConversionsTotal — counter labeled by outcome:
-	// `success`, `identity`, `no_rate`, `unsupported_target`, `unregistered_source`, `query_error`.
+	// result ∈ {success, identity, no_rate, unsupported_target,
+	// unregistered_source, query_error}.
 	FXConversionsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "fx_conversions_total",
@@ -226,9 +203,8 @@ var (
 		[]string{"source_token", "target", "result"},
 	)
 
-	// FXStaleResponsesTotal — counter of `?in=` responses that were served
-	// with `fx.stale=true`. A growing rate means CoinGecko live-job is
-	// behind or down — alert on `rate(...) > 1% of total`.
+	// A growing rate means the CoinGecko live job is behind or down; alert above
+	// ~1% of total conversions.
 	FXStaleResponsesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "fx_stale_responses_total",
@@ -237,8 +213,7 @@ var (
 		[]string{"target"},
 	)
 
-	// ChartQueryDurationSeconds — wall time of one chart query (Series/OHLC
-	// over CandleRepository). Per (kind=fa|rwa, interval).
+	// kind ∈ {fa, rwa}.
 	ChartQueryDurationSeconds = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "chart_query_duration_seconds",
@@ -248,8 +223,7 @@ var (
 		[]string{"kind", "interval"},
 	)
 
-	// ChartQueryRows — number of candles/points returned per chart query.
-	// High values combined with cap-hits suggest a client over-pulling.
+	// High values together with cap-hits suggest a client over-pulling.
 	ChartQueryRows = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "chart_query_rows",
@@ -259,11 +233,8 @@ var (
 		[]string{"kind", "interval"},
 	)
 
-	// ChartQueryCapHitsTotal — counter of requests rejected by the
-	// per-interval window cap (see ADR-0015). reason=range_exceeded means
-	// (to-from) > cap[interval]; reason=limit means ?limit > MaxLimit.
-	// A growing rate is a UX signal — clients are asking for more than the
-	// caps allow and need pagination.
+	// Per-interval window caps, see ADR-0015. reason=range_exceeded: (to-from) >
+	// cap[interval]; reason=limit: ?limit > MaxLimit.
 	ChartQueryCapHitsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "chart_query_cap_hits_total",
@@ -272,10 +243,8 @@ var (
 		[]string{"kind", "interval", "reason"},
 	)
 
-	// ChangeQueryDurationSeconds — wall time of one /change query end-to-end
-	// (cache lookups + optional repo round-trip + compose). Per (kind=fa|rwa,
-	// periods_count=1..4). periods_count is a closed enum (bounded by the
-	// Period whitelist), keeps cardinality predictable.
+	// periods_count is a closed enum (1..4, bounded by the Period whitelist), so
+	// cardinality stays predictable.
 	ChangeQueryDurationSeconds = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "change_query_duration_seconds",
@@ -285,13 +254,8 @@ var (
 		[]string{"kind", "periods_count"},
 	)
 
-	// ChangeQueryCacheHitsTotal — outcome of every cache slot consulted
-	// during a /change request. result is a closed enum:
-	//   `hit`                     — entry was present and unexpired
-	//   `miss`                    — entry was absent or expired
-	//   `singleflight_collapsed`  — the request joined an in-flight
-	//                               repo call for the same key (stampede
-	//                               protection observed it).
+	// result ∈ {hit, miss, singleflight_collapsed}, the last meaning the request
+	// joined an in-flight repo call for the same key.
 	ChangeQueryCacheHitsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "change_query_cache_hits_total",
@@ -300,11 +264,8 @@ var (
 		[]string{"kind", "result"},
 	)
 
-	// ChangeQueryErrorsTotal — counter of failed /change requests, by
-	// closed-enum classification. code is one of:
-	//   `invalid_period`, `invalid_currency`, `invalid_argument`,
-	//   `not_found`, `repo_error`, `internal`.
-	// User input is never echoed — labels stay bounded.
+	// code ∈ {invalid_period, invalid_currency, invalid_argument, not_found,
+	// repo_error, internal}. User input is never echoed, so labels stay bounded.
 	ChangeQueryErrorsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "change_query_errors_total",
@@ -313,11 +274,8 @@ var (
 		[]string{"kind", "code"},
 	)
 
-	// TickersActiveCount — gauge of distinct (exchange, target_symbol) pairs
-	// observed in the latest CoinGecko tickers tick, per token. Set after each
-	// successful job tick. A drop from 50 → 30 between ticks means CoinGecko
-	// stopped reporting ~20 pairs (exchange delisted, market paused) — alert
-	// when this gauge falls more than ~30% in 15min.
+	// Set after each successful tick. A sharp fall means CoinGecko stopped
+	// reporting pairs (delisting, paused market); alert on >~30% in 15min.
 	TickersActiveCount = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "tickers_active_count",
@@ -326,10 +284,8 @@ var (
 		[]string{"source", "token"},
 	)
 
-	// TickersExchangesCount — gauge of distinct exchanges observed in the
-	// latest tick, per token. Useful as a coarser signal than
-	// TickersActiveCount (catches "Binance delisted MVRK" even if Binance
-	// previously had only one pair).
+	// Coarser than TickersActiveCount: catches an exchange dropping the token
+	// even when it listed a single pair.
 	TickersExchangesCount = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "tickers_exchanges_count",
@@ -338,12 +294,8 @@ var (
 		[]string{"source", "token"},
 	)
 
-	// TickersCacheRequestsTotal — counter of cache outcomes for the in-process
-	// snapshot caches that back /v1/tickers/:token/latest and /distribution.
-	// endpoint ∈ {latest, distribution}; result ∈ {hit, miss}.
-	// hit_ratio = sum(hit) / (sum(hit) + sum(miss)) per endpoint — alert when
-	// hit_ratio drops below ~0.5 (cache too small / TTL too short / poll rate
-	// pathological).
+	// endpoint ∈ {latest, distribution}; result ∈ {hit, miss}. Alert when the
+	// per-endpoint hit ratio drops below ~0.5 (TTL too short, cache too small).
 	TickersCacheRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "tickers_cache_requests_total",
@@ -365,9 +317,8 @@ func StatusClass(code int) string {
 	}
 }
 
-// OutboundOutcome maps a RoundTrip result to the closed-enum label used by
-// OutboundHTTPRequestsTotal. Pass err != nil for transport-level failures
-// (status is ignored in that case).
+// OutboundOutcome maps a RoundTrip result to the OutboundHTTPRequestsTotal
+// label; a non-nil err wins and status is ignored.
 func OutboundOutcome(status int, err error) string {
 	if err != nil {
 		return "error"

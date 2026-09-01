@@ -11,49 +11,28 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// fxCacheTTL is hardcoded — overrides via config aren't worth the surface
-// area for a feature that only meaningfully interacts with cache when QPS
-// is high. The TTL is short enough that staleness never appears as a
-// surprise; long enough that 100 RPS on the same (token,currency) tuple
-// collapses to ~1 DB hit.
+// fxCacheTTL is hardcoded: short enough that staleness never surprises, long
+// enough that high QPS on one (token, currency) collapses to ~1 DB hit.
 const fxCacheTTL = 60 * time.Second
 
-// maxFXCacheEntries bounds the rate cache. Keys partition by (source, token,
-// target, minute-bucket-of-ts), so historical `?in=` ranges would otherwise
-// accumulate one immortal entry per minute-bucket forever (a slow memory leak
-// under normal dashboard traffic). Expired entries are swept periodically and
-// whenever the map grows past this cap.
+// maxFXCacheEntries bounds the rate cache: keys partition by minute-bucket, so
+// historical `?in=` ranges would otherwise leak one entry per bucket forever.
 const maxFXCacheEntries = 50_000
 
 // fxCacheSweepEvery triggers an opportunistic expired-entry sweep every N writes.
 const fxCacheSweepEvery = 512
 
-// FXHardStalenessCap is the age at which a coarse rate becomes a dead feed:
-// past it the conversion is refused (ErrNoFXRate → the currency is dropped from
-// the wire) instead of served as if fresh. Sits above 24h because deep
-// CoinGecko history is daily-granularity, so legitimate historical lookups can
-// trail `ts` by up to a day regardless of the soft budget.
-//
-// It is deliberately a constant and not derived from the operator's
-// fx_max_staleness_seconds: this is the guard that says the feed is dead, and
-// widening it from config would let a misconfigured budget serve arbitrarily
-// old rates. Config validation instead requires the soft budget to stay below
-// this cap, so the two can never invert and `fx.stale` always has room to be
-// observed between them.
+// FXHardStalenessCap is the age past which a rate reads as a dead feed and the
+// conversion is refused outright (ErrNoFXRate) rather than served as fresh.
+// Above 24h because deep CoinGecko history is daily-granularity. Deliberately a
+// constant, not config: validation keeps fx_max_staleness_seconds below it, so
+// the soft budget can never widen the dead-feed guard.
 const FXHardStalenessCap = 26 * time.Hour
 
-// HistoricalFXSource returns the freshest FX rate row for
-// (source, token, currency) whose timestamp is at or before `at`.
-// Replaces the previous "always-latest" contract (Decision #19 in the
-// price-change design doc / `fix_todo.md`). For latest-mode callers
-// this is semantically equivalent — passing `time.Now()` as `at` still
-// returns the freshest row. Historical callers (chart `?in=`,
-// historical change conversions) get the at-or-before row their
-// timestamp asks for, fixing the long-standing chart bug.
-//
-// Returns ok=false when no row exists at-or-before `at` (typical:
-// asking for a date before backfill window). ErrNoFXRate is the
-// converter-level mapping; the source itself reports ok=false.
+// HistoricalFXSource returns the freshest rate at or before `at`, so a
+// historical chart converts at the rate current then rather than today's.
+// ok=false when nothing exists at-or-before `at` (e.g. a date before the
+// backfill window); the converter maps that to ErrNoFXRate.
 type HistoricalFXSource interface {
 	LatestRateAtOrBefore(
 		ctx context.Context,
@@ -114,7 +93,6 @@ func (c *tokenFXConverter) Convert(
 	sourceAmount decimal.Decimal,
 	ts time.Time,
 ) (ConversionResult, error) {
-	// Identity short-circuit — no upstream query.
 	if strings.EqualFold(string(sourceToken), string(target)) {
 		return ConversionResult{
 			Amount:   sourceAmount,
@@ -125,8 +103,7 @@ func (c *tokenFXConverter) Convert(
 		}, nil
 	}
 
-	// Source must be in the runtime token registry: the ft-side jobs only
-	// write FX into token_prices for tokens that exist there.
+	// FX only exists in token_prices for registered tokens.
 	if _, ok := prices.LookupToken(sourceToken); !ok {
 		return ConversionResult{}, ErrSourceTokenNotRegistered
 	}
@@ -139,11 +116,8 @@ func (c *tokenFXConverter) Convert(
 		return ConversionResult{}, err
 	}
 
-	// Staleness is measured against `ts` — the timestamp the caller asked
-	// to convert against. For latest-mode (ts ≈ time.Now()) this is the
-	// same as the old "now - rateTS" measurement. For historical lookups
-	// (ts in the past) it's "how stale was the FX feed at the moment we're
-	// asking about", which is the honest question.
+	// Staleness is measured against `ts`, so a historical lookup asks how
+	// stale the feed was at that moment, not today.
 	age := ts.Sub(rateTS)
 	if age > FXHardStalenessCap {
 		return ConversionResult{}, ErrNoFXRate
@@ -159,11 +133,9 @@ func (c *tokenFXConverter) Convert(
 	}, nil
 }
 
-// lookupRate consults the in-process cache then the storage layer using
-// at-or-before semantics (Decision #19). Cache keys collapse minute-buckets
-// of `ts` so 100 RPS within the same minute = 1 upstream query for the
-// same (token, currency) tuple. Historical lookups (ts in the past)
-// partition naturally into their own minute buckets.
+// lookupRate reads the cache, then storage with at-or-before semantics. Keys
+// collapse `ts` into minute buckets, so a burst within one minute costs a
+// single upstream query per (token, currency).
 func (c *tokenFXConverter) lookupRate(
 	ctx context.Context,
 	token prices.Token,
@@ -191,11 +163,9 @@ func (c *tokenFXConverter) lookupRate(
 	if err != nil {
 		return decimal.Decimal{}, time.Time{}, err
 	}
-	// Treat missing OR non-positive rates as "no rate". A zero/negative stored
-	// price (a known CoinGecko glitch class) would otherwise become an FX rate of
-	// 0 and silently zero out every ?in= conversion. Negative-cache the miss so a
-	// range that predates the FX backfill costs one query per minute-bucket per
-	// TTL instead of a full ~10k-query scan on every request.
+	// A non-positive stored price (a CoinGecko glitch class) would become a
+	// rate of 0 and silently zero every conversion. Negative-cache the miss so
+	// a pre-backfill range costs one query per bucket, not a full scan.
 	if !found || !point.Price.IsPositive() {
 		c.store(key, fxCacheEntry{expires: time.Now().Add(fxCacheTTL), found: false})
 		return decimal.Decimal{}, time.Time{}, ErrNoFXRate
@@ -210,8 +180,8 @@ func (c *tokenFXConverter) lookupRate(
 	return point.Price, point.Timestamp, nil
 }
 
-// store writes an entry under the write lock and opportunistically evicts expired
-// entries so the minute-bucketed key space cannot grow without bound.
+// store writes under the lock and opportunistically evicts expired entries so
+// the minute-bucketed key space cannot grow without bound.
 func (c *tokenFXConverter) store(key fxCacheKey, entry fxCacheEntry) {
 	c.mu.Lock()
 	c.cache[key] = entry

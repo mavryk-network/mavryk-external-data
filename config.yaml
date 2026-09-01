@@ -39,8 +39,9 @@ server:
 
 # No password / ssl_mode here: this file is baked into the production image.
 # Local dev falls back to the in-code defaults (postgres / prefer); deployed
-# envs must set POSTGRES_PASSWORD (+ POSTGRES_SSL) — effective release mode
-# refuses well-known default passwords at startup.
+# envs must set POSTGRES_PASSWORD (+ POSTGRES_SSL). Nothing enforces this at
+# startup — a missing value silently falls back to the dev default, and release
+# mode only logs a warning.
 database:
   host: "localhost"
   port: "5432"
@@ -142,8 +143,9 @@ tickers:
 #   "mbio-api-gateway", not a URL.
 # - mbio_jwt_audience: optional. MBIO does not currently mint `aud`, so leaving
 #   this empty is the correct default. A startup warn-log fires when empty.
-# - jwt_local_verify_public_key: base64-PEM of an RSA public key for local /
-#   CI verification. When set the middleware skips the JWKS fetch entirely.
+# - jwt_local_verify_public_key: base64-PEM of an RSA public key. When set it
+#   replaces the MBIO JWKS trust anchor in ANY gin mode (nothing refuses it at
+#   startup; the middleware logs a warning), so keep it to local / CI.
 auth:
   # enabled: <intentionally unset — defaults to true/verify; disable via AUTH_ENABLED=false env>
   mbio_jwt_base_url: ""

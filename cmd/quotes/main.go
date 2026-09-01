@@ -1,9 +1,6 @@
 // Command quotes is the entry point for the mavryk-external-data service.
-//
-// API documentation lives in [docs/openapi.yaml] (OpenAPI 3.0); the spec and
-// Swagger UI are served at /openapi.yaml and /docs respectively. We removed
-// swaggo/swag (which only emits Swagger 2.0) along with the dependency tree
-// it pulled in — see docs/adr/0011-openapi-3-hand-written.md.
+// The hand-written OpenAPI 3 spec and Swagger UI are served at /openapi.yaml
+// and /docs (ADR-0011).
 package main
 
 import (
@@ -12,6 +9,7 @@ import (
 	stdhttp "net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -104,11 +102,9 @@ func run() int {
 	tokenAppRepo := apiprices.NewCachedRepository(tokenRepoAdapter{tokenRepo}, cacheTTL)
 	rwaAppRepo := apiprices.NewCachedRepository(rwaRepoAdapter{rwaRepo}, cacheTTL)
 
-	// FX converter for RWA `?in=` multi-currency conversions. Reads from
-	// the same `token_prices` series the live job populates. Honours the
-	// `ts` argument via at-or-before semantics — historical chart
-	// conversions get the rate that was current at bucket time, not
-	// today's rate (Decision #19; fix_todo.md).
+	// FX for `?in=` conversions, reading the same token_prices series the live
+	// job populates. At-or-before semantics: a historical chart converts at the
+	// rate current at bucket time, not today's.
 	fxConverter := apiprices.NewTokenFXConverter(
 		fxRepoAdapter{tokenRepo},
 		time.Duration(cfg.Server.FXMaxStalenessSeconds)*time.Second,
@@ -164,11 +160,9 @@ func run() int {
 	liveJob.Start(ctx)
 	backfillJob.Start(ctx)
 
-	// Discovery: pull the Equiteez allowlist into rwa_pairs. Runs on a ticker
-	// (first tick fires immediately), so a newly listed asset is picked up
-	// without a restart and a transient indexer failure retries instead of
-	// leaving discovery dead for the process lifetime. The collector resolves
-	// pairs per tick, so it needs no ordering guarantee against this job.
+	// Discovery: pull the Equiteez allowlist into rwa_pairs on a ticker, so a
+	// new listing needs no restart and a transient indexer failure retries.
+	// The collector resolves pairs per tick — no ordering guarantee needed.
 	rwaPairSyncJob.Start(ctx)
 
 	rwaJob.Start(ctx)
@@ -225,7 +219,8 @@ func run() int {
 
 // warnDevDefaults logs warnings when production-looking config (effective
 // release mode) still leans on dev defaults that wouldn't survive an audit.
-// Hard rejects (e.g. default postgres password) live in Validate; here we only nudge.
+// Validate only checks config SHAPE — nothing refuses to start over these, so
+// these warnings are the only signal.
 func warnDevDefaults(cfg *config.Config, logger *zerolog.Logger) {
 	if cfg.Server.EffectiveGinMode() != "release" {
 		return
@@ -233,6 +228,22 @@ func warnDevDefaults(cfg *config.Config, logger *zerolog.Logger) {
 	if cfg.Server.RateLimit.RPS <= 0 {
 		logger.Warn().Msg("inbound_rate_limit_disabled_in_release_mode")
 	}
+	if wellKnownDBPasswords[strings.ToLower(strings.TrimSpace(cfg.Database.Password))] {
+		// Never log the value itself.
+		logger.Warn().Msg("database_password_is_a_well_known_default")
+	}
+	if !cfg.Auth.JWTVerificationEnabled() {
+		logger.Warn().Msg("auth_disabled_in_release_mode_rwa_routes_open_on_public_listener")
+	}
+}
+
+// wellKnownDBPasswords are the defaults shipped by this repo and its tooling.
+var wellKnownDBPasswords = map[string]bool{
+	"postgres": true,
+	"admin":    true,
+	"password": true,
+	"changeme": true,
+	"qwerty":   true,
 }
 
 // tokenRepoAdapter and rwaRepoAdapter let the concrete repos satisfy

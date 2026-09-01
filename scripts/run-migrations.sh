@@ -63,11 +63,22 @@ fi
 # add_continuous_aggregate_policy / add_*_policy, which cannot run inside a
 # transaction block. ON_ERROR_STOP still aborts the whole run on any error.
 MIGRATION_LOCK_KEY="${MIGRATION_LOCK_KEY:-792015843}"
+# The key is interpolated into SQL below — refuse anything but a plain integer.
+if ! printf '%s' "$MIGRATION_LOCK_KEY" | grep -Eq '^-?[0-9]{1,18}$'; then
+  echo "✗ MIGRATION_LOCK_KEY must be an integer, got: ${MIGRATION_LOCK_KEY}" >&2
+  exit 1
+fi
 RUNNER_SQL="$(mktemp)"
 trap 'rm -f "$RUNNER_SQL"' EXIT
 
 {
+  # Bound the lock wait: an orphaned session would otherwise block every
+  # future deploy silently. On timeout ON_ERROR_STOP fails the run loudly
+  # (find the holder via pg_locks locktype='advisory').
+  echo "SET statement_timeout = '10min';"
   echo "SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY});"
+  # Cleared once the lock is held — index builds can legitimately run long.
+  echo "SET statement_timeout = 0;"
   for f in $(ls "$MIGRATIONS_DIR"/*.sql | sort); do
     echo "\\echo Executing migration: $(basename "$f")"
     echo "\\i $f"

@@ -26,14 +26,11 @@ const (
 	cgTestCoinID = "mavryk-network"
 	// Two samples per (coin, vs_currency) response — see fakeCoinGecko.ServeHTTP.
 	cgSamplesPerRequest = 2
-	// GetTokenConfig floors live_lookback_seconds at 600 for a 60s interval, so
-	// every tick below asks upstream for exactly this many seconds.
+	// GetTokenConfig floors live_lookback_seconds at 600 for a 60s interval.
 	cgTestLookbackSeconds = 600
 )
 
-// cgTestPrices is the price the fake upstream quotes per vs_currency, written as
-// the decimal string the mapper must produce. Values are distinct so a currency
-// mix-up in the map→PricePoint conversion cannot pass.
+// The decimal string the mapper must produce; distinct so a mix-up cannot pass.
 var cgTestPrices = map[prices.Currency]string{
 	prices.CurrencyUSD: "1.25",
 	prices.CurrencyEUR: "1.1",
@@ -53,13 +50,12 @@ type cgRequest struct {
 	Header http.Header
 }
 
-// fakeCoinGecko impersonates the CoinGecko market_chart/range endpoint over a
-// real socket and records every inbound request for outbound-shape assertions.
+// The CoinGecko market_chart/range endpoint over a real socket, recording every
+// inbound request.
 type fakeCoinGecko struct {
 	*httptest.Server
 
-	// statusFor maps a vs_currency to the status to answer with; nil = always
-	// 200. Set before the first tick.
+	// vs_currency → status; nil = always 200. Set before the first tick.
 	statusFor func(vsCurrency string) int
 
 	mu   sync.Mutex
@@ -111,8 +107,8 @@ func (f *fakeCoinGecko) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Samples derived from the requested window so they always clear the
-	// mapper's timestamp bounds check without the test pinning wall-clock time.
+	// Derived from the requested window, so they clear the mapper's bounds check
+	// without the test pinning wall-clock time.
 	body := coingecko.MarketChartRangeResponse{Prices: [][]float64{
 		{float64(from) * 1000, price},
 		{float64(from+(to-from)/2) * 1000, price},
@@ -127,7 +123,6 @@ func (f *fakeCoinGecko) requests() []cgRequest {
 	return append([]cgRequest(nil), f.reqs...)
 }
 
-// stubPriceRepo is an in-memory apiprices.Repository: the tick's write side.
 type stubPriceRepo struct {
 	mu    sync.Mutex
 	saves [][]prices.PricePoint
@@ -162,9 +157,8 @@ func (r *stubPriceRepo) allPoints() []prices.PricePoint {
 	return out
 }
 
-// cgLiveTestConfig pins a deterministic transport: one network attempt per
-// logical request (no retry storms to count around) and no circuit breaker, so
-// the 5xx subtest cannot leak an open breaker into a later one.
+// A deterministic transport: one attempt per request (no retry storms to count
+// around) and no breaker, so the 5xx test cannot leak an open one into a later.
 func cgLiveTestConfig(baseURL, apiKey string) *config.Config {
 	cfg := &config.Config{}
 	cfg.Job.Enabled = true
@@ -202,9 +196,7 @@ func cgRowsAffected() prometheus.Counter {
 	return metrics.JobRowsAffectedTotal.WithLabelValues("live", string(prices.SourceCoinGecko), cgTestToken)
 }
 
-// TestCoinGeckoLiveJob_CollectOnce_MapsAllCurrenciesToRepository drives a whole
-// live tick end to end: real HTTP client → real socket → fake CoinGecko →
-// mapper → Repository.
+// A whole live tick: real HTTP client → socket → fake CoinGecko → mapper → repo.
 func TestCoinGeckoLiveJob_CollectOnce_MapsAllCurrenciesToRepository(t *testing.T) {
 	fake := newFakeCoinGecko(t)
 	cfg := cgLiveTestConfig(fake.URL+"/api/v3", "")
@@ -271,10 +263,8 @@ func TestCoinGeckoLiveJob_CollectOnce_MapsAllCurrenciesToRepository(t *testing.T
 	}
 }
 
-// TestCoinGeckoLiveJob_CollectOnce_OutboundRequestShape pins what actually goes
-// out on the wire — path, query window, and the API-key header, which is
-// host-dependent: a pro header on the demo host is rejected upstream and a demo
-// key then looks dead.
+// Path, query window, and the API-key header — which is host-dependent: a pro
+// header on the demo host is rejected, and the demo key then looks dead.
 func TestCoinGeckoLiveJob_CollectOnce_OutboundRequestShape(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -291,9 +281,8 @@ func TestCoinGeckoLiveJob_CollectOnce_OutboundRequestShape(t *testing.T) {
 			deadHeader: "x-cg-pro-api-key",
 		},
 		{
-			// setAPIKeyHeader selects on a substring of the configured base URL.
-			// httptest only hands out a loopback address, so the pro marker rides
-			// in the path — the production branch reads c.baseURL either way.
+			// setAPIKeyHeader matches a substring of the base URL, and httptest
+			// only hands out loopback addresses — so the pro marker rides in the path.
 			name:       "pro host uses pro key header",
 			basePath:   "/pro-api.coingecko.com/api/v3",
 			apiKey:     "pro-key",
@@ -367,9 +356,7 @@ func TestCoinGeckoLiveJob_CollectOnce_OutboundRequestShape(t *testing.T) {
 	}
 }
 
-// TestCoinGeckoLiveJob_CollectOnce_UpstreamErrorWritesNothing: a hard upstream
-// failure must count an error and leave the repository untouched — never a
-// half-window write.
+// A hard upstream failure must count an error and never half-write a window.
 func TestCoinGeckoLiveJob_CollectOnce_UpstreamErrorWritesNothing(t *testing.T) {
 	fake := newFakeCoinGecko(t)
 	fake.statusFor = func(string) int { return http.StatusInternalServerError }
@@ -386,17 +373,15 @@ func TestCoinGeckoLiveJob_CollectOnce_UpstreamErrorWritesNothing(t *testing.T) {
 	if got := cgCounterValue(t, cgFetchErrors()) - errsBefore; got != 1 {
 		t.Errorf("job_errors_total{reason=fetch} delta = %v, want 1", got)
 	}
-	// How many currencies are attempted before giving up is a client policy
-	// detail; that upstream was really contacted is not.
+	// How many currencies are tried before giving up is client policy; that
+	// upstream was contacted at all is not.
 	if len(fake.requests()) == 0 {
 		t.Error("fake upstream saw no request")
 	}
 }
 
-// TestCoinGeckoLiveJob_CollectOnce_OneDeadCurrencyKeepsTheRest bounds the blast
-// radius of a single deterministic 4xx currency: the healthy currencies of the
-// tick must still be persisted. token_prices doubles as the FX source, so
-// dropping the whole tick would also black out every `?in=` conversion.
+// Blast radius of one deterministic 4xx currency. token_prices doubles as the FX
+// source, so dropping the whole tick would black out every `?in=` conversion.
 func TestCoinGeckoLiveJob_CollectOnce_OneDeadCurrencyKeepsTheRest(t *testing.T) {
 	const dead = prices.CurrencyEUR
 

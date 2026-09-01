@@ -1,15 +1,7 @@
-// Package cache provides a generic in-process TTL cache used by the
-// per-domain CachedRepository decorators (prices, tickers, future kinds).
-//
-// The primitive intentionally stays small: get-or-load, invalidate-by-predicate,
-// and a passive TTL fence on lookup. Invalidation policy is owned by the
-// wrapping repository — see application/prices/cache.go and
-// application/tickers/cache.go for the (source, entity) and (token) variants
-// respectively.
-//
-// Zero TTL disables the cache transparently; lookups always miss, stores
-// no-op. This keeps the wrapper construction unconditional and removes
-// branchy "is cache enabled" checks from callers.
+// Package cache provides the generic in-process TTL cache behind the
+// per-domain CachedRepository decorators. Invalidation policy lives in the
+// wrapping repository. A zero TTL disables the cache transparently (lookups
+// miss, stores no-op), so callers need no "is cache enabled" branch.
 package cache
 
 import (
@@ -20,23 +12,17 @@ import (
 
 // TTL is a thread-safe generic TTL cache keyed by string.
 //
-// When clone is non-nil it runs on every store AND every lookup return — use
-// it to defend against caller aliasing for slice/map values. Pass nil when T
-// is a value type (struct of decimals, snapshot) and aliasing isn't possible.
-//
-// Concurrent miss-loaders are NOT single-flighted: two parallel GetOrLoad on
-// the same cold key both run load. Matches the existing prices cache
-// semantics; if duplicate work becomes measurable, add a singleflight here in
-// one place and every wrapper inherits it.
+// A non-nil clone runs on every store and every lookup return, defending
+// against caller aliasing of slice/map values; pass nil for value types.
+// Concurrent miss-loaders are NOT single-flighted.
 type TTL[T any] struct {
 	ttl   time.Duration
 	mu    sync.RWMutex
 	store map[string]ttlEntry[T]
 	clone func(T) T
-	// gen counts invalidations. GetOrLoad snapshots it before running load and
-	// stores only if unchanged — otherwise a reader that loaded pre-write data
-	// could re-cache it right after a writer's invalidate, serving stale values
-	// for a full TTL.
+	// gen counts invalidations: GetOrLoad snapshots it before load and stores
+	// only if unchanged, so a reader cannot re-cache pre-write data right after
+	// a writer's invalidate and serve it for a full TTL.
 	gen uint64
 }
 

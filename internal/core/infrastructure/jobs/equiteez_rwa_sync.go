@@ -106,13 +106,9 @@ func SyncRWAPairs(
 		}
 	}
 
-	// Soft-disable pairs missing from the allowlist ONLY when we have a complete,
-	// non-empty view. An empty allowlist (indexer mid-resync, upstream flag flip)
-	// or any failed upsert makes keepIDs an unreliable "keep" set: passing it to
-	// DisableMissingRWAPairs would disable every enabled pair. Sync disables are
-	// stamped disabled_reason='sync_missing' and are undone by the next sync that
-	// sees the pair again, so a partial view costs at most one sync interval of
-	// collection — but still skip the disable when the view is obviously bad.
+	// Soft-disable missing pairs ONLY on a complete, non-empty view: an empty
+	// allowlist or a failed upsert makes keepIDs unreliable and would disable
+	// every enabled pair.
 	var disabled int64
 	if shouldDisableMissingPairs(len(tokens), len(keepIDs), upsertFailed) {
 		disabled, err = lookup.DisableMissingRWAPairs(ctx, source, keepIDs)
@@ -134,24 +130,17 @@ func SyncRWAPairs(
 		Int("upsert_failed", upsertFailed).
 		Msg("rwa_pair_sync_completed")
 
-	// Upstream had pairs and not one of them landed: the catalog was not
-	// refreshed at all (typically the DB refusing writes). Report it so the
-	// caller's tick counts as failed rather than stamping a last-success that
-	// says the allowlist is current.
+	// Upstream had pairs and none landed (DB refusing writes): the tick must
+	// count as failed, not stamp a last-success claiming the catalog is current.
 	if upsertFailed > 0 && len(keepIDs) == 0 {
 		return 0, fmt.Errorf("rwa pair sync: all %d upserts failed", upsertFailed)
 	}
 	return len(keepIDs), nil
 }
 
-// shouldDisableMissingPairs reports whether the sync has a complete enough view
-// of the Equiteez allowlist to safely soft-disable pairs no longer present.
-//
-// It refuses when the fetched allowlist was empty (tokenCount == 0), when nothing
-// upserted successfully (keepCount == 0), or when any per-pair upsert failed
-// (upsertFailed > 0). In all three cases keepIDs under-represents the true set of
-// live pairs, so disabling "everything not in keepIDs" would over-disable for at
-// least one sync interval (the next complete sync re-enables sync-disabled rows).
+// shouldDisableMissingPairs reports whether the view is complete enough to
+// safely soft-disable absent pairs. Any of empty allowlist, nothing upserted,
+// or a failed upsert means the keep-set under-represents the live pairs.
 func shouldDisableMissingPairs(tokenCount, keepCount, upsertFailed int) bool {
 	return tokenCount > 0 && keepCount > 0 && upsertFailed == 0
 }
@@ -167,9 +156,8 @@ func shouldDisableMissingPairs(tokenCount, keepCount, upsertFailed int) bool {
 //  6. shortened token contract — never returns the full KT1… in `base_symbol`,
 //     so the column always carries something distinguishable in the UI.
 //
-// Operators can override any time via `UPDATE rwa_pairs SET base_symbol=...`;
-// the next sync preserves the manual value (we only re-write metadata fields,
-// see LookupRepository.UpsertRWAPair).
+// NOTE: a manual `UPDATE rwa_pairs SET base_symbol=...` does NOT survive the
+// sync — UpsertRWAPair re-derives base/quote symbols on every pass.
 func deriveBaseSymbol(tok equiteez.TokenWithOrderbooks) string {
 	for _, raw := range [][]byte{tok.TokenMetadata, tok.Metadata} {
 		if s := metadataField(raw, "symbol"); s != "" {

@@ -29,9 +29,8 @@ func mkResp(code int) *http.Response {
 	}
 }
 
-// TestCircuitBreakerTripsOn5xx pins the fix: an upstream that keeps answering 500
-// (hard-down but responsive) must open the breaker. Previously only transport
-// errors counted, so the breaker never engaged during such an outage.
+// An upstream answering 500 is hard-down but responsive, so no transport error
+// is ever raised — the status alone must open the breaker.
 func TestCircuitBreakerTripsOn5xx(t *testing.T) {
 	ResetSharedBreakers()
 	var calls int
@@ -66,7 +65,6 @@ func TestCircuitBreakerTripsOn5xx(t *testing.T) {
 	}
 }
 
-// TestCircuitBreakerIgnores4xx: client errors must not open the breaker.
 func TestCircuitBreakerIgnores4xx(t *testing.T) {
 	ResetSharedBreakers()
 	base := rtFunc(func(_ *http.Request) (*http.Response, error) { return mkResp(400), nil })
@@ -90,13 +88,8 @@ func TestCircuitBreakerIgnores4xx(t *testing.T) {
 	}
 }
 
-// TestRateLimiterWaitDoesNotTripBreaker pins the layering rule in
-// WrapCircuitBreaker: the limiter must sit OUTSIDE the breaker so that
-// self-inflicted throttling failures — a Wait that fast-fails because the
-// caller's deadline is shorter than the queue delay, with the upstream never
-// contacted — cannot be mistaken for upstream failures. With the breaker
-// outermost, gobreaker counted each of these as a failure and tripped against
-// a perfectly healthy upstream, fast-failing every request for the component.
+// The layering rule: the limiter must sit OUTSIDE the breaker, or a Wait that
+// fast-fails on a short caller deadline trips it with no upstream failure.
 func TestRateLimiterWaitDoesNotTripBreaker(t *testing.T) {
 	ResetSharedLimiters()
 	ResetSharedBreakers()
@@ -112,8 +105,7 @@ func TestRateLimiterWaitDoesNotTripBreaker(t *testing.T) {
 		CBInterval:                     time.Minute,
 		CBOpenTimeout:                  time.Minute,
 	}
-	// Burst 1 at 0.01 RPS: the first request passes, every later one must wait
-	// ~100s for a token.
+	// Burst 1 at 0.01 RPS: the first request passes, later ones wait ~100s.
 	rl := RateLimitSettings{Component: "test-cb-limiter", RPS: 0.01, Burst: 1}
 	rt := WrapRateLimited(WrapCircuitBreaker(WrapResilientTransport(base, s), s), rl)
 
@@ -122,8 +114,7 @@ func TestRateLimiterWaitDoesNotTripBreaker(t *testing.T) {
 		t.Fatalf("first request should consume the burst token: %v", err)
 	}
 
-	// Exhaust well past the trip threshold with deadline-bound requests the
-	// limiter cannot satisfy.
+	// Past the trip threshold, with deadlines the limiter cannot satisfy.
 	for i := 0; i < 5; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		_, err := rt.RoundTrip(req.WithContext(ctx))
@@ -136,8 +127,7 @@ func TestRateLimiterWaitDoesNotTripBreaker(t *testing.T) {
 		}
 	}
 
-	// The upstream was never contacted for those, and the breaker must still be
-	// closed: a request that does get a token has to reach the upstream.
+	// The breaker must still be closed: a request with a token reaches upstream.
 	if upstreamCalls != 1 {
 		t.Fatalf("upstream calls = %d, want 1 (throttled requests never reach it)", upstreamCalls)
 	}
@@ -154,12 +144,9 @@ func TestRateLimiterWaitDoesNotTripBreaker(t *testing.T) {
 	}
 }
 
-// TestRetrySideLimiterWaitDoesNotTripBreaker covers the path the layering rule
-// alone cannot protect: retryTransport runs INSIDE the breaker and charges the
-// shared limiter per retry, so a retry it cannot stage must surface the real
-// upstream outcome. A pure 429 storm (never a failure by the breaker's own
-// 4xx rule) previously turned into a throttling error inside cb.Execute and
-// opened the breaker with no upstream failure at all.
+// The path the layering rule cannot protect: retryTransport runs INSIDE the
+// breaker and charges the shared limiter per retry, so a retry it cannot stage
+// must still surface the real upstream outcome (a 429 storm is not a failure).
 func TestRetrySideLimiterWaitDoesNotTripBreaker(t *testing.T) {
 	ResetSharedLimiters()
 	ResetSharedBreakers()
@@ -174,10 +161,8 @@ func TestRetrySideLimiterWaitDoesNotTripBreaker(t *testing.T) {
 		CBInterval:                     time.Minute,
 		CBOpenTimeout:                  time.Minute,
 	}
-	// Register the component's shared limiter (the one retryTransport consults)
-	// and drain its single token, so every retry inside the breaker fails to
-	// acquire one. No outer WrapRateLimited here: this test isolates the
-	// retry-side path, which the layering rule alone cannot protect.
+	// Drain the shared limiter retryTransport consults, so every retry inside the
+	// breaker fails to get a token. No outer WrapRateLimited, on purpose.
 	limiter := sharedLimiter(comp, 0.01, 1)
 	limiter.Allow()
 	rt := WrapCircuitBreaker(WrapResilientTransport(base, s), s)

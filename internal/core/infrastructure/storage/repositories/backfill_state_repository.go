@@ -76,16 +76,9 @@ func (r *BackfillStateRepository) Get(ctx context.Context, source prices.Source,
 	return entityToState(&e), nil
 }
 
-// ClearCaughtUp re-enables every row for `source` that a previous build parked
-// with disabled_reason='caught_up', returning how many were resumed.
-//
-// `cursor_id` is deliberately left intact so the walk resumes exactly where it
-// stopped instead of replaying history. Rows disabled for a genuinely terminal
-// or operator-owned reason (reached_floor, manual) are untouched; legacy
-// auto_disabled rows are resumed separately by ClearAutoDisabled.
-//
-// Called at job start so a deploy self-heals pairs frozen by the old sticky
-// behaviour — no ops SQL required.
+// ClearCaughtUp re-enables rows an older build parked as 'caught_up', keeping
+// cursor_id so the walk resumes instead of replaying history. Terminal and
+// operator reasons (reached_floor, manual) are untouched. Called at job start.
 func (r *BackfillStateRepository) ClearCaughtUp(ctx context.Context, source prices.Source) (int64, error) {
 	if source == "" {
 		return 0, fmt.Errorf("source is required")
@@ -108,11 +101,9 @@ func (r *BackfillStateRepository) ClearCaughtUp(ctx context.Context, source pric
 	return res.RowsAffected, nil
 }
 
-// ClearAutoDisabled re-enables every row for `source` that repeated errors
-// parked with disabled_reason='auto_disabled', returning how many were resumed.
-// Only older builds wrote that reason (current ones convert the error threshold
-// into a cooldown); without this a past provider outage keeps backfill dead
-// across deploys. Operator/terminal disables (manual, reached_floor) survive.
+// ClearAutoDisabled re-enables rows parked as 'auto_disabled' — a reason only
+// older builds wrote, whose rows would otherwise stay dead across deploys.
+// Operator/terminal disables survive.
 func (r *BackfillStateRepository) ClearAutoDisabled(ctx context.Context, source prices.Source) (int64, error) {
 	if source == "" {
 		return 0, fmt.Errorf("source is required")

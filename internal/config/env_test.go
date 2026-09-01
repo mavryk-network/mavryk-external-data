@@ -41,6 +41,15 @@ func TestOverrideWithEnv_InvalidValuesRejected(t *testing.T) {
 			t.Fatal("expected error for invalid SERVER_LATEST_QUOTE_CACHE_TTL_SECONDS, got nil")
 		}
 	})
+	t.Run("non-finite rate limit rps", func(t *testing.T) {
+		// rate.Limit(NaN) would reject ALL traffic.
+		for _, v := range []string{"NaN", "+Inf", "-Inf"} {
+			t.Setenv("SERVER_RATE_LIMIT_RPS", v)
+			if err := overrideWithEnv(&Config{}); err == nil {
+				t.Fatalf("expected error for SERVER_RATE_LIMIT_RPS=%s, got nil", v)
+			}
+		}
+	})
 }
 
 func TestOverrideWithEnv_ServerRateLimitAndTrustedProxies(t *testing.T) {

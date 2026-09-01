@@ -123,11 +123,14 @@ config.local.yaml
 config.production.yaml
 secrets.yaml
 
-# Private keys / JWT signing material — never commit. secret.key is the RS256
-# private key cmd/jwtgen uses; keep it (and any *.key/*.pem) out of git.
+# Private keys / JWT signing material — never commit.
 secret.key
 *.key
 *.pem
+
+# Local-only dev tooling and review notes, deliberately untracked.
+cmd/jwtgen/
+docs/security-review-*.md
 
 # Backup files
 *.bak
@@ -203,3 +206,7 @@ tmp/
 
 # Local-only working notes / specs
 notion_spec.txt
+
+# Local review/planning notes — never committed
+TODOS.md
+review.md

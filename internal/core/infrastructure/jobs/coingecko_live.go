@@ -16,13 +16,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// maxLiveCatchup caps how far back a live tick may extend to cover an outage
-// gap. A catch-up tick costs one request PER vs_currency, and CoinGecko serves
-// windows up to a day at 5-minute granularity (~288 samples each), so 24h is
-// already the point where one tick's upsert volume dwarfs a healthy tick's;
-// anything older is the backfill job's territory. It is also the horizon passed
-// to LatestCommonTimestamp, which drops currencies stalled beyond it out of the
-// anchor entirely rather than letting them pin every window here.
+// maxLiveCatchup caps how far back a live tick may reach to cover an outage
+// gap — a catch-up costs one request per vs_currency, and anything older is the
+// backfill job's territory. Also the horizon for LatestCommonTimestamp.
 const maxLiveCatchup = 24 * time.Hour
 
 // CoinGeckoLiveJob polls CoinGecko on a per-token ticker and writes the freshest
@@ -110,7 +106,9 @@ func (j *CoinGeckoLiveJob) Start(ctx context.Context) {
 
 		interval := j.cfg.GetTokenInterval(name)
 		safeGo(&j.wg, j.logger, "live:"+name, func() {
-			runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "live", func(c context.Context) error {
+			// Per-token loop name: a shared "live" label would let one healthy
+			// token keep job_last_success fresh while the rest hard-fail.
+			runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "live:"+name, func(c context.Context) error {
 				return j.collectOnce(c, col)
 			})
 		})
@@ -123,17 +121,10 @@ func (j *CoinGeckoLiveJob) Stop() {
 	j.wg.Wait()
 }
 
-// collectOnce fetches the live window and persists any new points. The window
-// is [now-lookback .. now], extended back to the laggiest currency's last
-// stored point (capped at maxLiveCatchup) when an outage outlasted the
-// lookback — otherwise that gap would stay unfilled forever (the backfill only
-// walks older than its own cursor). Acquires the global concurrency slot
-// before doing any work.
-//
-// Returns an error when the tick could not do its work, which is what keeps
-// job_last_success_timestamp_seconds honest during an upstream outage. A
-// partial fetch still counts as success: data flowed, and the per-currency
-// anchor above re-covers whatever lagged.
+// collectOnce fetches [now-lookback .. now] and persists new points, extending
+// back to the laggiest currency's last stored point (capped at maxLiveCatchup)
+// when an outage outlasted the lookback. Returns an error when the tick could
+// not do its work; a partial fetch still counts as success.
 func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector) error {
 	tokenName := string(col.info.Symbol)
 	logger := j.logger.With().Str("token", tokenName).Logger()
@@ -148,8 +139,7 @@ func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector)
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-j.stopCh:
-			// Shutdown, same as ctx cancellation: the tick collected nothing, so
-			// it must not stamp a last-success on its way out.
+			// Collected nothing — must not stamp a last-success on the way out.
 			return context.Canceled
 		}
 	}
@@ -171,17 +161,18 @@ func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector)
 
 	currencies := prices.AllSupportedCurrencies()
 	if j.tokenRO != nil {
-		// Anchor on the LAGGIEST currency, not the freshest: the fetch below
-		// saves partial results, so a single currency erroring for hours while
-		// the others keep saving would otherwise keep the anchor at ~now and
-		// leave that currency's hole unfilled forever.
-		//
-		// maxLiveCatchup is passed as the horizon rather than applied as a clamp
-		// afterwards, so a currency upstream has stopped producing entirely drops
-		// out of the anchor instead of pinning every future window at the floor.
+		// Anchor on the LAGGIEST currency: the fetch saves partial results, so
+		// the freshest would hold the anchor at ~now and leave one erroring
+		// currency's hole unfilled forever.
 		s, sErr := j.tokenRO.LatestCommonTimestamp(
 			ctx, prices.SourceCoinGecko, tokenName, currencyNames(currencies), now.Add(-maxLiveCatchup))
-		if sErr == nil && s.Found && s.TS.Before(from) {
+		switch {
+		case sErr != nil:
+			// Must be audible: the tick still succeeds on the plain lookback,
+			// so a silently failing anchor reopens outage holes with no signal.
+			metrics.JobErrorsTotal.WithLabelValues("live", string(prices.SourceCoinGecko), tokenName, "anchor").Inc()
+			logger.Warn().Err(sErr).Msg("live_anchor_query_failed")
+		case s.Found && s.TS.Before(from):
 			from = s.TS
 			logger.Info().Time("from", from).Msg("live_window_extended_to_laggiest_currency")
 		}
@@ -231,9 +222,7 @@ func (j *CoinGeckoLiveJob) collectOnce(ctx context.Context, col *tokenCollector)
 	return nil
 }
 
-// currencyNames renders the collected currency set as the metric keys stored in
-// token_prices.quote_currency, so the anchor query can scope itself to exactly
-// the currencies this job still fetches.
+// currencyNames renders the currency set as token_prices.quote_currency keys.
 func currencyNames(currencies []prices.Currency) []string {
 	out := make([]string, 0, len(currencies))
 	for _, c := range currencies {

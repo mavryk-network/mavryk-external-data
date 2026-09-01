@@ -78,9 +78,10 @@ services:
       # Server Configuration
       SERVER_PORT: ${SERVER_PORT:-3010}
       SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
-      # Local-dev stack runs gin debug mode explicitly; without this the app
-      # derives release from the non-localhost host and refuses AUTH_ENABLED=false
-      # and default DB passwords. Never set debug in a production deploy.
+      # Local-dev stack runs gin debug mode explicitly: with no
+      # SERVER_INTERNAL_PORT set, debug is what keeps /metrics mounted on the
+      # public listener (a single-port release deploy serves none) and enables
+      # gin's verbose route logging. Never set debug in a production deploy.
       SERVER_GIN_MODE: ${SERVER_GIN_MODE:-debug}
 
       # Auth: the image ships auth ON by default. This is a local-dev stack, so

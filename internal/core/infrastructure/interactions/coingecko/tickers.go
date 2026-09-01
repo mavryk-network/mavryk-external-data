@@ -60,7 +60,7 @@ func (c *Client) GetTickers(ctx context.Context, coinID string, includeLogo bool
 	// PathEscape + host-aware key header — same contract as GetMarketChartRange:
 	// an unescaped coinID could rewrite the request path, and the pro header on
 	// the demo host is rejected outright.
-	u.Path = strings.TrimRight(u.Path, "/") + "/coins/" + url.PathEscape(coinID) + "/tickers"
+	joinCoinPath(u, coinID, "tickers")
 	if includeLogo {
 		q := u.Query()
 		q.Set("include_exchange_logo", "true")

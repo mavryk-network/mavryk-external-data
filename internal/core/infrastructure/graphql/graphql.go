@@ -74,40 +74,53 @@ func Execute(ctx context.Context, client *http.Client, serviceName, url, query s
 }
 
 // sensitiveQueryParams mirror the logging transport's redaction list. Needed
-// here too: http.Client.Do wraps transport errors in a fresh *url.Error whose
-// text embeds the full request URL (Go strips only userinfo, never the query),
-// so the transport-level scrub alone cannot stop secrets carried as query
-// params (e.g. the Equiteez ?bypass=) from reaching logs and persisted state.
+// here too: client.Do wraps transport errors in a fresh *url.Error embedding the
+// full request URL, and Go strips only userinfo, never the query.
 var sensitiveQueryParams = map[string]struct{}{
 	"bypass": {}, "key": {}, "token": {}, "secret": {},
 	"password": {}, "api_key": {}, "apikey": {}, "access_token": {},
 }
 
-// scrubURLError rewrites sensitive query values inside an error produced by
-// client.Do. Returns the original error untouched when nothing needs hiding;
-// otherwise wraps it, preserving the errors.Is/As chain via Unwrap.
+// scrubURLError rewrites sensitive query values inside an error from client.Do,
+// preserving the errors.Is/As chain via Unwrap.
 func scrubURLError(err error, u *url.URL) error {
 	if err == nil || u == nil || u.RawQuery == "" {
 		return err
 	}
 	q := u.Query()
-	redacted := false
-	for k := range q {
-		if _, sensitive := sensitiveQueryParams[strings.ToLower(k)]; sensitive {
-			q.Set(k, "REDACTED")
-			redacted = true
+	var secrets []string
+	for k, vs := range q {
+		if _, sensitive := sensitiveQueryParams[strings.ToLower(k)]; !sensitive {
+			continue
+		}
+		for _, v := range vs {
+			if v != "" {
+				secrets = append(secrets, v)
+			}
+		}
+		q.Set(k, "REDACTED")
+	}
+	if len(secrets) == 0 {
+		return err
+	}
+	msg := err.Error()
+	if raw := u.String(); strings.Contains(msg, raw) {
+		clone := *u
+		clone.RawQuery = q.Encode()
+		msg = strings.ReplaceAll(msg, raw, clone.String())
+	}
+	// A same-host redirect can hand Do a different URL than we built, so scrub
+	// the secret VALUES themselves too, both spellings.
+	for _, s := range secrets {
+		msg = strings.ReplaceAll(msg, s, "REDACTED")
+		if enc := url.QueryEscape(s); enc != s {
+			msg = strings.ReplaceAll(msg, enc, "REDACTED")
 		}
 	}
-	if !redacted {
+	if msg == err.Error() {
 		return err
 	}
-	raw := u.String()
-	if !strings.Contains(err.Error(), raw) {
-		return err
-	}
-	clone := *u
-	clone.RawQuery = q.Encode()
-	return &scrubbedError{msg: strings.ReplaceAll(err.Error(), raw, clone.String()), err: err}
+	return &scrubbedError{msg: msg, err: err}
 }
 
 type scrubbedError struct {
@@ -118,10 +131,9 @@ type scrubbedError struct {
 func (e *scrubbedError) Error() string { return e.msg }
 func (e *scrubbedError) Unwrap() error { return e.err }
 
-// maxErrorBodyLen bounds how much upstream body we embed in an error string.
-// The body can be up to the outbound size cap (16 MiB); un-truncated it produces
-// multi-megabyte single log lines that break log pipelines and can inject
-// arbitrary content into structured logs.
+// maxErrorBodyLen bounds how much upstream body an error string embeds: the body
+// can reach the 16 MiB outbound cap, and un-truncated it breaks log pipelines and
+// can inject arbitrary content into structured logs.
 const maxErrorBodyLen = 2048
 
 func truncateForError(s string) string {

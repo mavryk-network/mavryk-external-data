@@ -117,3 +117,39 @@ func TestTickOutcomeVerdict(t *testing.T) {
 		})
 	}
 }
+
+// The tick context must actually carry the budget deadline — without this
+// pin, deleting the WithTimeout block leaves the suite green.
+func TestRunTick_AppliesDeadline(t *testing.T) {
+	var hadDeadline bool
+	runTickWithCorrelation(context.Background(), time.Second, testLogger(), "test-deadline", func(ctx context.Context) error {
+		_, hadDeadline = ctx.Deadline()
+		return nil
+	})
+	if !hadDeadline {
+		t.Fatal("tick context must carry the budget deadline")
+	}
+
+	runTickWithCorrelation(context.Background(), 0, testLogger(), "test-no-deadline", func(ctx context.Context) error {
+		_, hadDeadline = ctx.Deadline()
+		return nil
+	})
+	if hadDeadline {
+		t.Fatal("zero timeout must leave the tick context unbounded")
+	}
+}
+
+func TestTickBudget(t *testing.T) {
+	if got := tickBudget(10 * time.Second); got != 5*time.Minute {
+		t.Errorf("short-interval budget = %v, want the 5m floor", got)
+	}
+	if got := tickBudget(time.Hour); got != 2*time.Hour {
+		t.Errorf("long-interval budget = %v, want 2×interval", got)
+	}
+}
+
+func TestDefaultJitter(t *testing.T) {
+	if got := defaultJitter(10 * time.Second); got != time.Second {
+		t.Errorf("defaultJitter(10s) = %v, want 1s", got)
+	}
+}

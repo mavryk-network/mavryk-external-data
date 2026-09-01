@@ -11,26 +11,14 @@ type candleSource struct {
 	rebucket string // empty for direct reads; time_bucket() spec ("5 minutes") for derived
 }
 
-// buildCandleSQL produces the SELECT body shared by RWAPriceRepository.QueryCandles
-// and TokenPriceRepository.QueryCandles. The two repos differ only in their
-// `where` predicate (which is bound by the caller); the projection is identical.
+// buildCandleSQL produces the SELECT body shared by both QueryCandles
+// implementations; only the caller-bound `where` differs.
 //
-// Direct read (rebucket==""): selects the CA's stored OHLC columns and
-// aliases max_price→high_price, min_price→low_price to match the
-// application-layer Candle field names.
+// Re-bucket reads wrap the CA in time_bucket() and use first()/last() over the
+// inner bucket column to preserve open/close ordering (ADR-0015).
 //
-// Re-bucket (rebucket!=""): wraps the same CA in time_bucket(rebucket) and
-// uses TimescaleDB's first()/last() over the inner CA's bucket column to
-// preserve open/close ordering. max(max_price)/min(min_price) are exact
-// because they're associative.
-//
-// Sums of `samples` give a sample-count proxy for the wider bucket; this is
-// the simplest correct aggregation for the "incomplete bucket" hint the UI
-// surfaces (see ADR-0015).
-//
-// ORDER BY bucket DESC so that LIMIT keeps the NEWEST buckets — both in
-// latest mode (no window) and when a window holds more buckets than the
-// limit. Callers reverse the rows to restore ascending wire order.
+// ORDER BY bucket DESC so LIMIT keeps the NEWEST buckets, both in latest mode
+// and on an over-full window; callers reverse the rows for ascending wire order.
 func buildCandleSQL(src candleSource, where string) string {
 	if src.rebucket == "" {
 		return fmt.Sprintf(`SELECT bucket,

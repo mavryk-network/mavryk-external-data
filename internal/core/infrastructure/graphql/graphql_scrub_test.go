@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -42,5 +43,22 @@ func TestExecute_DoErrorWithoutSecretsUntouched(t *testing.T) {
 	var scrubbed *scrubbedError
 	if errors.As(err, &scrubbed) {
 		t.Fatalf("no-secret URL must not be wrapped, got scrubbedError: %v", err)
+	}
+}
+
+// A same-host redirect can embed a hop-2 URL the exact-URL replacement never
+// matches — the secret VALUE must be scrubbed regardless of spelling.
+func TestScrubURLError_RedirectedURLValueStillScrubbed(t *testing.T) {
+	u, err := url.Parse("https://indexer.example.com/v1/graphql?bypass=SUPERSECRET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := errors.New(`Get "https://indexer.example.com/v1/graphql/?bypass=SUPERSECRET": context deadline exceeded`)
+	scrubbedErr := scrubURLError(base, u)
+	if strings.Contains(scrubbedErr.Error(), "SUPERSECRET") {
+		t.Fatalf("secret leaked through redirected-URL error: %q", scrubbedErr.Error())
+	}
+	if !errors.Is(scrubbedErr, base) {
+		t.Fatalf("scrub must preserve the errors.Is chain, got: %v", scrubbedErr)
 	}
 }

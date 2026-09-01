@@ -82,13 +82,48 @@ func TestChangeService_HappyPath_FT_OneCurrencyOnePeriod(t *testing.T) {
 	if !per.ChangePctValid {
 		t.Fatal("change_pct must be valid")
 	}
-	// (0.071541 - 0.072100) / 0.072100 * 100 ≈ -0.7753...
-	wantPct := decimal.RequireFromString("0.071541").
-		Sub(decimal.RequireFromString("0.072100")).
-		Mul(decimal.NewFromInt(100)).
-		DivRound(decimal.RequireFromString("0.072100"), changePctDivPrecision)
+	// (0.071541 - 0.072100) / 0.072100 * 100 at 24 dp. A literal on purpose:
+	// recomputing via the production formula would make this tautological.
+	wantPct := decimal.RequireFromString("-0.775312066574202496532594")
 	if !per.ChangePct.Equal(wantPct) {
 		t.Errorf("change_pct = %s, want %s", per.ChangePct, wantPct)
+	}
+}
+
+// A sub-micro move must produce a real change_pct, not a value the 16-dp
+// default division would flatten. Golden literal, same rationale as above.
+func TestChangeService_SubMicroChangePct(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	canned := ChangeRepoResult{
+		Now: []ChangeNow{
+			{Currency: "btc", Price: decimal.RequireFromString("0.00000068464"), TS: now, Found: true},
+		},
+		Anchors: []ChangeAnchor{
+			{Currency: "btc", Period: prices.Period24h, Price: decimal.RequireFromString("0.00000071541"), Bucket: now.Add(-24 * time.Hour), Found: true},
+		},
+	}
+	svc, _ := newServiceWithCanned(canned)
+	res, err := svc.GetChange(context.Background(), ChangeQuery{
+		Source:     prices.SourceCoinGecko,
+		EntityKey:  "mvrk",
+		Currencies: []string{"btc"},
+		Periods:    []prices.Period{prices.Period24h},
+		Now:        now,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	per := res.Currencies["btc"].ByPeriod[prices.Period24h]
+	if !per.ChangePctValid {
+		t.Fatal("change_pct must be valid")
+	}
+	wantPct := decimal.RequireFromString("-4.301030178499042507093834")
+	if !per.ChangePct.Equal(wantPct) {
+		t.Errorf("change_pct = %s, want %s", per.ChangePct, wantPct)
+	}
+	wantDelta := decimal.RequireFromString("-0.00000003077")
+	if !per.DeltaAbs.Equal(wantDelta) {
+		t.Errorf("delta_abs = %s, want %s", per.DeltaAbs, wantDelta)
 	}
 }
 

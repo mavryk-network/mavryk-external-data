@@ -34,28 +34,20 @@ type LegacyQuoteRow struct {
 	GBP       float64   `gorm:"column:gbp"`
 }
 
-// defaultLegacyRowCap is the LIMIT used when a caller passes limit <= 0. This
-// repository backs one public, unauthenticated route, so an unbounded pivot has
-// no legitimate caller; the cap must never be applied downward, or an operator
-// who raised server.max_query_limit would be silently overridden.
+// defaultLegacyRowCap backstops an unbounded pivot on this public route. Only
+// ever a fallback for limit <= 0 — never applied downward, or it would silently
+// override an operator who raised server.max_query_limit.
 const defaultLegacyRowCap = 10000
 
 // QueryWide returns wide-format rows for (token, source) within [from, to],
-// sorted ascending by ts, capped at limit. limit <= 0 falls back to
-// defaultLegacyRowCap — the pivot is never issued without a LIMIT.
+// ts ASC, capped at limit (<= 0 falls back to defaultLegacyRowCap).
 //
-// Truncation drops the NEWEST rows, matching both v0.1.0 and the v1 window
-// query (TokenPriceRepository.Query). That direction is load-bearing: legacy
-// clients page forward by re-issuing with `from` just past the last ts seen
-// (both bounds are inclusive), which only advances while a truncated window
-// returns the rows immediately after `from`. Keeping the recent end instead
-// would make every next page jump to the window end and silently skip the
-// history in between.
+// Truncation drops the NEWEST rows, matching v0.1.0 and the v1 window query.
+// Load-bearing: legacy clients page forward by re-issuing with `from` just past
+// the last ts seen, which only advances while truncation keeps the old end.
 //
-// The PK index (token_symbol, source_code, quote_currency, ts) combined with
-// TimescaleDB chunk exclusion on ts keeps this O(window). FILTER aggregation
-// collapses the 8 long rows per ts into one wide row inside Postgres — no
-// pivot work in Go.
+// FILTER aggregation collapses the 8 long rows per ts into one wide row in
+// Postgres — no pivot work in Go.
 func (r *LegacyQuoteRepository) QueryWide(
 	ctx context.Context,
 	tokenSymbol string,

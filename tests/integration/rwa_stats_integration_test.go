@@ -16,23 +16,15 @@ import (
 	"quotes/internal/core/infrastructure/storage/repositories"
 )
 
-// DB-backed coverage for the RWA stats reads behind /v1/rwa/:symbol/latest
-// (AllTimeHighLast, PriceAtOrBefore) plus the 1d continuous aggregates both
-// chart repositories read.
-//
-// fixtureSaveRWAPoints spaces its samples one second apart, so everything it
-// writes lands in a single day bucket — these tests carry explicit
-// multi-day timestamps instead.
+// These tests spell out multi-day timestamps because the shared fixture helpers
+// space samples one second apart, landing everything in a single day bucket.
 
-// statTick is one (ts, price) fixture sample. Day-spanning timestamps are the
-// whole point here, so callers spell each one out.
 type statTick struct {
 	ts    time.Time
 	price decimal.Decimal
 }
 
-// saveRWAStatTicks writes ticks through the production Save path so the
-// column mapping under test is the collector's.
+// Writes through the production Save path — the collector's own column mapping.
 func saveRWAStatTicks(
 	t *testing.T,
 	repo *repositories.RWAPriceRepository,
@@ -57,7 +49,7 @@ func saveRWAStatTicks(
 	require.Equal(t, int64(len(pts)), n)
 }
 
-// saveTokenStatTicks is the FA counterpart, on the seeded (mvrk, coingecko, usd).
+// The FA counterpart, on the seeded (mvrk, coingecko, usd).
 func saveTokenStatTicks(t *testing.T, repo *repositories.TokenPriceRepository, ticks []statTick) {
 	t.Helper()
 	pts := make([]prices.PricePoint, 0, len(ticks))
@@ -78,8 +70,6 @@ func saveTokenStatTicks(t *testing.T, repo *repositories.TokenPriceRepository, t
 func utcDay(y int, m time.Month, d int) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
-
-// --- AllTimeHighLast ---
 
 func TestRWAAllTimeHighLast_ReturnsDayBucketNotSampleTS(t *testing.T) {
 	db := openGorm(t)
@@ -167,8 +157,6 @@ func TestRWAAllTimeHighLast_IsolatedBySideAndPair(t *testing.T) {
 		})
 	}
 }
-
-// --- PriceAtOrBefore ---
 
 func TestRWAPriceAtOrBefore_PicksLatestNotNearest(t *testing.T) {
 	db := openGorm(t)
@@ -416,8 +404,6 @@ func TestQueryCandles_1d_LatestModeLimit1_ReturnsNewestDay(t *testing.T) {
 	require.True(t, candles[0].Close.Equal(dec("5.00")))
 }
 
-// --- Real-time aggregation on the 1d view (migration 0021) ---
-
 func TestRWAAllTimeHighLast_RealtimeAggregation_SeesUnmaterializedHigh(t *testing.T) {
 	db := openGorm(t)
 	truncateRWA(t, db)
@@ -437,8 +423,8 @@ func TestRWAAllTimeHighLast_RealtimeAggregation_SeesUnmaterializedHigh(t *testin
 	require.True(t, price.Equal(dec("100.00")))
 	require.True(t, ts.Equal(day1))
 
-	// New high written past the materialization watermark and deliberately NOT
-	// refreshed: materialized_only=false must union the raw tail into the 1d view.
+	// Deliberately not refreshed: materialized_only=false (migration 0021) must
+	// union this raw tail into the 1d view.
 	saveRWAStatTicks(t, repo, pid, prices.SideLast, []statTick{
 		{day2.Add(9 * time.Hour), dec("175.00")},
 	})

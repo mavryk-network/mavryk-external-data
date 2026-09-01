@@ -7,8 +7,10 @@
 > **Supersession note (2026-08):** the storage/computation decision stands
 > (decimal end-to-end, `numeric(38,18)` at rest), but the wire-format section
 > is superseded: FT and RWA v1 endpoints serialise prices as **JSON numbers
-> rounded to 6 decimal places** (see `docs/openapi.yaml`), not full-precision
-> quoted strings. Ticker prices still serialise as full-precision strings.
+> at hybrid wire precision** — 6 decimal places at or above 0.01, 6
+> significant digits below it (see the addendum below and
+> `docs/openapi.yaml`) — not full-precision quoted strings. Ticker prices
+> still serialise as full-precision strings.
 
 ## Context
 

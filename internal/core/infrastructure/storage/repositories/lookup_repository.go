@@ -127,19 +127,14 @@ func (r *LookupRepository) LookupRWAPairBySymbol(ctx context.Context, base, quot
 	}
 }
 
-// RWAPairDisabledReasonSyncMissing marks rows the discovery sync disabled
-// because the pair fell out of the upstream allowlist. Only rows with this
-// reason are auto-re-enabled when the pair reappears; NULL/other reasons are
-// operator decisions and survive every sync.
+// RWAPairDisabledReasonSyncMissing marks rows the sync disabled because the
+// pair left the upstream allowlist — the only reason auto-re-enabled later.
+// NULL/other reasons are operator decisions and survive every sync.
 const RWAPairDisabledReasonSyncMissing = "sync_missing"
 
-// UpsertRWAPair finds-or-creates by `(source_code, orderbook_addr)` and
-// updates metadata + `last_synced_at`. Returns the persisted ID.
-//
-// Operator overrides survive sync: `enabled` is set on INSERT (to true) and
-// re-set to true only for rows the sync itself disabled (disabled_reason =
-// 'sync_missing'). Rows disabled by an operator keep their state; reset them
-// by editing the row in DB.
+// UpsertRWAPair finds-or-creates by `(source_code, orderbook_addr)` and updates
+// metadata + `last_synced_at`. Returns the persisted ID. `enabled` is set on
+// INSERT and re-set only for rows the sync itself disabled.
 func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, syncedAt time.Time) (int64, error) {
 	if p.Source == "" || p.OrderbookAddr == "" {
 		return 0, fmt.Errorf("upsert rwa_pair: source and orderbook_addr are required")
@@ -177,14 +172,13 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 		// Update metadata only — leave `enabled` for the operator to control,
 		// except rows the sync itself disabled: the pair is present upstream
 		// again, so undo the sync's own soft-disable.
-		// equiteez_orderbook_id and quote_addr are updated only when the caller
-		// supplies a value; preserves a previously-good value if a degraded sync
-		// response omitted it (currency rows are a nested, independently-nullable
-		// part of the indexer payload).
+		// equiteez_orderbook_id, quote_addr and token_addr are updated only
+		// when the caller supplies a value, so a degraded sync response can't
+		// wipe a previously-good one (a NULLed token_addr would silently drop
+		// the pair from collection).
 		updates := map[string]any{
 			"base_symbol":    p.BaseSymbol,
 			"quote_symbol":   p.QuoteSymbol,
-			"token_addr":     tokenAddr,
 			"last_synced_at": syncedAt,
 		}
 		if !existing.Enabled && existing.DisabledReason != nil &&
@@ -197,6 +191,9 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 		}
 		if quoteAddr != nil {
 			updates["quote_addr"] = quoteAddr
+		}
+		if tokenAddr != nil {
+			updates["token_addr"] = tokenAddr
 		}
 		err := tx.Model(&entities.RWAPairEntity{}).
 			Where("id = ?", existing.ID).

@@ -19,16 +19,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// (mvrk, coingecko) are the seeded lookup rows from 0009_seed.sql; token_tickers
-// FKs into both, so every fixture below uses them.
+// The lookup rows seeded by 0009_seed.sql; token_tickers FKs into both.
 const (
 	tickerToken  prices.Token  = "mvrk"
 	tickerSource prices.Source = "coingecko"
 )
 
-// truncateTickers clears the ticker hypertable and its exchange lookup.
-// Children first — token_tickers.exchange_id FKs into exchanges (0013), and
-// exchanges has no seed row of its own, so tests create what they reference.
+// Children first: token_tickers.exchange_id FKs into exchanges (0013), which
+// has no seed row of its own — tests create what they reference.
 func truncateTickers(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Exec(`TRUNCATE TABLE token_tickers`).Error)
@@ -101,8 +99,6 @@ func storedTickers(t *testing.T, db *gorm.DB, exchangeID string) []entities.Toke
 	return out
 }
 
-// --- SaveSnapshot ---
-
 func TestSaveTickers_EmptyInputIsNoop(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -113,8 +109,7 @@ func TestSaveTickers_EmptyInputIsNoop(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), n)
 
-	// Exchanges-only writes the lookup but the returned count stays pinned to
-	// ticker inserts — the job feeds it to cache invalidation.
+	// The count stays pinned to ticker inserts; the job feeds it to invalidation.
 	n, err = repo.SaveSnapshot(ctx, []tickers.Exchange{tickerExchange("solo", "Solo")}, nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), n, "exchange upserts must not count toward the ticker delta")
@@ -200,8 +195,8 @@ func TestSaveTickers_ConflictKeepsFirstWrite(t *testing.T) {
 	require.Equal(t, int64(1), n)
 }
 
-// The FK on token_tickers.exchange_id is why exchanges are written first inside
-// the same tx: CG can return a brand-new exchange and its ticker in one payload.
+// CG can return a brand-new exchange and its ticker in one payload, so the FK
+// forces exchanges to be written first inside the same tx.
 func TestSaveTickers_NewExchangeInSameCallSatisfiesFK(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -217,7 +212,6 @@ func TestSaveTickers_NewExchangeInSameCallSatisfiesFK(t *testing.T) {
 	require.Len(t, storedTickers(t, db, "brandnew"), 1)
 }
 
-// TODOS TICKERS-1 #4: a bad ticker must roll the exchange upsert back too.
 func TestSaveTickers_FKViolationRollsBackTx(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -263,8 +257,7 @@ func TestSaveTickers_TargetSymbolNormalised(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "usdt", rows[0].TargetSymbol)
 
-	// Normalisation happens before the PK is formed, so the padded variant
-	// collides with the clean one instead of duplicating the pair.
+	// Normalisation precedes PK formation, so the padded variant collides.
 	n, err := repo.SaveSnapshot(ctx, nil,
 		[]tickers.Ticker{tickerAt("okx", "USDT", ts, "7", "70")})
 	require.NoError(t, err)
@@ -272,9 +265,6 @@ func TestSaveTickers_TargetSymbolNormalised(t *testing.T) {
 	require.Len(t, storedTickers(t, db, "okx"), 1)
 }
 
-// --- LatestSnapshot ---
-
-// TODOS TICKERS-1 #2.
 func TestLatestSnapshot_DistinctOnPerPair(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -325,8 +315,7 @@ func TestLatestSnapshot_DistinctOnPerPair(t *testing.T) {
 	require.Equal(t, tickers.ExchangeKindCEX, got.Exchange.Kind)
 	require.False(t, got.IsStale)
 
-	// The decorated columns belong to the OLDEST tick, so seeing them here would
-	// mean DISTINCT ON picked the wrong row.
+	// Set on the OLDEST tick — seeing them means DISTINCT ON picked wrong.
 	require.Empty(t, got.TrustScore)
 	require.Empty(t, got.TradeURL)
 	require.False(t, got.IsAnomaly)
@@ -382,13 +371,10 @@ type anchorFixture struct {
 	price string
 }
 
-// TODOS TICKERS-1 #1. The LATERAL anchor is the freshest row inside
-// [latest.ts - 25h, latest.ts - 24h] — inclusive at both edges. The lower
-// bound is what stops a post-gap anchor of arbitrary age from being reported
-// as a "24h" change; an anchor outside the bracket yields null.
-//
-// The stale fence is on and the anchors are all older than it: the fence lives
-// in the `latest` CTE only, so it must never blind the LATERAL.
+// The LATERAL anchor is the freshest row inside [latest.ts-25h, latest.ts-24h],
+// inclusive at both edges; the -25h floor stops a post-gap anchor of arbitrary
+// age from being reported as a "24h" change. Every anchor here is older than the
+// stale fence, which lives in the `latest` CTE and must not blind the LATERAL.
 func TestLatestSnapshot_LateralAnchorBracket(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -431,8 +417,6 @@ func TestLatestSnapshot_LateralAnchorBracket(t *testing.T) {
 			wantChange: "10",
 		},
 		{
-			// Without the -25h floor a post-gap anchor of any age would be
-			// reported as a "24h" change.
 			name:       "anchor older than the bracket yields no percentage",
 			exchangeID: "ancient",
 			history:    []anchorFixture{{40 * time.Hour, "100"}},
@@ -483,10 +467,8 @@ func TestLatestSnapshot_LateralAnchorBracket(t *testing.T) {
 	}
 }
 
-// The sort key is base volume alone. The old last_price × volume_24h_base
-// product mixed quote units across rows, ranking a BTC-quoted market ~60000x
-// below a USDT one at equal real volume. Ties fall back to exchange_id, then
-// target_symbol.
+// The sort key is base volume alone: multiplying by last_price would mix quote
+// units, ranking a BTC-quoted market ~60000x below a USDT one at equal volume.
 func TestLatestSnapshot_OrderedByVolumeThenIDs(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -533,7 +515,6 @@ func TestLatestSnapshot_OrderedByVolumeThenIDs(t *testing.T) {
 	require.True(t, now.Equal(snap.Timestamp), "snapshot ts is the newest ts across rows, not the first row's")
 }
 
-// TODOS TICKERS-1 #5.
 func TestLatestSnapshot_StaleFence(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -588,11 +569,8 @@ func TestLatestSnapshot_NoRowsIsNotAnError(t *testing.T) {
 	require.True(t, snap.Timestamp.IsZero())
 }
 
-// --- VolumeDistribution ---
-
-// TODOS TICKERS-1 #3: volume_24h_base is a rolling snapshot, not a delta, so
-// summing every tick of a pair would multiply the reported volume by the tick
-// count. Only the freshest row per (exchange, target) may contribute.
+// volume_24h_base is a rolling snapshot, not a delta: summing every tick of a
+// pair would multiply the reported volume by the tick count.
 func TestVolumeDistribution_NoDoubleCount(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)
@@ -756,8 +734,7 @@ func TestVolumeDistribution_NilAndZeroVolumes(t *testing.T) {
 	require.Equal(t, "hasvol", d.Rows[0].Exchange.ID)
 	requireDecEq(t, dec("100"), d.Rows[0].SharePct, "share_pct")
 
-	// A pair whose freshest tick lost its volume contributes nothing, even though
-	// an older tick of the same pair had one.
+	// A pair whose freshest tick lost its volume contributes nothing.
 	_, err = repo.SaveSnapshot(ctx, nil,
 		[]tickers.Ticker{tickerAt("hasvol", "usdt", now.Add(time.Minute), "1", "")})
 	require.NoError(t, err)
@@ -767,8 +744,8 @@ func TestVolumeDistribution_NilAndZeroVolumes(t *testing.T) {
 	require.Empty(t, d.Rows)
 }
 
-// Distribution has no IncludeStale escape hatch (unlike LatestQuery): a pie
-// chart describes current market structure, so a stale pair is simply gone.
+// Distribution has no IncludeStale escape hatch (unlike LatestQuery): a stale
+// pair is simply gone from the pie.
 func TestVolumeDistribution_StaleRowsAlwaysExcluded(t *testing.T) {
 	db := openGorm(t)
 	truncateTickers(t, db)

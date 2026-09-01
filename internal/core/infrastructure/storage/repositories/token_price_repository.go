@@ -202,41 +202,18 @@ func (r *TokenPriceRepository) OldestTimestamp(ctx context.Context, source price
 }
 
 // LatestCommonTimestamp returns the newest ts that EVERY metric in `metrics`
-// has reached for (token, source) — MIN over the per-metric MAX(ts) — counting
-// only metrics whose own frontier is at or after notOlderThan.
+// has reached for (token, source) — MIN over the per-metric MAX(ts), counting
+// only metrics at or after notOlderThan.
 //
-// A plain MAX(ts) across all metrics would answer "how fresh is the freshest
-// currency", which is the wrong anchor for a live catch-up window: the live
-// fetch saves partial results, so one currency erroring for hours while the
-// others keep saving would hold a global MAX at ~now and the failing
-// currency's gap would never be re-fetched by anyone (backfill only walks
-// older than its own cursor). Taking the laggiest metric instead pulls the
-// window back over exactly that hole until it is filled.
+// The LAGGIEST metric is the right anchor for a live catch-up window: the fetch
+// saves partial results, so a global MAX would sit at ~now while one erroring
+// currency's gap never got re-fetched (backfill only walks older than its own
+// cursor). notOlderThan drops a metric upstream has abandoned, so it can't pin
+// the anchor forever; when EVERY metric is beyond it the whole feed was down
+// and the horizon itself is returned. Empty `metrics` yields Found=false.
 //
-// `metrics` scopes the answer to the currencies the caller still collects, so a
-// currency dropped from the supported set cannot freeze the anchor at its final
-// timestamp; an empty list yields Found=false (MIN over no metrics). Metrics
-// with no rows at all are ignored — they have no history to heal.
-//
-// notOlderThan is what keeps the anchor from sticking, and it applies only to a
-// metric that lags its PEERS. A metric whose frontier is beyond the caller's
-// catch-up horizon while others are current means upstream has stopped
-// producing that one: widening the window cannot repair it, and letting it pin
-// the anchor would re-fetch the entire horizon on every tick forever, so it
-// drops out of the MIN. The caller's normal lookback still covers it, so it
-// heals forward the moment upstream produces anything again.
-//
-// When EVERY metric is beyond the horizon the situation is the opposite — the
-// whole feed was down — and the answer is the horizon itself, so the caller
-// still covers as much of the outage as one window can reach. Returning
-// "nothing" there would leave a total outage with no catch-up at all, which is
-// worse than having no horizon in the first place.
-//
-// The per-metric LATERAL is deliberate: an unfiltered MAX(ts) per metric is a
-// seek on the (token, source, currency) index prefix, and the horizon is
-// applied to the ten resulting rows rather than to the scan. The equivalent
-// GROUP BY formulation cannot use that index and degrades into a scan of every
-// chunk in retention, on a query that runs once per token per live tick.
+// The per-metric LATERAL keeps this an index seek on (token, source, currency);
+// the equivalent GROUP BY scans every chunk in retention.
 func (r *TokenPriceRepository) LatestCommonTimestamp(
 	ctx context.Context,
 	source prices.Source,
@@ -275,21 +252,17 @@ func (r *TokenPriceRepository) LatestCommonTimestamp(
 	if holder.CommonTs != nil && *holder.CommonTs != "" {
 		return parseSentinel(*holder.CommonTs)
 	}
-	// No metric is inside the horizon. If any has history at all, the whole feed
-	// is stalled: anchor at the horizon so the caller covers what it can.
+	// Nothing inside the horizon but history exists: the whole feed stalled —
+	// anchor at the horizon so the caller covers what it can.
 	if holder.NewestTs != nil && *holder.NewestTs != "" {
 		return sentinel{Found: true, TS: notOlderThan.UTC()}, nil
 	}
 	return sentinel{Found: false}, nil
 }
 
-// metricValuesFragment renders `(?::text),(?::text),...` for a VALUES list.
-// The cast is defensive rather than required — Postgres does infer text from
-// the `quote_currency = c.metric` comparison — but it pins the column type at
-// the VALUES row instead of leaving it to inference across a LATERAL.
-//
-// Returns "" for n <= 0, which would be invalid SQL — callers must not reach
-// here with an empty metric set (LatestCommonTimestamp returns early instead).
+// metricValuesFragment renders `(?::text),(?::text),...` for a VALUES list; the
+// cast pins the column type instead of leaving it to inference across a LATERAL.
+// Returns "" for n <= 0 (invalid SQL — callers must not reach it empty).
 func metricValuesFragment(n int) string {
 	if n <= 0 {
 		return ""
@@ -297,12 +270,9 @@ func metricValuesFragment(n int) string {
 	return strings.TrimSuffix(strings.Repeat("(?::text),", n), ",")
 }
 
-// metricFilterFragment renders an optional `AND quote_currency IN (?,?,...)`
-// fragment. Each metric becomes its own placeholder so pgx-via-GORM binds
-// them as scalars; using `= ANY(?)` with a Go []string here would push the
-// whole slice as a single text-array literal and fail with `malformed array
-// literal` (pgx does not auto-wrap slices for raw SQL). All values still
-// flow through prepared-statement parameters — no SQL injection.
+// metricFilterFragment renders an optional `AND quote_currency IN (?,?,...)`.
+// One placeholder per metric: `= ANY(?)` with a Go slice fails as `malformed
+// array literal` (pgx does not auto-wrap slices for raw SQL).
 func metricFilterFragment(metrics []string) string {
 	if len(metrics) == 0 {
 		return ""

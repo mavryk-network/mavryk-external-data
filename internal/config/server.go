@@ -5,70 +5,51 @@ import "strings"
 // ServerConfig holds HTTP server bind options and response-cache settings.
 type ServerConfig struct {
 	Port string `yaml:"port"`
-	// InternalPort, when non-empty, binds a second HTTP listener for intra-cluster
-	// traffic. The internal listener mounts the same routes as the public one but
-	// **without** the MBIO JWT middleware on /v1/rwa/* and /v1/pairs/rwa, and
-	// hosts /metrics. Reach it via a ClusterIP Service + NetworkPolicy. Empty
-	// disables the second listener (single-port mode, useful for local dev).
+	// Second listener for intra-cluster traffic: same routes without the MBIO JWT
+	// middleware, plus /metrics. Empty disables it (single-port mode, local dev).
 	InternalPort string `yaml:"internal_port"`
 	Host         string `yaml:"host"`
-	// GinMode: debug, release, or test. Empty means derive from host (localhost/127.0.0.1 → debug).
+	// debug, release, or test. Empty derives from the host (localhost → debug).
 	GinMode string `yaml:"gin_mode"`
-	// HTTP server timeouts (see net/http.Server). YAML uses Go duration strings, e.g. "30s".
+	// net/http.Server timeouts, as Go duration strings ("30s").
 	ReadTimeout       DurationYAML `yaml:"read_timeout"`
 	WriteTimeout      DurationYAML `yaml:"write_timeout"`
 	ReadHeaderTimeout DurationYAML `yaml:"read_header_timeout"`
 	IdleTimeout       DurationYAML `yaml:"idle_timeout"`
-	// LatestQuoteCacheTTLSeconds: TTL for the in-process snapshot cache (latest queries).
-	// 0 disables the cache. Recommended production value: 5 (seconds).
+	// Seconds; 0 disables the cache. Production: 5.
 	LatestQuoteCacheTTLSeconds int `yaml:"latest_quote_cache_ttl_seconds"`
-	// MaxQueryLimit: hard upper bound on the `?limit=` parameter for list endpoints.
-	// 0 means use the in-code default (10000). Negative is rejected by Validate.
+	// Hard upper bound on `?limit=`. 0 = in-code default (10000); negative rejected.
 	MaxQueryLimit int `yaml:"max_query_limit"`
-	// PprofEnabled exposes net/http/pprof on the server bind. Off by default.
+	// Mounts net/http/pprof on the server bind — not for a public listener.
 	PprofEnabled bool `yaml:"pprof_enabled"`
-	// ShutdownDrainSeconds — once shutdown begins, /readyz returns 503 for this
-	// many seconds before HTTP shutdown starts. 0 disables the drain phase.
+	// Seconds /readyz returns 503 before HTTP shutdown starts. 0 skips the drain.
 	ShutdownDrainSeconds int `yaml:"shutdown_drain_seconds"`
-	// HandlerTimeout caps total time inside a handler (per-request ctx timeout).
-	// 0 selects the 10s default; a NEGATIVE value disables the budget (note
-	// env overrides are applied before defaults, so SERVER_HANDLER_TIMEOUT=0s
-	// still yields the default — use a negative duration to switch it off).
+	// Per-request ctx timeout. 0 selects the 10s default; a NEGATIVE value
+	// disables the budget (env overrides run before defaults, so
+	// SERVER_HANDLER_TIMEOUT=0s still yields the default).
 	HandlerTimeout DurationYAML `yaml:"handler_timeout"`
-	// RateLimit is an optional inbound rate limit applied to all routes except
-	// /healthz and /readyz (probes must not compete with clients for tokens).
+	// Applies to every route except /healthz and /readyz.
 	RateLimit ServerRateLimitConfig `yaml:"rate_limit"`
-	// TrustedProxies lists the LB/proxy CIDRs (or single IPs) whose
-	// X-Forwarded-For is honored for ClientIP(). Empty (the default) trusts no
-	// proxy: ClientIP() is the direct peer, which behind an LB collapses every
-	// client into one rate-limit bucket. Set to the ingress CIDR to restore
-	// real per-IP limiting without letting external callers spoof XFF.
+	// LB/proxy CIDRs (or IPs) whose X-Forwarded-For ClientIP() honors. Empty
+	// trusts no proxy, which behind an LB collapses every client into one
+	// rate-limit bucket.
 	TrustedProxies []string `yaml:"trusted_proxies"`
-	// FXMaxStalenessSeconds — how old a CoinGecko FX rate may be before `?in=`
-	// responses tag it `fx.stale=true`. A stale rate is still served. Refusal
-	// happens only past the separate, fixed hard cap
-	// (prices.FXHardStalenessCap, 26h); a refused rate drops the currency from
-	// the flat `?in=` shapes and surfaces as `error: no_rate` on tickers.
-	// Validation requires this budget to stay below that cap, so `fx.stale`
-	// always has room to appear between the two.
-	// 0 means use the in-code default (300s).
+	// Age at which a CoinGecko FX rate is tagged `fx.stale=true` but still
+	// served; refusal happens only past prices.FXHardStalenessCap (26h), which
+	// Validate requires this to stay below. 0 = in-code default (300s).
 	FXMaxStalenessSeconds int `yaml:"fx_max_staleness_seconds"`
-	// MaxInCurrencies — cap on the number of comma-separated currencies a
-	// single request may pass to `?in=`. Defends against `?in=usd,eur,...`
-	// spam. 0 means use the in-code default (10).
+	// Cap on comma-separated currencies per `?in=`. 0 = in-code default (10).
 	MaxInCurrencies int `yaml:"max_in_currencies"`
-	// TickerStaleAfter — /v1/tickers/:token/latest hides rows whose `ts` is
-	// older than now-TickerStaleAfter by default. Opt-in `?include_stale=true`
-	// returns them with is_stale=true. /distribution always excludes stale
-	// rows regardless of caller flag. 0 means use the in-code default (1h).
+	// /v1/tickers/:token/latest hides rows older than this unless
+	// `?include_stale=true`; /distribution always excludes them.
+	// 0 = in-code default (1h).
 	TickerStaleAfter DurationYAML `yaml:"ticker_stale_after"`
 }
 
 // EffectiveGinMode resolves GinMode to the mode the HTTP layer actually runs:
-// explicit debug/release/test are honored; empty derives from the bind host
-// (localhost → debug, anything else → release); unknown values → release.
-// Load writes the resolved value back so every consumer (gin setup, safety
-// validators, dev-default warnings) agrees on what "production" means.
+// explicit debug/release/test win; empty derives from the bind host
+// (localhost → debug, else release); unknown → release. Load writes the result
+// back so every consumer agrees on what "production" means.
 func (s ServerConfig) EffectiveGinMode() string {
 	switch strings.ToLower(strings.TrimSpace(s.GinMode)) {
 	case "debug":
@@ -88,11 +69,8 @@ func (s ServerConfig) EffectiveGinMode() string {
 	}
 }
 
-// ServerRateLimitConfig controls inbound HTTP throttling.
-//
-// Disabled when RPS == 0 (default). When PerIP=true the bucket is per ClientIP;
-// otherwise one bucket is shared by all callers (cheap fallback for closed
-// internal services).
+// ServerRateLimitConfig controls inbound HTTP throttling. Disabled when RPS == 0;
+// PerIP buckets per ClientIP, otherwise all callers share one bucket.
 type ServerRateLimitConfig struct {
 	RPS   float64 `yaml:"rps"`
 	Burst int     `yaml:"burst"`

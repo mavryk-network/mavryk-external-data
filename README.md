@@ -176,8 +176,6 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:3010/v1/rwa/mars1-usdt/
 
 ```json
 {
-  "source": "coingecko",
-  "entity": "mvrk",
   "timestamp": "2026-04-27T12:00:00Z",
   "values": {"usd": 0.071541, "eur": 0.060941}
 }

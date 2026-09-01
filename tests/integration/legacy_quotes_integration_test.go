@@ -18,14 +18,11 @@ import (
 	"quotes/internal/core/infrastructure/storage/repositories"
 )
 
-// legacyRowCap mirrors the unexported defaultLegacyRowCap in
-// legacy_quotes_repository.go. Duplicated because the constant is package
-// private; if it moves, this file must move with it.
+// Mirrors the unexported defaultLegacyRowCap in legacy_quotes_repository.go.
 const legacyRowCap = 10000
 
-// legacyInsertQuote writes long-format rows straight to token_prices. Raw SQL
-// rather than TokenPriceRepository.Save so the numeric literal reaches the
-// numeric(38,18) column without a Go decimal round-trip in between.
+// Raw SQL rather than TokenPriceRepository.Save, so the numeric literal reaches
+// the numeric(38,18) column without a Go decimal round-trip in between.
 func legacyInsertQuote(t *testing.T, db *gorm.DB, token, source string, ts time.Time, byCurrency map[string]string) {
 	t.Helper()
 	for currency, price := range byCurrency {
@@ -36,9 +33,8 @@ func legacyInsertQuote(t *testing.T, db *gorm.DB, token, source string, ts time.
 	}
 }
 
-// legacyInsertSeries inserts n rows one minute apart with a single currency
-// each, so the pivot sees exactly n distinct timestamps. One INSERT..SELECT
-// keeps a fixture larger than the row cap cheap enough to build inline.
+// n rows one minute apart, one currency each, so the pivot sees exactly n
+// distinct timestamps. INSERT..SELECT keeps an over-the-row-cap fixture cheap.
 func legacyInsertSeries(t *testing.T, db *gorm.DB, token, source string, start time.Time, n int) {
 	t.Helper()
 	require.NoError(t, db.Exec(
@@ -48,11 +44,9 @@ func legacyInsertSeries(t *testing.T, db *gorm.DB, token, source string, start t
 		token, source, start.UTC(), n-1).Error)
 }
 
-// legacySQLRecorder captures the statement gorm actually emits, bindings
-// inlined. Two of this pivot's contracts are invisible from the returned
-// struct — gorm decodes a NULL float column as 0, so a dropped COALESCE looks
-// identical, and a missing LIMIT only shows up past the row cap. Both are
-// observable in the emitted SQL.
+// Two of the pivot's contracts are invisible from the returned struct — a
+// dropped COALESCE (gorm decodes NULL as 0) and a missing LIMIT — but both show
+// up in the SQL gorm emits.
 type legacySQLRecorder struct {
 	statements []string
 }
@@ -73,8 +67,7 @@ func (r *legacySQLRecorder) last(t *testing.T) string {
 	return r.statements[len(r.statements)-1]
 }
 
-// legacyRecordingRepo builds a repository on its own connection so the
-// recorder only ever sees statements issued by the call under test.
+// Its own connection, so the recorder only sees the call under test.
 func legacyRecordingRepo(t *testing.T, rec *legacySQLRecorder) *repositories.LegacyQuoteRepository {
 	t.Helper()
 	require.NotEmpty(t, pgDSN, "pgDSN unset — TestMain didn't run; missing build tag?")
@@ -160,10 +153,8 @@ func TestLegacyQueryWide_MissingCurrencyIsZeroNotNull(t *testing.T) {
 		require.Equal(t, 0.0, value, "%s must decode as zero", name)
 	}
 
-	// The struct above cannot tell COALESCE apart from its absence: gorm
-	// decodes a NULL float column as 0 either way. Re-running the statement
-	// the repository actually emitted, with the column read as nullable, is
-	// what pins the SQL-level contract.
+	// The struct cannot tell COALESCE from its absence — gorm decodes NULL as 0
+	// either way — so re-read the emitted statement's columns as nullable.
 	pivot := rec.last(t)
 	for name := range missing {
 		var value sql.NullFloat64
@@ -186,8 +177,7 @@ func TestLegacyQueryWide_OneRowPerTimestampAscending(t *testing.T) {
 	t2 := base.Add(10 * time.Minute)
 	t3 := base.Add(20 * time.Minute)
 
-	// Inserted newest-first to prove the ordering comes from ORDER BY, not
-	// from physical row order.
+	// Newest-first, so the ordering can only come from ORDER BY.
 	legacyInsertQuote(t, db, "mvrk", "coingecko", t3, map[string]string{"usd": "3", "eur": "3.3", "btc": "0.3"})
 	legacyInsertQuote(t, db, "mvrk", "coingecko", t2, map[string]string{"usd": "2", "eur": "2.2", "btc": "0.2"})
 	legacyInsertQuote(t, db, "mvrk", "coingecko", t1, map[string]string{"usd": "1", "eur": "1.1", "btc": "0.1"})
@@ -238,11 +228,8 @@ func TestLegacyQueryWide_WindowBoundsAreInclusive(t *testing.T) {
 	}
 }
 
-// Truncation keeps the OLDEST end, matching v0.1.0 and the v1 window query.
-// This is what makes forward pagination work: a client that re-requests with
-// from=<last ts seen> walks the window contiguously. Keeping the recent end
-// instead would make each next page jump to the window end and silently skip
-// everything in between.
+// Truncation keeps the OLDEST end, as v0.1.0 did: keeping the recent end would
+// make each next page jump to the window end and skip everything between.
 func TestLegacyQueryWide_LimitKeepsOldestRows(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -276,10 +263,8 @@ func TestLegacyQueryWide_LimitKeepsOldestRows(t *testing.T) {
 	}
 }
 
-// Walks a window in limit-sized pages the way a v0.1.0 client does, re-issuing
-// with from=<last ts seen>. Every page must advance and the concatenation must
-// reproduce the series exactly — the property that breaks the moment truncation
-// keeps the recent end instead of the oldest.
+// Walks the window in limit-sized pages the way a v0.1.0 client does, re-issuing
+// with from=<last ts seen>: the concatenation must reproduce the series exactly.
 func TestLegacyQueryWide_ForwardPaginationCoversWindow(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -299,8 +284,7 @@ func TestLegacyQueryWide_ForwardPaginationCoversWindow(t *testing.T) {
 			break
 		}
 		walked = append(walked, legacyQuoteTimestamps(rows)...)
-		// Legacy clients advance past the last row they saw; the window bounds
-		// are inclusive, so step one microsecond beyond it.
+		// Bounds are inclusive, so step one microsecond past the last row seen.
 		from = rows[len(rows)-1].Timestamp.Add(time.Microsecond)
 	}
 
@@ -311,9 +295,8 @@ func TestLegacyQueryWide_ForwardPaginationCoversWindow(t *testing.T) {
 	require.Equal(t, want, walked, "paging must cover the window contiguously, skipping nothing")
 }
 
-// limit <= 0 must fall back to defaultLegacyRowCap — the pivot is never issued
-// without a LIMIT. Distinguishing the fallback from "no cap" needs more
-// timestamps than the cap, hence the generate_series fixture.
+// limit <= 0 must fall back to defaultLegacyRowCap. Telling that apart from "no
+// cap" needs more timestamps than the cap, hence the generate_series fixture.
 func TestLegacyQueryWide_NonPositiveLimitFallsBackToRowCap(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -335,8 +318,7 @@ func TestLegacyQueryWide_NonPositiveLimitFallsBackToRowCap(t *testing.T) {
 	for _, limit := range []int{0, -1} {
 		rows, err := repo.QueryWide(context.Background(), "mvrk", "coingecko", from, to, limit)
 		require.NoError(t, err)
-		// len() rather than require.Len: a failure here would otherwise dump
-		// all 10001 rows into the test log.
+		// len() rather than require.Len: a failure would dump 10001 rows.
 		require.Equalf(t, legacyRowCap, len(rows),
 			"limit=%d must fall back to the row cap, not run unbounded", limit)
 		require.True(t, rows[0].Timestamp.Equal(start),
@@ -414,8 +396,7 @@ func TestLegacyQueryWide_NumericPrecisionSurvivesFloatCast(t *testing.T) {
 	require.Len(t, rows, 1)
 
 	got := rows[0]
-	// float64 carries ~15-17 significant digits, so the 19-digit numeric is
-	// compared relatively, not exactly.
+	// float64 holds ~15-17 digits, so a 19-digit numeric compares relatively.
 	require.InEpsilon(t, 1.234567890123456789, got.USD, 1e-15)
 	require.InEpsilon(t, 0.000000000000000123, got.BTC, 1e-12)
 	require.Equal(t, 1650.25, got.KRW, "trailing numeric scale must not perturb an exactly representable value")

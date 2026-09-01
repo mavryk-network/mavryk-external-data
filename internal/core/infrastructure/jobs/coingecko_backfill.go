@@ -19,17 +19,14 @@ import (
 	"quotes/internal/metrics"
 
 	"github.com/rs/zerolog"
-	"github.com/sony/gobreaker"
 )
 
-// backfillErrorCooldown replaces the old permanent auto-disable: after
-// BackfillMaxErrors consecutive failures the entity rests this long, then
-// retries — so a transient provider outage can never kill backfill for good.
+// backfillErrorCooldown is how long an entity rests after BackfillMaxErrors
+// consecutive failures — a rest, never a permanent disable, so a transient
+// provider outage cannot kill backfill for good.
 const backfillErrorCooldown = 30 * time.Minute
 
-// breakerOpenRetryDelay paces retries while the shared circuit breaker is
-// open. Breaker-open reflects upstream health, not this entity, so it never
-// counts toward the error threshold.
+// breakerOpenRetryDelay paces retries while the shared breaker is open.
 const breakerOpenRetryDelay = 30 * time.Second
 
 // CoinGeckoBackfillJob walks oldest_ts backwards from the live cursor towards
@@ -136,7 +133,7 @@ func (j *CoinGeckoBackfillJob) tickAllTokens(ctx context.Context) error {
 		}
 		err := j.stepToken(ctx, info)
 		out.record(err)
-		if err != nil && !errors.Is(err, errBackfillCoolingDown) {
+		if err != nil && shouldLogBackfillStepError(err) {
 			j.logger.Warn().Err(err).Str("token", string(info.Symbol)).Msg("backfill_step_error")
 		}
 	}
@@ -294,64 +291,45 @@ func (j *CoinGeckoBackfillJob) stepToken(ctx context.Context, info prices.TokenI
 	return nil
 }
 
-// recordError tracks a failed step: breaker-open pauses without counting, and
-// crossing the error threshold converts into a long cooldown (never a
-// permanent disable). Always returns the original error.
+// recordError tracks a failed step via applyBackfillError (shared with the
+// Equiteez job); this wrapper persists, counts and logs. Always returns the
+// original error.
 func (j *CoinGeckoBackfillJob) recordError(
 	ctx context.Context,
 	logger *zerolog.Logger,
 	st *repositories.BackfillState,
 	fetchErr error,
 ) error {
-	st.LastError = truncateError(fetchErr)
-
-	if errors.Is(fetchErr, gobreaker.ErrOpenState) || errors.Is(fetchErr, gobreaker.ErrTooManyRequests) {
-		next := time.Now().UTC().Add(breakerOpenRetryDelay)
-		st.NextAttemptAt = &next
-		if perr := j.state.Upsert(ctx, st); perr != nil {
-			logger.Error().Err(perr).Msg("backfill_persist_failed_on_error")
-		}
+	threshold := j.cfg.Backfill.BackfillMaxErrors
+	kind, wait := applyBackfillError(st,
+		threshold,
+		j.cfg.Backfill.BackoffInitialMs,
+		j.cfg.Backfill.BackoffMaxMs,
+		j.cfg.Backfill.MaxBackoffMs,
+		time.Now().UTC(), fetchErr)
+	if perr := j.state.Upsert(ctx, st); perr != nil {
+		logger.Error().Err(perr).Msg("backfill_persist_failed_on_error")
+	}
+	switch kind {
+	case backfillErrBreakerPaused:
 		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "breaker_open").Inc()
 		logger.Warn().Err(fetchErr).Msg("backfill_paused_breaker_open")
-		return fetchErr
-	}
-
-	st.ErrorCount++
-	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
-
-	threshold := j.cfg.Backfill.BackfillMaxErrors
-	if threshold > 0 && st.ErrorCount >= threshold {
-		next := time.Now().UTC().Add(backfillErrorCooldown)
-		st.NextAttemptAt = &next
-		st.ErrorCount = 0
-		if perr := j.state.Upsert(ctx, st); perr != nil {
-			logger.Error().Err(perr).Msg("backfill_persist_failed_after_cooldown")
-		}
+	case backfillErrCooldown:
+		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
 		metrics.BackfillAutoDisabledTotal.WithLabelValues(string(st.Source), st.EntityKey, "errors_threshold").Inc()
 		logger.Error().
 			Err(fetchErr).
 			Int("threshold", threshold).
-			Dur("cooldown", backfillErrorCooldown).
+			Dur("cooldown", wait).
 			Msg("backfill_cooldown_after_repeated_errors")
-		return fetchErr
+	default:
+		metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
+		logger.Warn().
+			Err(fetchErr).
+			Int("error_count", st.ErrorCount).
+			Dur("backoff", wait).
+			Msg("backfill_transient_error")
 	}
-
-	backoff := computeBackoff(
-		st.ErrorCount,
-		j.cfg.Backfill.BackoffInitialMs,
-		j.cfg.Backfill.BackoffMaxMs,
-		j.cfg.Backfill.MaxBackoffMs,
-	)
-	next := time.Now().UTC().Add(backoff)
-	st.NextAttemptAt = &next
-	if perr := j.state.Upsert(ctx, st); perr != nil {
-		logger.Error().Err(perr).Msg("backfill_persist_failed_on_error")
-	}
-	logger.Warn().
-		Err(fetchErr).
-		Int("error_count", st.ErrorCount).
-		Dur("backoff", backoff).
-		Msg("backfill_transient_error")
 	return fetchErr
 }
 
@@ -398,16 +376,8 @@ func (j *CoinGeckoBackfillJob) enabledBackfillTokens() []prices.TokenInfo {
 	return out
 }
 
-// chunkBounds is the pure-function core of one backfill step. Given the current
-// oldest_ts cursor, the hard floor, and the chunk width, it returns:
-//
-//   - reached=true when oldestTs has met (or fallen below) the hard floor —
-//     caller marks the entity disabled with reason=reached_floor and returns.
-//   - otherwise from/to are the [from, to] window for the upstream call;
-//     from = max(oldestTs - chunk, hardFloor), to = oldestTs.
-//
-// Extracted so it can be exercised without mocking the entire repository tower
-// (refactoring_v2 §10.1).
+// chunkBounds computes one backfill step's window: reached=true when oldestTs
+// has met the hard floor, otherwise [max(oldestTs-chunk, hardFloor), oldestTs].
 func chunkBounds(oldestTs, hardFloor time.Time, chunk time.Duration) (from, to time.Time, reached bool) {
 	if !oldestTs.After(hardFloor) {
 		return time.Time{}, time.Time{}, true
@@ -435,30 +405,15 @@ func parseBackfillTime(s string) (time.Time, error) {
 	return time.Time{}, errors.New("must be RFC3339 or YYYY-MM-DD")
 }
 
-// errBackfillCoolingDown marks an entity skipped because an ERROR-driven
-// backoff/cooldown has not elapsed. Shared by both backfill jobs.
-//
-// It is a skip, not a step failure, so callers do not log it again — the step
-// already logged it at Debug. It is still counted as a failed attempt for the
-// tick verdict: a tick in which EVERY entity is serving out an error cooldown
-// has accomplished nothing, and stamping job_last_success_timestamp_seconds for
-// it would report a stalled backfill as healthy.
-//
-// A NextAttemptAt in the future is not on its own enough to conclude that,
-// because the Equiteez walk also parks a caught-up pair that way — a success.
-// errorDrivenPause is the discriminator: every recordError path stamps
-// LastError and no success path leaves it set (stepToken clears it on a
-// successful chunk, pauseUntilNextFill clears it when the pair reaches the head
-// of the log). ErrorCount alone would not do: the threshold branch resets it to
-// zero while parking the entity for the full cooldown.
+// errBackfillCoolingDown marks an entity waiting out an ERROR-driven pause
+// (shared by both backfill jobs). Not re-logged by callers, but it does count
+// as a failed attempt: a tick where every entity is cooling down accomplished
+// nothing and must not stamp a last-success.
 var errBackfillCoolingDown = errors.New("backfill entity is in its error cooldown")
 
-// errBackfillSkipped marks an entity that had nothing to do this tick — it is
-// disabled (caught up, floor reached), waiting on another job, or not yet
-// wired up. Distinct from both success and failure: these states persist for
-// every subsequent tick, so counting them as successes would let one finished
-// entity keep the job's last-success gauge fresh while every other entity
-// fails. tickOutcome lets them abstain instead.
+// errBackfillSkipped marks an entity with nothing to do — disabled, waiting on
+// another job, or not yet wired up. Neither success nor failure: these states
+// persist forever, so they abstain from the tick verdict (see tickOutcome).
 var errBackfillSkipped = errors.New("backfill entity had nothing to do")
 
 // errorDrivenPause reports whether a future NextAttemptAt was set by a failure

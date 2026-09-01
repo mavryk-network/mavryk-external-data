@@ -1,8 +1,5 @@
-// Price-change endpoint application layer. Mirrors charts.go in shape:
-// one ChangeService, one opaque ChangeRepository, EntityKey kept neutral
-// so FT and RWA share the same service. Source is explicit (not packed
-// into AuxKey like charts.go) because /change has a single source per
-// class — no need to encode it in a side-channel string.
+// Price-change endpoint application layer, shaped like charts.go: one service
+// over one opaque repository, with EntityKey neutral so FT and RWA share it.
 package prices
 
 import (
@@ -19,32 +16,22 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// changeRepoTimeout bounds the detached singleflight repo call (see GetChange).
-// Generous relative to a single indexed-seek query, but finite so a stuck DB
+// changeRepoTimeout bounds the detached singleflight repo call, so a stuck DB
 // connection cannot pin the flight forever.
 const changeRepoTimeout = 15 * time.Second
 
-// changePctDivPrecision is the scale the percentage quotient carries before
-// wire rounding — wider than decimal's default DivisionPrecision (16) so a
-// tiny-but-real move cannot round to a flat 0%.
+// changePctDivPrecision is wider than decimal's default (16) so a tiny-but-real
+// move cannot round to a flat 0%.
 const changePctDivPrecision = 24
 
-// ChangeQuery is the application-layer parameter object for fetching
-// price-change anchors. The repository decides how to interpret EntityKey
-// and AuxKey:
+// ChangeQuery fetches price-change anchors. The repository interprets the keys:
 //
-//	FT  repo: EntityKey = token_symbol, AuxKey is unused.
+//	FT  repo: EntityKey = token_symbol, AuxKey unused.
 //	RWA repo: EntityKey = pair_id (decimal string), AuxKey = side ("last").
 //
-// Currencies are opaque strings at this layer: FT validates against the
-// closed Currency enum on the HTTP boundary, RWA passes the pair's native
-// quote ticker (open set, e.g. "usdt"). The repo decides what to do with
-// each currency — for RWA the field is metadata only (rwa_quote_prices
-// CAs are not keyed by currency).
-//
-// Now is the wall-clock anchor against which `period` distances are
-// measured. Service callers pin it once per request so retries / cache
-// lookups stay coherent.
+// Currencies are opaque here (FT validates the closed enum at the HTTP
+// boundary; for RWA the field is metadata only). Now is pinned once per
+// request so retries and cache lookups stay coherent.
 type ChangeQuery struct {
 	Source     prices.Source
 	EntityKey  string
@@ -65,9 +52,8 @@ type ChangeAnchor struct {
 	Found    bool
 }
 
-// ChangeNow is the latest sample for one currency. Mirrors LatestSnapshot
-// semantics (last(price) per currency); Found=false means no observations
-// for that currency yet.
+// ChangeNow is the latest sample for one currency; Found=false means no
+// observations yet.
 type ChangeNow struct {
 	Currency string
 	Price    decimal.Decimal
@@ -75,33 +61,29 @@ type ChangeNow struct {
 	Found    bool
 }
 
-// ChangeRepoResult is what ChangeRepository.GetChange returns. The
-// service composes the user-visible ChangeResult from this raw form
-// plus per-period cache lookups.
+// ChangeRepoResult is the raw repository output the service composes
+// ChangeResult from.
 type ChangeRepoResult struct {
 	Now     []ChangeNow
 	Anchors []ChangeAnchor
 }
 
-// ChangeRepository is the storage contract used by ChangeService. Both
-// the FT (token_change_repository) and RWA (rwa_change_repository)
-// concrete impls satisfy it. One SQL per request — the implementation
-// is responsible for assembling the UNION-of-CAs query.
+// ChangeRepository is the storage contract behind ChangeService, satisfied by
+// the FT and RWA implementations. One SQL per request: the implementation
+// assembles the UNION-of-CAs query.
 type ChangeRepository interface {
 	GetChange(ctx context.Context, q ChangeQuery) (ChangeRepoResult, error)
 }
 
-// ChangeResult is the service-layer view of a /change response. Mirrors
-// the on-wire JSON shape but stays in domain types (decimal, time.Time)
-// so the HTTP layer is the only place that knows about num6 / RFC3339.
+// ChangeResult mirrors the /change JSON shape in domain types, so only the HTTP
+// layer knows about num6 / RFC3339.
 type ChangeResult struct {
 	AsOf       time.Time
 	Currencies map[string]ChangeForCurrency
 }
 
-// ChangeForCurrency is the per-currency block. NowFound=false flags an
-// absent latest sample (very rare; happens for newly-registered tokens
-// before the live job has filled in the currency).
+// ChangeForCurrency is the per-currency block; NowFound=false means no latest
+// sample yet (a newly-registered token before the live job fills it in).
 type ChangeForCurrency struct {
 	Now      decimal.Decimal
 	NowTS    time.Time
@@ -109,11 +91,9 @@ type ChangeForCurrency struct {
 	ByPeriod map[prices.Period]ChangeForPeriod
 }
 
-// ChangeForPeriod is one anchor's contribution. AnchorFound=false maps
-// to JSON null on the wire (Decision #3 from /office-hours premises).
-// ChangePctValid=false additionally signals the divide-by-zero edge
-// case (Decision #10): from_ts and from_price stay populated, but the
-// computed delta_abs and change_pct are null.
+// ChangeForPeriod is one anchor's contribution. AnchorFound=false renders JSON
+// null; ChangePctValid=false is the divide-by-zero edge case, where from_ts and
+// from_price stay populated but delta_abs and change_pct are null.
 type ChangeForPeriod struct {
 	FromPrice      decimal.Decimal
 	FromTS         time.Time
@@ -123,9 +103,8 @@ type ChangeForPeriod struct {
 	ChangePctValid bool
 }
 
-// ChangeService composes ChangeRepository + ChangeCache + metrics +
-// singleflight stampede protection. Kind labels Prometheus metrics —
-// "fa" or "rwa", per existing ChartService convention.
+// ChangeService composes repository, cache, metrics and singleflight stampede
+// protection. Kind ("fa"/"rwa") labels the Prometheus metrics.
 type ChangeService struct {
 	Repo  ChangeRepository
 	Cache *ChangeCache
@@ -134,17 +113,8 @@ type ChangeService struct {
 	sf singleflight.Group
 }
 
-// GetChange returns the price-change response for one (entity, currencies, periods)
-// request. The flow:
-//
-//  1. Validate the request (closed-enum periods, non-empty currencies).
-//  2. For each (currency) and (currency, period), check the cache. Keep
-//     a list of cache misses.
-//  3. If any miss → call repo.GetChange(ctx) for the misses, under
-//     singleflight to collapse duplicate concurrent requests for the same key.
-//  4. Fill the cache with the new rows.
-//  5. Compose ChangeResult: for each (currency, period), compute delta_abs
-//     and change_pct (or mark them null on missing anchor / zero anchor).
+// GetChange returns the price-change response for one request: validate, read
+// the cache, fetch the misses through singleflight, then compose the result.
 func (s *ChangeService) GetChange(ctx context.Context, q ChangeQuery) (ChangeResult, error) {
 	defer s.observeDuration(len(q.Periods), time.Now())
 
@@ -153,10 +123,8 @@ func (s *ChangeService) GetChange(ctx context.Context, q ChangeQuery) (ChangeRes
 		return ChangeResult{}, err
 	}
 
-	// Step 2: cache lookup for every (currency) "now" + every (currency, period) anchor.
 	missingNow, missingAnchor := s.collectMisses(q)
 
-	// Step 3: fetch misses via repo (with singleflight stampede protection).
 	if len(missingNow) > 0 || len(missingAnchor) > 0 {
 		repoQ := ChangeQuery{
 			Source:     q.Source,
@@ -166,18 +134,11 @@ func (s *ChangeService) GetChange(ctx context.Context, q ChangeQuery) (ChangeRes
 			Periods:    missingPeriods(missingAnchor),
 			Now:        q.Now,
 		}
-		// Singleflight key: stable string from the missing tuples.
-		// Two concurrent identical requests (same key, same set of misses)
-		// share one repo round-trip.
 		sfKey := singleflightKey(q.Source, q.EntityKey, q.AuxKey, repoQ.Currencies, repoQ.Periods)
 		v, err, shared := s.sf.Do(sfKey, func() (any, error) {
-			// Detach from the leader's request context. singleflight collapses N
-			// concurrent callers onto one repo call; if that call ran on the
-			// leader's ctx, the leader disconnecting (mobile nav-away, LB timeout)
-			// would cancel the shared query and fail every waiter with a 500 even
-			// though their own clients are still connected. WithoutCancel keeps
-			// ctx values (request id) but drops cancellation; we bound it with our
-			// own timeout instead.
+			// Detached from the leader's ctx: its disconnect would otherwise
+			// cancel the shared query and 500 every waiter. WithoutCancel keeps
+			// the request id; changeRepoTimeout bounds it instead.
 			callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), changeRepoTimeout)
 			defer cancel()
 			return s.Repo.GetChange(callCtx, repoQ)
@@ -193,8 +154,6 @@ func (s *ChangeService) GetChange(ctx context.Context, q ChangeQuery) (ChangeRes
 		s.populateCache(q, repoRes)
 	}
 
-	// Step 5: compose the response from the cache (now fully populated for
-	// found rows; misses for absent anchors stay AnchorFound=false).
 	return s.compose(q), nil
 }
 
@@ -222,8 +181,7 @@ func (s *ChangeService) preflight(q ChangeQuery) error {
 	return nil
 }
 
-// collectMisses scans the cache for every (currency) now + (currency, period)
-// anchor. Returned slices identify which still need a repo fetch.
+// collectMisses returns the now/anchor slots that still need a repo fetch.
 func (s *ChangeService) collectMisses(q ChangeQuery) (missingNow []string, missingAnchor []anchorKey) {
 	for _, cur := range q.Currencies {
 		if _, _, ok := s.Cache.GetNow(q.Source, q.EntityKey, q.AuxKey, cur); ok {
@@ -244,8 +202,7 @@ func (s *ChangeService) collectMisses(q ChangeQuery) (missingNow []string, missi
 	return missingNow, missingAnchor
 }
 
-// populateCache writes repo results into the cache. Rows the repo did
-// not return (Found=false) are skipped — we never cache "not found".
+// populateCache writes repo results into the cache; "not found" is never cached.
 func (s *ChangeService) populateCache(q ChangeQuery, res ChangeRepoResult) {
 	for _, n := range res.Now {
 		if !n.Found {
@@ -261,8 +218,7 @@ func (s *ChangeService) populateCache(q ChangeQuery, res ChangeRepoResult) {
 	}
 }
 
-// compose assembles the final ChangeResult from the now-fully-populated cache
-// (or partially-populated, for currencies with no live data yet).
+// compose assembles the final ChangeResult from the cache.
 func (s *ChangeService) compose(q ChangeQuery) ChangeResult {
 	currencies := make(map[string]ChangeForCurrency, len(q.Currencies))
 	var newest time.Time
@@ -278,10 +234,9 @@ func (s *ChangeService) compose(q ChangeQuery) ChangeResult {
 				cfp.FromTS = anchorTS
 				if nowOK && !anchorPrice.IsZero() {
 					cfp.DeltaAbs = nowPrice.Sub(anchorPrice)
-					// Multiply before dividing and carry more than Div's
-					// DivisionPrecision (16): rounding the raw ratio at 16 dp
-					// can zero change_pct while delta_abs survives, which is
-					// the same self-inconsistency the wire rounding avoids.
+					// Multiply first, and carry more than Div's default 16 dp:
+					// rounding the raw ratio there can zero change_pct while
+					// delta_abs survives.
 					cfp.ChangePct = cfp.DeltaAbs.
 						Mul(decimal.NewFromInt(100)).
 						DivRound(anchorPrice, changePctDivPrecision)
@@ -313,9 +268,7 @@ type anchorKey struct {
 	Period   prices.Period
 }
 
-// missingCurrencies returns the union of currencies appearing in either
-// missingNow or missingAnchor (deduplicated). The repo only needs each
-// currency once per scan.
+// missingCurrencies dedupes the currencies across both miss lists.
 func missingCurrencies(missingNow []string, missingAnchor []anchorKey) []string {
 	seen := make(map[string]struct{}, len(missingNow)+len(missingAnchor))
 	for _, c := range missingNow {
@@ -332,8 +285,8 @@ func missingCurrencies(missingNow []string, missingAnchor []anchorKey) []string 
 	return out
 }
 
-// missingPeriods returns the union of periods appearing in missingAnchor,
-// ordered by AllPeriods so SQL UNION branches stay deterministic.
+// missingPeriods dedupes periods, ordered by AllPeriods so the SQL UNION
+// branches stay deterministic.
 func missingPeriods(missingAnchor []anchorKey) []prices.Period {
 	seen := make(map[prices.Period]struct{}, len(missingAnchor))
 	for _, k := range missingAnchor {
