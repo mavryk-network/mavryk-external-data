@@ -10,7 +10,8 @@ import "time"
 // routes in auth — intra-cluster callers reach them without a token.
 //
 // Local / e2e: set JWTLocalVerifyPublicKeyBase64 (base64 of PEM) + MBIOJWTIssuer
-// to verify RS256 JWTs signed with the matching private key, skipping JWKS fetch.
+// to verify RS256 JWTs signed with the matching private key, skipping the JWKS
+// fetch. Accepted in every gin mode — only a warning marks it.
 type AuthConfig struct {
 	// Enabled controls whether the MBIO JWT middleware is constructed at all.
 	// Nil = default on (verify). When *false the public listener still serves
@@ -48,10 +49,10 @@ type AuthConfig struct {
 	// (default 5m).
 	JWKSCacheTTL time.Duration `yaml:"jwks_cache_ttl"`
 
-	// JWTLocalVerifyPublicKeyBase64 — standard base64 of an RSA public-key PEM,
-	// for local-only RS256 verification without a JWKS endpoint. When non-empty
-	// it short-circuits the JWKS path entirely (useful for tests and offline
-	// docker-compose runs).
+	// JWTLocalVerifyPublicKeyBase64 — standard base64 of an RSA public-key PEM.
+	// When non-empty it replaces the MBIO JWKS trust anchor in ANY gin mode
+	// (nothing refuses it at startup; the middleware logs a warning), so keep it
+	// to tests and offline docker-compose runs.
 	JWTLocalVerifyPublicKeyBase64 string `yaml:"jwt_local_verify_public_key"`
 }
 

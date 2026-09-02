@@ -53,19 +53,41 @@ if ! ls "$MIGRATIONS_DIR"/*.sql >/dev/null 2>&1; then
   exit 1
 fi
 
-for f in $(ls "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort); do
-  echo "Executing migration: $(basename "$f")"
-  # -v ON_ERROR_STOP=1: without it psql runs past a failed statement and still
-  # exits 0, so a half-applied migration would be reported as success. We do NOT
-  # add --single-transaction: the CAGG/policy files (0006-0010) call
-  # add_continuous_aggregate_policy / add_*_policy, which cannot run inside a
-  # transaction block. ON_ERROR_STOP alone still aborts the whole run on any error.
-  if psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DATABASE}" -f "$f"; then
-    echo "✓ Migration $(basename "$f") completed successfully"
-  else
-    echo "✗ Migration $(basename "$f") failed" >&2
-    exit 1
-  fi
-done
+# All files run in ONE psql session behind pg_advisory_lock, so concurrent
+# runners (rolling deploy, retried job) serialize instead of racing on CREATE;
+# the session lock releases automatically on exit, success or failure.
+#
+# -v ON_ERROR_STOP=1: without it psql runs past a failed statement and still
+# exits 0, so a half-applied migration would be reported as success. We do NOT
+# add --single-transaction: the CAGG/policy files (0006-0010) call
+# add_continuous_aggregate_policy / add_*_policy, which cannot run inside a
+# transaction block. ON_ERROR_STOP still aborts the whole run on any error.
+MIGRATION_LOCK_KEY="${MIGRATION_LOCK_KEY:-792015843}"
+# The key is interpolated into SQL below — refuse anything but a plain integer.
+if ! printf '%s' "$MIGRATION_LOCK_KEY" | grep -Eq '^-?[0-9]{1,18}$'; then
+  echo "✗ MIGRATION_LOCK_KEY must be an integer, got: ${MIGRATION_LOCK_KEY}" >&2
+  exit 1
+fi
+RUNNER_SQL="$(mktemp)"
+trap 'rm -f "$RUNNER_SQL"' EXIT
 
-echo "All migrations completed successfully!"
+{
+  # Bound the lock wait: an orphaned session would otherwise block every
+  # future deploy silently. On timeout ON_ERROR_STOP fails the run loudly
+  # (find the holder via pg_locks locktype='advisory').
+  echo "SET statement_timeout = '10min';"
+  echo "SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY});"
+  # Cleared once the lock is held — index builds can legitimately run long.
+  echo "SET statement_timeout = 0;"
+  for f in $(ls "$MIGRATIONS_DIR"/*.sql | sort); do
+    echo "\\echo Executing migration: $(basename "$f")"
+    echo "\\i $f"
+  done
+} > "$RUNNER_SQL"
+
+if psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DATABASE}" -f "$RUNNER_SQL"; then
+  echo "All migrations completed successfully!"
+else
+  echo "✗ Migration run failed" >&2
+  exit 1
+fi

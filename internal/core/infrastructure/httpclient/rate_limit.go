@@ -10,9 +10,8 @@ import (
 	"quotes/internal/metrics"
 )
 
-// RateLimitSettings defines a proactive outbound HTTP rate limit for a single component.
-// RPS == 0 means "disabled". RPS > 0 with Burst <= 0 is auto-corrected by Normalized() to
-// Burst = max(1, round(2*RPS)) — see refactoring_v2 §3.1.
+// RateLimitSettings defines a proactive outbound HTTP rate limit for one
+// component. RPS == 0 disables it; Burst <= 0 is auto-corrected by Normalized().
 type RateLimitSettings struct {
 	Component string
 	RPS       float64
@@ -20,7 +19,6 @@ type RateLimitSettings struct {
 }
 
 // Normalized returns a copy with Burst auto-corrected when only RPS is set.
-// Idempotent under repeat calls.
 func (s RateLimitSettings) Normalized() RateLimitSettings {
 	if s.RPS > 0 && s.Burst <= 0 {
 		s.Burst = int(s.RPS*2 + 0.5)
@@ -31,17 +29,15 @@ func (s RateLimitSettings) Normalized() RateLimitSettings {
 	return s
 }
 
-// Enabled reports whether the limiter should be installed. Auto-normalizes first so
-// that RPS=0.5, Burst=0 (a common config mistake) doesn't silently disable throttling.
+// Enabled reports whether the limiter should be installed, normalizing first so
+// RPS=0.5, Burst=0 doesn't silently disable throttling.
 func (s RateLimitSettings) Enabled() bool {
 	n := s.Normalized()
 	return n.RPS > 0 && n.Burst > 0
 }
 
-// sharedLimiters holds one token bucket per component so every *http.Client built for
-// the same external service (e.g. "coingecko") shares the same budget.
-// Without this the effective rate against the remote API scales with the number of
-// clients (one per token × collector + backfill), making the configured RPS misleading.
+// sharedLimiters holds one token bucket per component, so every *http.Client for
+// the same service shares one budget instead of multiplying the effective rate.
 var (
 	sharedLimitersMu sync.Mutex
 	sharedLimiters   = map[string]*rate.Limiter{}
@@ -69,10 +65,8 @@ func sharedLimiter(component string, rps float64, burst int) *rate.Limiter {
 	return l
 }
 
-// lookupSharedLimiter returns the process-wide limiter registered for a
-// component, or nil when rate limiting is disabled for it. The retry layer uses
-// it to charge a token per retry attempt (see retryTransport) so retries do not
-// blow past the configured RPS during a 429 storm.
+// lookupSharedLimiter returns the process-wide limiter for a component, or nil
+// when rate limiting is off; retryTransport charges a token per retry through it.
 func lookupSharedLimiter(component string) *rate.Limiter {
 	if component == "" {
 		return nil
@@ -82,8 +76,7 @@ func lookupSharedLimiter(component string) *rate.Limiter {
 	return sharedLimiters[component]
 }
 
-// ResetSharedLimiters drops every entry from the shared limiter registry.
-// Test helper. Production code never calls this.
+// ResetSharedLimiters drops every entry from the registry. Test helper.
 func ResetSharedLimiters() {
 	sharedLimitersMu.Lock()
 	defer sharedLimitersMu.Unlock()
@@ -92,16 +85,12 @@ func ResetSharedLimiters() {
 	}
 }
 
-// WrapRateLimited wraps next with a token-bucket limiter as the OUTERMOST layer.
-// Actual assembled stack (outer → inner):
+// WrapRateLimited wraps next with a token-bucket limiter as the OUTERMOST layer:
 //
 //	rate limiter → logging → circuit breaker → retry → counter → base
 //
-// The limiter charges one token for the logical request (attempt 1). Retries live
-// below it inside retryTransport, which charges a token per retry via
-// lookupSharedLimiter so a 429 storm cannot exceed the configured RPS. Per-component
-// limiters are shared process-wide so that additional HTTP clients (new tokens,
-// backfill workers) do not multiply the RPS actually sent to the upstream API.
+// Retries charge their own token inside retryTransport, which surfaces the
+// upstream outcome rather than a throttling error so the breaker never sees it.
 func WrapRateLimited(next http.RoundTripper, s RateLimitSettings) http.RoundTripper {
 	if next == nil {
 		next = http.DefaultTransport

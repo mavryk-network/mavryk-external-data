@@ -14,11 +14,11 @@ Two upstream sources, three jobs, one API:
   populate `token_prices` from a configured `start_from` to "now."
 - **Equiteez RWA collector** — polls Equiteez orderbooks for known
   `rwa_pairs` and writes bid/ask/last to `rwa_quote_prices`.
-  Pair discovery is **automatic**: on startup the service syncs
-  `rwa_pairs` against Equiteez `in_allowlist=true` tokens/orderbooks —
-  no manual seed required. Prices are normalized by the quote
-  currency's decimals from the `tokens` registry (so micro-USDT
-  `56_250_000` is stored as `56.25`). See
+  Pair discovery is **automatic**: an hourly sync (plus one at startup)
+  reconciles `rwa_pairs` and `rwa_launches` against Equiteez
+  `in_allowlist=true` tokens/orderbooks — no manual seed required. Prices
+  are normalized by the quote currency's decimals from the `tokens`
+  registry (so micro-USDT `56_250_000` is stored as `56.25`). See
   [ADR-0012](docs/adr/0012-rwa-pair-discovery-and-normalization.md).
 
 Consumers read everything through one HTTP API.
@@ -51,8 +51,6 @@ each table reused across FT and RWA via the `Repository` interface. Adding a
 new currency, source, or metric requires no schema change.
 
 For the *why* of every architectural decision, see the [ADRs](docs/adr/).
-For the greenfield blueprint that produced this layout, see
-[upgrade-plan.md](upgrade-plan.md).
 
 ## Repository layout
 
@@ -78,39 +76,57 @@ mavryk-external-data/
 │   └── metrics/                   # Prometheus collectors
 ├── docs/
 │   ├── adr/                       # Architecture decision records
-│   └── notes/                     # Pre-decision design discussions
-├── upgrade-plan.md
-├── refactoring_v2.md
+│   ├── openapi.yaml               # OpenAPI 3.0 spec (served at /openapi.yaml)
+│   └── index.html                 # Swagger UI (served at /docs)
+├── tests/integration/             # testcontainers TimescaleDB suite
 └── README.md  ← you are here
 ```
 
 ## API
 
-| Endpoint                          | Description                                          |
-|-----------------------------------|------------------------------------------------------|
-| `GET /healthz`                    | Liveness — process up                                |
-| `GET /readyz`                     | Readiness — DB ping + drain gate                     |
-| `GET /metrics`                    | Prometheus exposition                                |
-| `GET /v1/prices/:token`           | FT price points (range or latest)                    |
-| `GET /v1/prices/:token/latest`    | FT snapshot — all currencies, transposed             |
-| `GET /v1/prices/:token/count`     | Total row count for token                            |
-| `GET /v1/rwa/:symbol`             | RWA orderbook points (range or latest); `:symbol` is `{base}-{quote}`, case-insensitive (e.g. `mars1-usdt`) |
-| `GET /v1/rwa/:symbol/latest`      | RWA snapshot — all sides, transposed                 |
-| `GET /v1/tickers/:token/latest`        | Per-exchange tickers for token: price, 24h volume, 1D change %, exchange logo. Filters stale rows by default; `?include_stale=true` opts in |
-| `GET /v1/tickers/:token/distribution`  | Volume-distribution pie data; `?group_by=exchange\|target&in=usd` aggregates volume into one row per group with `share_pct` |
+The authoritative API reference is the OpenAPI spec: **`/openapi.yaml`**,
+browsable via Swagger UI at **`/docs`**. The table below is an index, not a
+contract — request/response shapes live in the spec.
+
+| Endpoint                                | Description                                          |
+|-----------------------------------------|------------------------------------------------------|
+| `GET /healthz`                          | Liveness — process up                                |
+| `GET /readyz`                           | Readiness — DB ping + drain gate                     |
+| `GET /metrics`                          | Prometheus exposition (internal listener; public only outside release mode in single-port setups) |
+| `GET /quotes`                           | Legacy wide-format quotes (deprecated; superseded by `/v1/prices`) |
+| `GET /v1/prices/:token`                 | FT price points (range or latest)                    |
+| `GET /v1/prices/:token/latest`          | FT snapshot — all currencies, transposed             |
+| `GET /v1/prices/:token/count`           | Total row count for token                            |
+| `GET /v1/prices/:token/change`          | Price change over `?periods=` with bracketed anchors |
+| `GET /v1/prices/:token/{series,ohlc}`   | Chart data from continuous aggregates (`?interval=`) |
+| `GET /v1/rwa` 🔒                        | RWA market overview: every enabled asset with price, 24h change, mini-series |
+| `GET /v1/rwa/:symbol` 🔒                | RWA price points; `:symbol` is `{base}-{quote}`, case-insensitive (e.g. `mars1-usdt`) |
+| `GET /v1/rwa/:symbol/latest` 🔒         | RWA snapshot (`last` side) + optional `ath` / `price_one_year_ago` |
+| `GET /v1/rwa/:symbol/change` 🔒         | RWA price change over `?periods=`                    |
+| `GET /v1/rwa/:symbol/{series,ohlc}` 🔒  | RWA chart data (`?interval=`)                        |
+| `GET /v1/pairs/rwa` 🔒                  | RWA pair/launch catalog (symbols, addresses, quote)  |
+| `GET /v1/tickers/:token/latest`         | Per-exchange tickers: price, 24h volume, 1D change %, exchange logo; `?include_stale=true` opts into stale rows |
+| `GET /v1/tickers/:token/distribution`   | Volume-distribution pie data; `?group_by=exchange\|target` |
+
+🔒 — on the public listener these routes require an MBIO-issued RS256 Bearer
+JWT (`Authorization: Bearer <token>`; 401/403 on failure). The intra-cluster
+internal listener (`server.internal_port`) serves them without auth. Local
+dev: `AUTH_ENABLED=false` or `make jwt` to mint a token.
 
 ### Common query parameters
 
 | Param           | On endpoints                | Notes                                       |
 |-----------------|-----------------------------|---------------------------------------------|
-| `from`          | list                        | RFC3339; both omitted → "latest" mode       |
-| `to`            | list                        | RFC3339                                     |
-| `limit`         | list                        | capped by `server.max_query_limit` (10000)  |
+| `from` / `to`   | list, series, ohlc          | RFC3339; both omitted → "latest" mode (newest rows/buckets) |
+| `limit`         | list, series, ohlc          | capped by `server.max_query_limit` (10000)  |
 | `currency`      | FT list                     | filter: `usd`, `usd,eur`                    |
-| `side`          | RWA list                    | filter: `bid`, `ask`, `last`, `mid`         |
-| `in`            | RWA + tickers list+latest   | read-side conversion targets, e.g. `usd,eur,aed` (see [ADR-0013](docs/adr/0013-multi-currency-rwa-conversion-read-side.md)); capped by `server.max_in_currencies` (10) |
+| `interval`      | series, ohlc                | `1m 5m 15m 1h 4h 1d`; window caps per interval (see spec) |
+| `periods`       | change                      | subset of `1h,24h,7d,30d`                   |
+| `in`            | RWA + tickers               | read-side conversion targets, e.g. `usd,eur,aed` (see [ADR-0013](docs/adr/0013-multi-currency-rwa-conversion-read-side.md)); capped by `server.max_in_currencies` (10) |
 | `include_stale` | tickers /latest             | `true` returns rows older than `server.ticker_stale_after` (default 1h) flagged `is_stale: true` |
-| `group_by`      | tickers /distribution       | `exchange` or `target` — required          |
+| `group_by`      | tickers /distribution       | `exchange` or `target` — required           |
+
+RWA endpoints serve the `last` (trade) side only; there is no `side` filter.
 
 ### Examples
 
@@ -127,24 +143,22 @@ curl "http://localhost:3010/v1/tickers/mvrk/latest?in=usd,eur"
 # Pie chart: volume share by exchange
 curl "http://localhost:3010/v1/tickers/mvrk/distribution?group_by=exchange&in=usd"
 
-# Pie chart: volume share by quote currency (BTC vs USDT vs ETH ...)
-curl "http://localhost:3010/v1/tickers/mvrk/distribution?group_by=target&in=usd"
+# RWA snapshot in native quote (USDT), JWT-protected
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3010/v1/rwa/mars1-usdt/latest
 
-# RWA pair 42 — last bid/ask in native quote (USDT)
-curl http://localhost:3010/v1/rwa/42/latest
-
-# RWA pair 42 — same snapshot rendered into USD / EUR / AED via FT-side FX
-curl "http://localhost:3010/v1/rwa/42/latest?in=usd,eur,aed"
+# Same snapshot rendered into USD / EUR via FT-side FX — flat top-level keys
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3010/v1/rwa/mars1-usdt/latest?in=usd,eur"
 # →
 # {
-#   "source": "equiteez", "entity": "42", "timestamp": "...",
+#   "timestamp": "2026-05-08T12:00:00Z",
 #   "native_quote": "usdt",
-#   "values": { "bid": "100.42", "ask": "100.50", "last": "100.45" },
-#   "in": {
-#     "usd": { "values": { "bid": "100.43", ... }, "fx": { "rate": "1.0001", "source": "coingecko", "ts": "...", "method": "rate" } },
-#     "eur": { "fx": { "error": "no_fx_rate" } }   ← partial success, still 200
-#   }
+#   "price": 100.45,
+#   "market": "secondary",
+#   "usd": 100.46,
+#   "eur": 92.11
 # }
+# Failed conversions drop their key (still 200); a conversion served with a
+# stale FX rate adds "fx": {"eur": {"rate_ts": "...", "stale": true}}.
 ```
 
 ### Response shapes
@@ -153,8 +167,8 @@ curl "http://localhost:3010/v1/rwa/42/latest?in=usd,eur,aed"
 
 ```json
 [
-  {"timestamp": "2026-04-27T12:00:00Z", "currency": "usd", "price": "0.0715412"},
-  {"timestamp": "2026-04-27T12:00:00Z", "currency": "eur", "price": "0.06094094"}
+  {"timestamp": "2026-04-27T12:00:00Z", "currency": "usd", "price": 0.071541},
+  {"timestamp": "2026-04-27T12:00:00Z", "currency": "eur", "price": 0.060941}
 ]
 ```
 
@@ -162,15 +176,17 @@ curl "http://localhost:3010/v1/rwa/42/latest?in=usd,eur,aed"
 
 ```json
 {
-  "source": "coingecko",
-  "entity": "mvrk",
   "timestamp": "2026-04-27T12:00:00Z",
-  "values": {"usd": "0.0715412", "eur": "0.06094094"}
+  "values": {"usd": 0.071541, "eur": 0.060941}
 }
 ```
 
-Prices are JSON strings (per [ADR-0003](docs/adr/0003-decimal-for-numeric-precision.md))
-to preserve full `numeric(38,18)` precision on round-trip.
+FT and RWA prices are JSON **numbers**: 6 decimal places at or above 0.01,
+6 significant digits below it — so BTC/ETH-denominated quotes (≈7e-7) keep
+their value instead of rounding to `0.000001` or `0`. Ticker prices are
+full-precision JSON strings. (ADR-0003 originally specified string
+serialisation everywhere — superseded for FT/RWA, see the note in
+[ADR-0003](docs/adr/0003-decimal-for-numeric-precision.md).)
 
 Errors use a stable envelope:
 
@@ -178,8 +194,10 @@ Errors use a stable envelope:
 {"code": "NOT_FOUND", "message": "Token not found"}
 ```
 
-Codes: `INVALID_ARGUMENT` (400), `NOT_FOUND` (404), `UNAVAILABLE` (503),
-`RATE_LIMITED` (429), `INTERNAL` (500).
+Codes: `INVALID_ARGUMENT` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403),
+`NOT_FOUND` (404), `CONFLICT` (409), `RANGE_NOT_SATISFIABLE` (416),
+`RATE_LIMITED` (429), `INTERNAL` (500), `NOT_IMPLEMENTED` /
+`OHLCV_NOT_IMPLEMENTED` (501), `UNAVAILABLE` (503).
 
 ## Configuration
 
@@ -219,7 +237,6 @@ backfill:
 rwa:
   enabled: false
   interval_seconds: 60
-  concurrency: 4
 ```
 
 Token registry lives in the `tokens` table (loaded at startup;
@@ -230,7 +247,7 @@ overrides go in `config.yaml` under `tokens:`; see [config.yaml](config.yaml).
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - PostgreSQL 15+ with TimescaleDB extension (the docker-compose stack uses
   `timescale/timescaledb:latest-pg16`)
 - `psql` for the migration loop
@@ -277,7 +294,8 @@ Schema highlights:
   (`(token_symbol, source_code, exchange_id, target_symbol, ts)` PK).
 - `backfill_state` — composite `(source_code, entity_key)` cursor +
   error/backoff bookkeeping ([ADR-0008](docs/adr/0008-backfill-state-composite-key.md)).
-- Continuous aggregates: `token_prices_1h`, `_1d`, `rwa_quote_prices_1h`.
+- Continuous aggregates (real-time): `token_prices_{1m,1h,1d}`,
+  `rwa_quote_prices_{1m,1h,1d}`.
 - Compression policies: 14d for FT, 7d for RWA, 7d for tickers. Retention:
   2 years on FT/RWA raw, 90d on tickers raw (no validated retro-analytics
   use yet — extend when a consumer asks).
@@ -289,6 +307,11 @@ Schema highlights:
 - `http_*` — request counts, latency histograms, response classes.
 - `outbound_http_*` — retries, CB transitions, CB current state, RL wait.
 - `job_tick_duration_seconds`, `job_errors_total`, `job_rows_affected_total`.
+- `job_last_success_timestamp_seconds` (gauge), `job_tick_panics_total` — a job
+  whose gauge stops advancing is failing or stalled even while the process looks
+  healthy, so alert on `now() - job_last_success_timestamp_seconds` exceeding a
+  few tick intervals. It reports whether the job is erroring, not whether data
+  is arriving; pair it with `job_rows_affected_total` for the latter.
 - `backfill_oldest_ts_seconds` (gauge), `backfill_auto_disabled_total`.
 - `db_pool_*` — open / in-use / idle / wait-duration.
 
@@ -303,29 +326,24 @@ background-job logs carry `tick_id` for per-tick correlation.
 
 ### Profiling
 
-`server.pprof_enabled: true` mounts `/debug/pprof/*`. **Bind to a private
-interface in production** — pprof endpoints disclose stack traces.
+`server.pprof_enabled: true` mounts `/debug/pprof/*` on the **internal
+listener only** (`server.internal_port` must be set) — pprof endpoints
+disclose stack traces and allow CPU-pinning profile requests.
 
 ## Testing
 
 ```bash
-go test ./...                                  # fast
-go test -race -timeout 5m -cover ./...         # what CI runs
+go test ./...                                        # fast, unit only
+go test -race -timeout 10m -cover ./...              # what CI runs
+go test -race -tags=integration ./tests/integration/ # real TimescaleDB (Docker)
 ```
 
-Coverage today:
-
-- Domain types (Currency/Side/Token, Snapshot transpose).
-- Cache decorator (TTL expiry, save-invalidation, concurrency under `-race`).
-- CoinGecko mapper (sort order, malformed input, multi-currency).
-- Backfill `chunkBounds`, `computeBackoff`, `parseBackfillTime`, `truncateError`.
-- HTTP handlers (`httptest`): bind/error mapping, 404 on unknown token, 400
-  on bad currency/limit, transposed-snapshot shape.
-- Rate-limit `Normalized()` and `Enabled()`.
-
-Open follow-ups (integration tests with `testcontainers-go`, full
-`stepToken` via mocked dependencies) are tracked in
-[refactoring_v2.md](refactoring_v2.md).
+- Unit: domain types, cache decorators, mappers, backfill helpers, HTTP
+  handlers via `httptest`, JWT middleware battery, config validation.
+- Integration (`tests/integration/`, `testcontainers-go`): one pinned
+  TimescaleDB container per package running the real migrations —
+  change anchors, chart candles + CAGG refreshes, FX at-or-before rates,
+  pair/launch sync round-trips, backfill-state cursors.
 
 ## CI
 
@@ -335,18 +353,18 @@ Open follow-ups (integration tests with `testcontainers-go`, full
 - `golangci-lint`.
 - `go test -race -coverprofile=coverage.out -covermode=atomic ./...`
   with coverage uploaded as an artifact.
+- Integration tests (`-tags=integration`) on a real TimescaleDB container.
+- OpenAPI lint (Redocly) over `docs/openapi.yaml`.
 - `go build -trimpath -ldflags "-w -s"` of the binary.
-- On tag pushes: multi-stage Docker image build + push + ArgoCD sync.
+- On tag pushes: multi-stage Docker image build + push + ArgoCD sync
+  (gated by the `production` environment).
 
 ## Documentation
 
-- [docs/adr/](docs/adr/) — Architecture decision records (10 ADRs covering
-  storage shape, ORM choice, migration tool, generic-handler, caching, etc.).
-- [docs/notes/](docs/notes/) — Working-design notes and the integration guide.
-- [upgrade-plan.md](upgrade-plan.md) — Greenfield blueprint that drove the
-  current architecture.
-- [refactoring_v2.md](refactoring_v2.md) — Open follow-ups, anti-goals,
-  roadmap.
+- [/docs](docs/index.html) (Swagger UI) + [docs/openapi.yaml](docs/openapi.yaml)
+  — the API contract; always prefer these over prose.
+- [docs/adr/](docs/adr/) — Architecture decision records covering storage
+  shape, ORM choice, migration tool, generic-handler, caching, auth, charts.
 
 ## License
 

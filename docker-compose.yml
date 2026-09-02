@@ -78,6 +78,11 @@ services:
       # Server Configuration
       SERVER_PORT: ${SERVER_PORT:-3010}
       SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
+      # Local-dev stack runs gin debug mode explicitly: with no
+      # SERVER_INTERNAL_PORT set, debug is what keeps /metrics mounted on the
+      # public listener (a single-port release deploy serves none) and enables
+      # gin's verbose route logging. Never set debug in a production deploy.
+      SERVER_GIN_MODE: ${SERVER_GIN_MODE:-debug}
 
       # Auth: the image ships auth ON by default. This is a local-dev stack, so
       # disable MBIO JWT verification explicitly here (dev/CI convenience). Do NOT
@@ -100,7 +105,10 @@ services:
 
       # API configuration
       API_TIMEOUT_SECONDS: ${API_TIMEOUT_SECONDS:-30}
-      API_RATE_LIMIT_RPS: ${API_RATE_LIMIT_RPS:-10}
+      # Inbound rate limit (0 = off). The old API_RATE_LIMIT_RPS var was read by
+      # nothing — these are the knobs the server actually consumes.
+      SERVER_RATE_LIMIT_RPS: ${SERVER_RATE_LIMIT_RPS:-0}
+      SERVER_RATE_LIMIT_BURST: ${SERVER_RATE_LIMIT_BURST:-0}
 
       # CoinGecko API configuration
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-api_key}

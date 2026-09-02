@@ -2,18 +2,18 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	apiprices "quotes/internal/core/application/prices"
 )
 
 // Validate checks required fields and formats after defaults and env overrides
-// are applied. Token-existence checks happen later, after the runtime token
-// registry is loaded from DB.
-//
-// Implementation note: each section delegates to a focused validator so that
-// (a) gocyclo stays sane and (b) tests can drive sections in isolation.
+// are applied. Token-existence checks happen later, once the runtime token
+// registry is loaded from the DB.
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -31,7 +31,6 @@ func (c *Config) Validate() error {
 		c.validateRWA,
 		c.validateTickers,
 		c.validateAuth,
-		c.validateProductionSafety,
 	} {
 		if err := fn(); err != nil {
 			return err
@@ -68,6 +67,13 @@ func (c *Config) validateServer() error {
 	if c.Server.FXMaxStalenessSeconds < 0 {
 		return fmt.Errorf("server.fx_max_staleness_seconds must be >= 0, got %d", c.Server.FXMaxStalenessSeconds)
 	}
+	// A soft budget at or above the hard cap makes `fx.stale` unreachable: every
+	// rate it would flag is refused first, so the knob silently does nothing.
+	if hardCap := int(apiprices.FXHardStalenessCap / time.Second); c.Server.FXMaxStalenessSeconds >= hardCap {
+		return fmt.Errorf(
+			"server.fx_max_staleness_seconds must be < %d (the hard staleness cap past which conversions are refused), got %d",
+			hardCap, c.Server.FXMaxStalenessSeconds)
+	}
 	if c.Server.MaxInCurrencies < 0 {
 		return fmt.Errorf("server.max_in_currencies must be >= 0, got %d", c.Server.MaxInCurrencies)
 	}
@@ -94,6 +100,16 @@ func (c *Config) validateServer() error {
 	}
 	if c.Server.RateLimit.Burst < 0 {
 		return fmt.Errorf("server.rate_limit.burst must be >= 0")
+	}
+	for _, p := range c.Server.TrustedProxies {
+		p = strings.TrimSpace(p)
+		if _, _, err := net.ParseCIDR(p); err == nil {
+			continue
+		}
+		if net.ParseIP(p) != nil {
+			continue
+		}
+		return fmt.Errorf("server.trusted_proxies entry %q is neither a CIDR nor an IP", p)
 	}
 	return nil
 }
@@ -145,10 +161,34 @@ func (c *Config) validateCoinGecko() error {
 	if strings.TrimSpace(c.CoinGecko.BaseURL) == "" {
 		return fmt.Errorf("coingecko.base_url is required")
 	}
+	if err := requireSecureUpstreamBase("coingecko.base_url", c.CoinGecko.BaseURL); err != nil {
+		return err
+	}
+	if base := strings.TrimSpace(c.Equiteez.IndexerURL); base != "" {
+		if err := requireSecureUpstreamBase("equiteez.indexer_url", base); err != nil {
+			return err
+		}
+	}
 	if err := validateRateLimit("coingecko", c.CoinGecko.RateLimit); err != nil {
 		return err
 	}
 	return validateRateLimit("equiteez", c.Equiteez.RateLimit)
+}
+
+// requireSecureUpstreamBase rejects a non-https upstream base URL unless it
+// targets localhost (local dev / testcontainers): API keys and the Equiteez
+// bypass secret ride on these requests.
+func requireSecureUpstreamBase(name, base string) error {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return fmt.Errorf("%s is not a valid URL: %w", name, err)
+	}
+	host := u.Hostname()
+	isLocal := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	if u.Scheme != "https" && !isLocal {
+		return fmt.Errorf("%s must use https (got %q); credentials ride on these requests and an http hop exposes them", name, u.Scheme)
+	}
+	return nil
 }
 
 func (c *Config) validateBackfill() error {
@@ -159,8 +199,7 @@ func (c *Config) validateBackfill() error {
 	if b.ChunkMinutes < 0 {
 		return fmt.Errorf("backfill.chunk_minutes must be >= 0")
 	}
-	// CoinGecko market_chart/range granularity drops to 1h once the window exceeds
-	// ~1 day; we keep chunks <= 24h to preserve 5-min points for the backfill pass.
+	// CoinGecko market_chart/range drops to 1h granularity past a ~1 day window.
 	if b.ChunkMinutes > 1440 {
 		return fmt.Errorf("backfill.chunk_minutes must be <= 1440 (24h) to keep CoinGecko 5-min granularity, got %d", b.ChunkMinutes)
 	}
@@ -209,8 +248,7 @@ func (c *Config) validateEquiteezBackfill() error {
 		return fmt.Errorf("equiteez.backfill.batch_size must be > 0 when enabled")
 	}
 	if b.BatchSize > 5000 {
-		// Hasura's default node limit + our outbound max-bytes guard sit far below this;
-		// pulling 5k orders in one shot is asking for OOM/timeout pain.
+		// Hasura's node limit and the outbound max-bytes guard sit far below this.
 		return fmt.Errorf("equiteez.backfill.batch_size must be <= 5000, got %d", b.BatchSize)
 	}
 	if b.JitterMs < 0 {
@@ -234,10 +272,9 @@ func (c *Config) validateEquiteezBackfill() error {
 	return nil
 }
 
-// validateEquiteez checks the Equiteez indexer connection settings that apply
-// beyond backfill (the sync and live jobs use the same client). When a bypass
-// password is configured, the indexer URL must parse — otherwise
-// indexerRequestURL silently drops the credential and every GraphQL call fails
+// validateEquiteez checks the indexer connection settings shared by the sync,
+// live, and backfill jobs. With a bypass password set the URL must parse, or
+// indexerRequestURL silently drops the credential and every call fails
 // unauthenticated with a misleading error.
 func (c *Config) validateEquiteez() error {
 	if strings.TrimSpace(c.Equiteez.IndexerPassword) == "" {
@@ -292,13 +329,10 @@ func (c *Config) validateRWA() error {
 	return nil
 }
 
-// validateAuth checks the MBIO JWT settings when verification is enabled.
-// Verification is on by default; explicit `auth.enabled: false` disables all checks.
-//
-// Matches rwa-backend's posture: audience is **optional**. MBIO currently mints
-// tokens with only iss/sub/exp/iat (no aud), so enforcing aud would reject every
-// real token. The middleware emits a one-shot startup warn-log when aud is empty
-// so the missing check stays visible in ops logs.
+// validateAuth checks the MBIO JWT settings when verification is enabled (the
+// default; `auth.enabled: false` disables all checks). Audience is optional:
+// MBIO mints tokens with only iss/sub/exp/iat, so enforcing aud would reject
+// every real token.
 func (c *Config) validateAuth() error {
 	a := &c.Auth
 	if !a.JWTVerificationEnabled() {
@@ -311,6 +345,8 @@ func (c *Config) validateAuth() error {
 		return fmt.Errorf("auth.jwks_cache_ttl must be >= 0, got %s", a.JWKSCacheTTL)
 	}
 	if a.LocalJWTVerifyConfigured() {
+		// Local-key mode swaps the MBIO JWKS trust anchor for whatever key the
+		// env carries; the middleware logs a Warn when it is in use.
 		pemBytes, err := a.LocalJWTVerifyPublicKeyPEMBytes()
 		if err != nil {
 			return err
@@ -318,8 +354,8 @@ func (c *Config) validateAuth() error {
 		if len(pemBytes) == 0 {
 			return fmt.Errorf("auth.jwt_local_verify_public_key is empty after base64 decode (AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY)")
 		}
-		// Deeper PEM validity (ParseRSAPublicKeyFromPEM) happens at middleware
-		// build time — keeps validate.go free of the JWT dep.
+		// PEM validity and the 2048-bit floor are checked at middleware build
+		// time, keeping the JWT dep out of this package.
 		return nil
 	}
 	base := strings.TrimSpace(a.MBIOJWTBaseURL)
@@ -329,9 +365,6 @@ func (c *Config) validateAuth() error {
 	if base == "" {
 		return fmt.Errorf("auth.mbio_jwt_base_url or auth.mbio_api_gateway_base_url is required when AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY is unset; set one of AUTH_MBIO_JWT_BASE_URL / AUTH_MBIO_API_GATEWAY_BASE_URL, or provide a base64 PEM in AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY for local RS256 verification")
 	}
-	// JWKS (signing keys) must be fetched over TLS: an http:// base lets an
-	// on-path attacker substitute their own key set and forge accepted tokens —
-	// a full auth bypass. Allow http only for explicit localhost dev.
 	if err := requireSecureJWKSBase(base); err != nil {
 		return err
 	}
@@ -339,7 +372,8 @@ func (c *Config) validateAuth() error {
 }
 
 // requireSecureJWKSBase rejects a non-https JWKS base URL unless it targets
-// localhost/127.0.0.1 (local dev).
+// localhost (local dev). An http key set invites MITM key injection, i.e. a
+// full auth bypass.
 func requireSecureJWKSBase(base string) error {
 	u, err := url.Parse(base)
 	if err != nil {
@@ -352,38 +386,6 @@ func requireSecureJWKSBase(base string) error {
 	}
 	return nil
 }
-
-// validateProductionSafety refuses to start in release mode with well-known
-// default credentials or with RWA auth disabled. Caught at config-load so the
-// operator sees a clear error instead of a deploy that silently leaks behind a
-// default password or serves RWA data on the public listener with no token.
-func (c *Config) validateProductionSafety() error {
-	if !strings.EqualFold(strings.TrimSpace(c.Server.GinMode), "release") {
-		return nil
-	}
-	// Auth off on the public listener in release mode exposes every /v1/rwa/*
-	// and /v1/pairs/rwa route without a token. Disabling auth is a dev/CI-only
-	// convenience (AUTH_ENABLED=false); refuse it when the operator has
-	// explicitly declared production via gin_mode=release.
-	if !c.Auth.JWTVerificationEnabled() {
-		return fmt.Errorf("auth is disabled (auth.enabled=false / AUTH_ENABLED=false) while server.gin_mode=release; " +
-			"RWA routes would be served unauthenticated on the public listener. Enable auth (unset AUTH_ENABLED or set it true) " +
-			"or run a non-release gin_mode for dev/CI")
-	}
-	insecure := map[string]bool{
-		"postgres": true,
-		"admin":    true,
-		"password": true,
-		"changeme": true,
-	}
-	if insecure[strings.ToLower(strings.TrimSpace(c.Database.Password))] {
-		return fmt.Errorf("database.password is a well-known default (%q); refusing to start in release mode",
-			c.Database.Password)
-	}
-	return nil
-}
-
-// --- helpers (each kept under cyclomatic complexity budget) ---
 
 func validatePositiveDuration(name string, d DurationYAML) error {
 	if d <= 0 {

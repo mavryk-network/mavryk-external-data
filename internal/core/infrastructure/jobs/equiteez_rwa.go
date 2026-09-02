@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -15,17 +16,11 @@ import (
 	"quotes/internal/metrics"
 
 	"github.com/rs/zerolog"
-	"github.com/shopspring/decimal"
 )
 
-// EquiteezRWAJob polls Equiteez for the currently-known RWA pairs (loaded from
-// the rwa_pairs table at startup) and writes one PricePoint per (pair, side)
-// per tick into rwa_quote_prices.
-//
-// `rwa_pairs` is populated by the discovery sync (`SyncRWAPairs`); this
-// collector only reads it. Operators who disable a pair (`enabled=false`) opt
-// it out of polling; pairs whose orderbook is removed from Equiteez allowlist
-// get auto-disabled by the next sync.
+// EquiteezRWAJob polls the enabled rwa_pairs and writes one PricePoint per
+// (pair, side) per tick into rwa_quote_prices. The table is populated by
+// SyncRWAPairs; this collector only reads it.
 type EquiteezRWAJob struct {
 	cfg    *config.Config
 	repo   apiprices.Repository
@@ -80,36 +75,30 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 		Dur("interval", interval).
 		Msg("rwa_job_starting")
 
-	// NOTE: the ticker starts even when rwa_pairs is currently empty. Pairs are
-	// resolved per tick (see collectTick), so a pair discovered later — by the
-	// periodic RWAPairSyncJob or by an operator — is picked up without a restart.
+	// The ticker starts even on an empty rwa_pairs: pairs resolve per tick, so
+	// a later discovery is picked up without a restart.
 	safeGo(&j.wg, j.logger, "rwa", func() {
-		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "rwa", func(c context.Context) {
-			j.collectTick(c)
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa", func(c context.Context) error {
+			return j.collectTick(c)
 		})
 	})
 }
 
-// collectTick reloads the enabled pair list and collects one round.
-//
-// Reloading every tick (the shape EquiteezBackfillJob.tickAllPairs already uses)
-// is what makes `rwa_pairs` changes take effect live: a newly listed asset starts
-// being polled, and an operator setting enabled=false actually stops the writes.
-// Previously the list was snapshotted at Start and frozen for the process
-// lifetime, so both required a restart. The reload is one indexed SELECT per
-// tick, negligible next to the outbound GraphQL round-trip that follows.
-func (j *EquiteezRWAJob) collectTick(ctx context.Context) {
+// collectTick reloads the enabled pair list and collects one round. The reload
+// (one indexed SELECT, negligible next to the GraphQL round-trip) is what makes
+// rwa_pairs changes take effect without a restart.
+func (j *EquiteezRWAJob) collectTick(ctx context.Context) error {
 	pairs, err := j.lookup.RWAPairs(ctx)
 	if err != nil {
 		j.logger.Error().Err(err).Msg("rwa_load_pairs_failed")
-		return
+		return err
 	}
 	enabled := filterEnabledPairs(pairs, prices.SourceEquiteez)
 	if len(enabled) == 0 {
 		j.logger.Debug().Msg("rwa_no_enabled_pairs")
-		return
+		return nil
 	}
-	j.collectOnce(ctx, enabled)
+	return j.collectOnce(ctx, enabled)
 }
 
 // Stop signals the goroutine and waits.
@@ -118,60 +107,54 @@ func (j *EquiteezRWAJob) Stop() {
 	j.wg.Wait()
 }
 
-// collectOnce queries Equiteez for the configured token addresses, locates the
-// orderbook the pair is associated with, and writes bid/ask/last per pair.
-//
-// We query by `token_addr` (the existing GetTokensWithOrderbooks shape) and
-// then resolve the right orderbook by `orderbook_addr` — a single token may
-// own multiple orderbooks (different quote currencies / regulatory tranches),
-// so we match each pair against its specific orderbook contract.
-func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair) {
+// collectOnce queries by token_addr, then resolves each pair's own orderbook by
+// orderbook_addr — one token may own several (different quote currencies or
+// regulatory tranches) — and writes bid/ask/last per pair.
+func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair) error {
 	start := time.Now()
 	defer func() {
 		metrics.JobTickDurationSeconds.WithLabelValues("rwa", string(prices.SourceEquiteez), "all").
 			Observe(time.Since(start).Seconds())
 	}()
 
-	// Group pairs by token address so one GraphQL request covers all pairs of
-	// the same token; resolve the right orderbook on the response side.
+	// One GraphQL request per token covers all its pairs. Reached with enabled
+	// pairs in hand, so an empty result is a catalog break, not an idle tick —
+	// the job collects nothing until it is fixed.
 	byTokenAddr, tokenAddresses := groupPairsByToken(pairs)
 	if len(tokenAddresses) == 0 {
-		j.logger.Debug().Msg("rwa_no_pairs_with_token_addr")
-		return
+		j.logger.Warn().Int("pairs", len(pairs)).Msg("rwa_no_pairs_with_token_addr")
+		return fmt.Errorf("rwa tick: none of the %d enabled pairs has a token address", len(pairs))
 	}
 
-	// Resolve quote-currency decimals once per pair. Equiteez orderbooks
-	// report prices in the smallest unit of the quote currency (micro-USDT
-	// = 10^-6 USDT, etc.) normalized to "1 whole base token" — to get
-	// human-readable prices we shift the decimal by `-quote.decimals`.
-	// Pairs whose quote currency is not in the `tokens` registry are skipped
-	// entirely: writing un-normalized data would store values 10^N too
-	// large with no way for the consumer to know.
+	// Equiteez reports prices in the quote currency's smallest unit, so each
+	// pair is shifted by -quote.decimals. Pairs whose quote is not in the
+	// registry are skipped: un-normalized data would be 10^N too large.
 	pairDecimals := j.resolveQuoteDecimals(pairs)
 	if len(pairDecimals) == 0 {
-		j.logger.Warn().Msg("rwa_no_pairs_with_known_quote_decimals")
-		return
+		// Registry break — stops the job dead until an operator fixes it.
+		j.logger.Warn().Int("pairs", len(pairs)).Msg("rwa_no_pairs_with_known_quote_decimals")
+		return fmt.Errorf("rwa tick: no quote decimals registered for any of the %d enabled pairs", len(pairs))
 	}
 
 	tokens, err := j.client.GetTokensWithOrderbooks(ctx, tokenAddresses)
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "fetch").Inc()
 		j.logger.Error().Err(err).Msg("rwa_fetch_failed")
-		return
+		return err
 	}
 
 	now := time.Now().UTC()
 	points := buildPointsFromOrderbooks(tokens, byTokenAddr, pairDecimals, now)
 	if len(points) == 0 {
 		j.logger.Debug().Msg("rwa_no_points_collected")
-		return
+		return nil
 	}
 
 	n, err := j.repo.Save(ctx, points)
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "save").Inc()
 		j.logger.Error().Err(err).Msg("rwa_save_failed")
-		return
+		return err
 	}
 	metrics.JobRowsAffectedTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all").
 		Add(float64(n))
@@ -180,6 +163,7 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 		Int("points", len(points)).
 		Int64("rows_affected", n).
 		Msg("rwa_collected")
+	return nil
 }
 
 // groupPairsByToken returns a map (tokenAddr → pairs of that token) plus a
@@ -300,13 +284,14 @@ func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, quot
 
 	shift := -int32(quoteDecimals) //nolint:gosec // decimals is small (typically 6); int→int32 cannot overflow
 
-	add := func(side string, raw float64) {
-		if raw <= 0 {
+	add := func(side string, v equiteez.FlexibleFloat) {
+		price, reason, ok := mappablePrice(v, shift)
+		if !ok {
+			if reason != "" {
+				metrics.IngestRowsDroppedTotal.
+					WithLabelValues(string(pair.Source), entityKey, reason).Inc()
+			}
 			return
-		}
-		price := decimal.NewFromFloat(raw)
-		if shift != 0 {
-			price = price.Shift(shift)
 		}
 		out = append(out, prices.PricePoint{
 			Source:    pair.Source,
@@ -316,8 +301,8 @@ func orderbookToPoints(pair prices.RWAPair, ob *equiteez.EquiteezOrderbook, quot
 			Price:     price,
 		})
 	}
-	add(string(prices.SideBid), ob.HighestBuyPrice.Float64())
-	add(string(prices.SideAsk), ob.LowestSellPrice.Float64())
-	add(string(prices.SideLast), ob.LastMatchedPrice.Float64())
+	add(string(prices.SideBid), ob.HighestBuyPrice)
+	add(string(prices.SideAsk), ob.LowestSellPrice)
+	add(string(prices.SideLast), ob.LastMatchedPrice)
 	return out
 }

@@ -12,8 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// LegacyQuoteFetcher abstracts the wide-pivot store so handler tests don't
-// need a live DB.
+// LegacyQuoteFetcher abstracts the wide-pivot store so handler tests need no DB.
 type LegacyQuoteFetcher interface {
 	QueryWide(
 		ctx context.Context,
@@ -25,9 +24,8 @@ type LegacyQuoteFetcher interface {
 	) ([]repositories.LegacyQuoteRow, error)
 }
 
-// LegacyQuotesDeps wires the legacy `/quotes` handler. Token + source are
-// fixed to MVRK + CoinGecko (v0.1.0 behaviour); other tokens/sources route
-// through the v1 endpoints.
+// LegacyQuotesDeps wires the legacy `/quotes` handler. Token + source are fixed
+// to MVRK + CoinGecko (v0.1.0 behaviour); everything else routes through v1.
 type LegacyQuotesDeps struct {
 	Repo        LegacyQuoteFetcher
 	TokenSymbol string // "mvrk"
@@ -35,9 +33,8 @@ type LegacyQuotesDeps struct {
 	MaxLimit    int    // server.max_query_limit
 }
 
-// legacyQuoteOut mirrors the v0.1.0 wire shape exactly: lowercase currency
-// keys, JSON numbers (no quoting), UTC RFC3339 timestamp. Anchors a snapshot
-// contract for clients that still depend on the legacy route.
+// legacyQuoteOut mirrors the v0.1.0 wire shape exactly: lowercase currency keys,
+// JSON numbers (no quoting), UTC RFC3339 timestamp.
 type legacyQuoteOut struct {
 	Timestamp string  `json:"timestamp"`
 	BTC       float64 `json:"btc"`
@@ -52,15 +49,16 @@ type legacyQuoteOut struct {
 
 // LegacyQuotes — GET /quotes
 //
-// Drop-in restoration of the v0.1.0 endpoint. MVRK quotes from CoinGecko, in
-// wide format (one row per timestamp, 8 currency columns). Error envelope
-// matches the legacy shape (`{"error": "..."}`) so older clients keep parsing
-// failures without changes.
+// Drop-in restoration of the v0.1.0 endpoint: MVRK quotes from CoinGecko in wide
+// format, keeping the legacy `{"error": "..."}` envelope.
 //
 // Query params:
 //   - from  RFC3339, default now-24h
 //   - to    RFC3339, default now
-//   - limit positive int, capped by server.max_query_limit
+//   - limit positive int, capped by server.max_query_limit and defaulted to it
+//
+// The window is unbounded, matching v0.1.0: an over-wide window is answered with
+// the capped row set, never rejected.
 func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		fromStr := c.Query("from")
@@ -110,13 +108,18 @@ func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 			}
 			limit = parsed
 		}
+		// Always window mode here, so an absent ?limit falls back to the server
+		// cap, keeping server.max_query_limit authoritative over the repository's
+		// defaultLegacyRowCap backstop.
+		if limit == 0 && d.MaxLimit > 0 {
+			limit = d.MaxLimit
+		}
 
 		rows, err := d.Repo.QueryWide(c.Request.Context(), d.TokenSymbol, d.SourceCode, from, to, limit)
 		if err != nil {
-			// Never leak the raw repository/pgx error (SQL fragments, table/column
-			// names, connection diagnostics) to unauthenticated callers on the
-			// public listener. Attach it for server-side logging and return a
-			// static message, matching common.RespondError's non-leaking behavior.
+			// Never leak the raw repository error (SQL fragments, table names,
+			// connection diagnostics) to unauthenticated callers: log it
+			// server-side and return a static message.
 			_ = c.Error(err)
 			legacyError(c, http.StatusInternalServerError, "Failed to get quotes")
 			return
@@ -137,8 +140,8 @@ func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 			}
 		}
 
-		// Use json.Marshal directly so a zero-length slice serialises as `[]`,
-		// matching the legacy wire contract regardless of gin's defaults.
+		// json.Marshal directly, so a zero-length slice serialises as `[]` per
+		// the legacy contract regardless of gin's defaults.
 		body, err := json.Marshal(out)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encode response"})

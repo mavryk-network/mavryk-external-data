@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"time"
 )
 
@@ -10,6 +11,12 @@ func setDefaults(config *Config) {
 	}
 	if config.Server.Host == "" {
 		config.Server.Host = "0.0.0.0"
+	}
+	// Normalize known values only; an unknown one is left for validateGinMode to
+	// reject with an accurate message.
+	switch strings.ToLower(strings.TrimSpace(config.Server.GinMode)) {
+	case "", "debug", "release", "test":
+		config.Server.GinMode = config.Server.EffectiveGinMode()
 	}
 	if config.Server.ReadTimeout == 0 {
 		config.Server.ReadTimeout = DurationYAML(30 * time.Second)
@@ -22,6 +29,11 @@ func setDefaults(config *Config) {
 	}
 	if config.Server.IdleTimeout == 0 {
 		config.Server.IdleTimeout = DurationYAML(120 * time.Second)
+	}
+	if config.Server.HandlerTimeout == 0 {
+		// Absent key must not mean "no per-request budget"; negative is the
+		// explicit escape hatch.
+		config.Server.HandlerTimeout = DurationYAML(10 * time.Second)
 	}
 	if config.Server.LatestQuoteCacheTTLSeconds == 0 {
 		config.Server.LatestQuoteCacheTTLSeconds = 5
@@ -55,10 +67,8 @@ func setDefaults(config *Config) {
 		config.Database.Name = "quotes"
 	}
 	if config.Database.SSLMode == "" {
-		// Secure-by-default: "prefer" negotiates TLS when the server offers it and
-		// transparently falls back to plaintext for a local/compose Postgres that
-		// has none — so a managed/remote DB is encrypted without an explicit opt-in,
-		// while local dev keeps working. Set POSTGRES_SSL=require to enforce.
+		// "prefer" negotiates TLS when offered and falls back to plaintext for a
+		// local Postgres without it. POSTGRES_SSL=require to enforce.
 		config.Database.SSLMode = "prefer"
 	}
 
@@ -70,10 +80,8 @@ func setDefaults(config *Config) {
 		config.API.TimeoutSeconds = 30
 	}
 	if config.API.OutboundMaxResponseBytes == 0 {
-		// Cap outbound response bodies at 16 MiB by default so a misbehaving or
-		// compromised upstream (or a huge Cloudflare error page) can't stream
-		// gigabytes into memory via graphql.Execute's io.ReadAll. A negative value
-		// is treated as an explicit "disabled" escape hatch (MaxBytesReader).
+		// 16 MiB so a misbehaving upstream can't stream gigabytes into memory via
+		// graphql.Execute's io.ReadAll. Negative disables the cap.
 		config.API.OutboundMaxResponseBytes = 16 << 20
 	}
 
@@ -131,23 +139,14 @@ func setDefaults(config *Config) {
 	}
 
 	if config.RWA.IntervalSeconds == 0 && config.RWA.Enabled {
-		// 10s matches Mavryk block time — orderbook prices on Equiteez change
-		// at most once per block, so polling faster doesn't surface fresher
-		// data. Operators can lower further on chains with sub-second blocks
-		// (rare) or raise to reduce storage pressure on idle markets.
+		// 10s = Mavryk block time; orderbook prices change at most once per block.
 		config.RWA.IntervalSeconds = 10
 	}
-	if config.RWA.Concurrency == 0 && config.RWA.Enabled {
-		config.RWA.Concurrency = 4
-	}
 	if config.RWA.PairSyncIntervalSeconds == 0 && config.RWA.Enabled {
-		// Hourly: listings are rare, and one GraphQL query per hour is free.
+		// Hourly: listings are rare and one GraphQL query per hour is free.
 		config.RWA.PairSyncIntervalSeconds = 3600
 	}
 
-	// Tickers defaults — only the cache TTLs are eager; the rest stay zero
-	// unless explicitly enabled in YAML so a fresh service doesn't start
-	// hammering CG without an operator decision.
 	if config.Tickers.TokenSymbol == "" {
 		config.Tickers.TokenSymbol = "mvrk"
 	}

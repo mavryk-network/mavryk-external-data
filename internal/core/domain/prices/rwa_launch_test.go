@@ -118,3 +118,19 @@ func TestLaunchStatusStringAndSymbol(t *testing.T) {
 		t.Errorf("Symbol() = %q, want khbe-usdt", got)
 	}
 }
+
+// TestProgressPercent_NonFiniteOperands: big.Float parses "Inf" and panics on
+// Inf/Inf, and a non-finite result would break json.Marshal of the whole
+// /v1/rwa page. Every combination must yield a plain 0.
+func TestProgressPercent_NonFiniteOperands(t *testing.T) {
+	cases := [][2]string{
+		{"Inf", "Inf"}, {"Inf", "100"}, {"100", "Inf"},
+		{"+Inf", "+Inf"}, {"-Inf", "100"}, {"1e400", "100"}, {"NaN", "100"},
+	}
+	for _, c := range cases {
+		got := ProgressPercent(c[0], c[1])
+		if got != 0 {
+			t.Errorf("ProgressPercent(%q, %q) = %v, want 0", c[0], c[1], got)
+		}
+	}
+}

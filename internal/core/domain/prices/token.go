@@ -27,11 +27,13 @@ var (
 	tokenRegistry = map[Token]TokenInfo{}
 )
 
-// RegisterTokens replaces the registry with the supplied list. Called once at
-// startup from the lookup-loader; idempotent under repeat calls.
+// RegisterTokens replaces the registry with the supplied list; idempotent.
+// Symbols are lowercased like NewToken does — a mixed-case ops-inserted row
+// would otherwise be collected by jobs yet 404 on every API request.
 func RegisterTokens(infos []TokenInfo) {
 	next := make(map[Token]TokenInfo, len(infos))
 	for _, info := range infos {
+		info.Symbol = Token(strings.ToLower(strings.TrimSpace(string(info.Symbol))))
 		next[info.Symbol] = info
 	}
 	tokenRegistry = next

@@ -11,9 +11,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// openGorm returns a *gorm.DB connected to the test container. The DSN comes
-// from setup_test.go (TestMain populates pgDSN). Each test gets its own gorm
-// session — connections are pooled by pgx underneath.
+// openGorm connects to the shared test container; TestMain (setup_test.go)
+// populates pgDSN.
 func openGorm(t *testing.T) *gorm.DB {
 	t.Helper()
 	require.NotEmpty(t, pgDSN, "pgDSN unset — TestMain didn't run; missing build tag?")
@@ -32,28 +31,34 @@ func openGorm(t *testing.T) *gorm.DB {
 	return db
 }
 
-// truncateTokenPrices resets the FA hot path so tests can stand up
-// independent fixtures. CASCADE flushes any continuous-aggregate
-// materialised rows that referenced the tick rows.
-//
-// For a TimescaleDB hypertable, TRUNCATE is the cheapest way to clear
-// chunks; the seed lookup tables (tokens, sources) stay intact so token
-// FK constraints continue to resolve.
+// TRUNCATE is the cheapest way to clear a hypertable's chunks; the seed lookup
+// tables (tokens, sources) stay intact so FK constraints keep resolving.
+// Continuous aggregates are NOT refreshed — callers do that via refreshCA.
 func truncateTokenPrices(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Exec(`TRUNCATE TABLE token_prices`).Error)
-	// Continuous aggregates need explicit refresh after a wipe; tests
-	// that depend on the CA call refreshTokenCA explicitly after seeding.
 }
 
-// refreshCA forces the named continuous aggregate to materialise the given
-// window. With end_offset on the policy you'd never see the latest minute;
-// the manual call honours the explicit bounds passed here. NULL bounds
-// mean "the whole materialised range" — fine for tests.
-//
-// Works for both FA (`token_prices_*`) and RWA (`rwa_quote_prices_*`) CAs.
+// refreshCA materialises a continuous aggregate over its whole range (NULL
+// bounds), bypassing the policy's end_offset which would hide the latest
+// minute. Works for both token_prices_* and rwa_quote_prices_* views.
 func refreshCA(t *testing.T, db *gorm.DB, view string) {
 	t.Helper()
 	require.NoError(t,
 		db.Exec(`CALL refresh_continuous_aggregate(?, NULL, NULL)`, view).Error)
+}
+
+// recordingGorm captures the statements gorm emits (bindings inlined) so a test
+// can EXPLAIN the exact SQL a repository produced, not a hand-copy of it.
+func recordingGorm(t *testing.T, rec *legacySQLRecorder) *gorm.DB {
+	t.Helper()
+	require.NotEmpty(t, pgDSN, "pgDSN unset — TestMain didn't run; missing build tag?")
+	db, err := gorm.Open(postgres.Open(pgDSN), &gorm.Config{Logger: rec})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
 }

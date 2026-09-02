@@ -3,15 +3,25 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!--
+    CSP: only same-origin content plus the two pinned unpkg assets below.
+    unsafe-inline covers the bootstrap <script>/<style> in this file; script
+    integrity is still enforced via the SRI attribute.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" />
   <title>Mavryk External Data API</title>
   <!--
-    Swagger UI 5.x — supports OpenAPI 3.0.x. Loaded from unpkg with explicit
-    integrity hashes so a CDN compromise can't pivot into the docs page.
-    Update both URL and integrity together when bumping the version.
+    Swagger UI 5.x — supports OpenAPI 3.0.x. Loaded from unpkg with SRI
+    integrity hashes (sha384 of the files in the npm tarball) so a CDN
+    compromise or MITM can't pivot into the docs page. Update URL and
+    integrity together when bumping the version:
+      curl -fsSL https://unpkg.com/swagger-ui-dist@<v>/<file> | openssl dgst -sha384 -binary | base64
   -->
   <link
     rel="stylesheet"
     href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"
+    integrity="sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn"
+    crossorigin="anonymous"
   />
   <style>
     body { margin: 0; }
@@ -20,7 +30,11 @@
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+  <script
+    src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"
+    integrity="sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep"
+    crossorigin="anonymous"
+  ></script>
   <script>
     window.ui = SwaggerUIBundle({
       url: "/openapi.yaml",

@@ -74,7 +74,7 @@ Same shape for RWA (see [ADR-0002](0002-two-domain-tables-ft-vs-rwa.md)).
 
 ## Notes
 
-- Worked design discussion lives in [docs/notes/opt-db.md](../notes/opt-db.md)
+- Worked design discussion lives in `docs/notes/opt-db.md` (historical; not in this repo)
   (pre-ADR; informal).
 - Schema migrations: `migrations/0003_token_prices.sql`,
   `migrations/0006_token_prices_aggregates.sql`,

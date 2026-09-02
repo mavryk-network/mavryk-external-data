@@ -22,8 +22,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// AppDeps wires everything the HTTP server needs to come up. Pre-built repos and
-// services are injected so main.go is the single point of construction.
+// AppDeps wires everything the HTTP server needs to come up.
 type AppDeps struct {
 	Config          *config.Config
 	DB              *gorm.DB
@@ -32,33 +31,22 @@ type AppDeps struct {
 	RWAPriceQuery   apiprices.QueryService
 	TokenPriceRepo  *repositories.TokenPriceRepository
 	RWAPriceRepo    *repositories.RWAPriceRepository // for chart endpoints
-	// TokenChangeRepo / RWAChangeRepo back the /change endpoints. Each
-	// runs a single SQL per request via the existing CAs; no new tables.
+	// TokenChangeRepo / RWAChangeRepo back the /change endpoints.
 	TokenChangeRepo *repositories.TokenChangeRepository
 	RWAChangeRepo   *repositories.RWAChangeRepository
-	// Optional, enables `?in=` multi-currency conversions on RWA endpoints.
-	// When either field is nil the handler rejects `?in=` with 400.
+	// Optional; when either field is nil the handler rejects `?in=` with 400.
 	FXConverter apiprices.PriceConverter
 	Lookup      *repositories.LookupRepository
-	// LaunchRepo surfaces primary-issuance (launchpad) assets on GET /v1/rwa.
-	// Optional: nil simply omits them from the catalog.
+	// Optional: surfaces primary-issuance assets on GET /v1/rwa; nil omits them.
 	LaunchRepo *repositories.LaunchRepository
-	// TickerQuery powers /v1/tickers/:token/latest and /distribution. Nil
-	// disables the routes silently (no handlers mounted).
+	// Nil disables the ticker routes (no handlers mounted).
 	TickerQuery apitickers.QueryService
 }
 
-// App owns one or two HTTP servers:
-//
-//	publicServer   — :{server.port}, internet-facing. Rate-limit on,
-//	                 MBIO JWT middleware guards /v1/rwa/* and /v1/pairs/rwa.
-//	                 CORS is handled at the edge (Envoy Gateway), not here.
-//	internalServer — :{server.internal_port}, optional. No rate-limit,
-//	                 no RWA auth. Hosts /metrics. Reached only from inside the
-//	                 cluster via a ClusterIP Service + NetworkPolicy.
-//
-// When server.internal_port is unset (local dev) internalServer is nil and
-// /metrics is mounted on the public engine — the single-port legacy layout.
+// App owns the internet-facing publicServer (rate-limited, MBIO JWT on
+// /v1/rwa/*) and — when server.internal_port is set — an intra-cluster
+// internalServer that hosts /metrics with neither. CORS is handled at the edge
+// (Envoy Gateway), not here.
 type App struct {
 	config         *config.Config
 	publicServer   *http.Server
@@ -67,9 +55,7 @@ type App struct {
 	readinessGate  *handlers.ReadinessGate
 }
 
-// NewApp builds the HTTP server(s). Side-effects: sets gin mode from config,
-// creates engines, registers middleware, mounts routes, configures timeouts,
-// builds the MBIO JWT middleware (when auth is enabled).
+// NewApp builds the HTTP server(s).
 func NewApp(deps AppDeps) (*App, error) {
 	logger := deps.Logger
 	if logger == nil {
@@ -84,9 +70,9 @@ func NewApp(deps AppDeps) (*App, error) {
 	gate := handlers.NewReadinessGate()
 	routerDepsBase := buildRouterDeps(deps, cfg, gate)
 
-	// MBIO JWT middleware. Built once, mounted only on the public engine. When
-	// auth is disabled (auth.enabled=false, dev/CI only) the public listener
-	// serves RWA routes without a token wrapper — same as the internal one.
+	// Built once, public engine only. auth.enabled=false is meant for dev/CI but
+	// is not refused at startup in any gin mode: it leaves the RWA routes
+	// unwrapped on the public listener, and the warn below is the only signal.
 	var rwaAuth gin.HandlerFunc
 	if cfg.Auth.JWTVerificationEnabled() {
 		mid, err := httpmw.MBIOJWT(&cfg.Auth, appLogger)
@@ -101,10 +87,8 @@ func NewApp(deps AppDeps) (*App, error) {
 	publicEngine := buildPublicEngine(cfg, appLogger)
 	publicDeps := routerDepsBase
 	publicDeps.RWAAuth = rwaAuth
-	// Docs (Swagger UI + openapi.yaml) are mounted on the public engine in every
-	// mode. Access to /docs and /openapi.yaml is gated at the infrastructure
-	// layer (reverse proxy / network policy), not in the app — so we expose them
-	// unconditionally here and let the edge decide who reaches them.
+	// Access to /docs and /openapi.yaml is gated at the edge (reverse proxy /
+	// network policy), not in the app.
 	publicDeps.MountDocs = true
 	SetupRoutes(publicEngine, publicDeps)
 
@@ -127,15 +111,16 @@ func NewApp(deps AppDeps) (*App, error) {
 
 	internalPort := strings.TrimSpace(cfg.Server.InternalPort)
 	if internalPort == "" {
-		// Single-port mode. Exposing /metrics on the PUBLIC engine leaks internal
-		// operational detail (token symbols, FX pairs, pool gauges, error classes)
-		// to anonymous callers. Allow it only outside release mode (local dev,
-		// where the Grafana stack scrapes it); a release-mode single-port deploy
-		// must set SERVER_INTERNAL_PORT to get metrics on the private listener.
+		// /metrics on the public engine leaks internal operational detail to
+		// anonymous callers: allow it outside release mode only. A release-mode
+		// deploy must set SERVER_INTERNAL_PORT to get metrics at all.
 		if gin.Mode() == gin.ReleaseMode {
 			appLogger.Warn().Msg("metrics_not_exposed_public_release_single_port_set_internal_port")
 		} else {
 			publicEngine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+		}
+		if cfg.Server.PprofEnabled {
+			appLogger.Warn().Msg("pprof_requires_internal_listener_set_internal_port")
 		}
 		return app, nil
 	}
@@ -159,14 +144,13 @@ func NewApp(deps AppDeps) (*App, error) {
 	return app, nil
 }
 
-// maxHeaderBytes bounds total request header size (net/http default is 1 MiB).
-// Caps the attacker-controlled bytes that can be forced into every log line via
-// oversized X-Request-ID / User-Agent headers.
+// maxHeaderBytes bounds request header size (net/http defaults to 1 MiB), capping
+// the attacker-controlled bytes forced into every log line.
 const maxHeaderBytes = 64 << 10 // 64 KiB
 
 // launchLister adapts an optional *LaunchRepository to the handler interface.
-// A typed-nil pointer stored in an interface is non-nil, which would make the
-// handler call a nil receiver — so translate nil to a nil interface explicitly.
+// A typed-nil pointer stored in an interface is non-nil, so nil must be
+// translated to a nil interface explicitly.
 func launchLister(r *repositories.LaunchRepository) handlers.RWALaunchLister {
 	if r == nil {
 		return nil
@@ -174,8 +158,7 @@ func launchLister(r *repositories.LaunchRepository) handlers.RWALaunchLister {
 	return r
 }
 
-// launchResolver adapts an optional *LaunchRepository to the per-symbol lookup
-// interface, translating a typed-nil pointer to a nil interface (see launchLister).
+// launchResolver is launchLister's per-symbol counterpart.
 func launchResolver(r *repositories.LaunchRepository) handlers.RWALaunchResolver {
 	if r == nil {
 		return nil
@@ -184,37 +167,46 @@ func launchResolver(r *repositories.LaunchRepository) handlers.RWALaunchResolver
 }
 
 func configureGinMode(cfg *config.Config) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Server.GinMode)) {
+	switch cfg.Server.EffectiveGinMode() {
 	case "debug":
 		gin.SetMode(gin.DebugMode)
-	case "release":
-		gin.SetMode(gin.ReleaseMode)
 	case "test":
 		gin.SetMode(gin.TestMode)
-	case "":
-		h := strings.TrimSpace(cfg.Server.Host)
-		if h == "localhost" || h == "127.0.0.1" {
-			gin.SetMode(gin.DebugMode)
-		} else {
-			gin.SetMode(gin.ReleaseMode)
-		}
 	default:
 		gin.SetMode(gin.ReleaseMode)
 	}
 }
 
-// buildPublicEngine returns the engine used for the external-facing listener:
-// full middleware stack and optional inbound rate limit. CORS is handled at the
-// edge (Envoy Gateway SecurityPolicy), not in the app.
+// configureTrustedProxies applies server.trusted_proxies. Empty (the default)
+// trusts NO proxy: gin's own default trusts everything, so c.ClientIP() would
+// honor a client-supplied X-Forwarded-For and let an attacker spoof a fresh IP
+// per request, bypassing the per-IP rate limiter.
+func configureTrustedProxies(router *gin.Engine, cfg *config.Config, logger *zerolog.Logger) {
+	// Trim to match Validate, which checks TrimSpace(entry): a padded YAML entry
+	// (" 10.0.0.0/8") passes config validation but gin rejects it as invalid CIDR.
+	proxies := make([]string, 0, len(cfg.Server.TrustedProxies))
+	for _, p := range cfg.Server.TrustedProxies {
+		if p = strings.TrimSpace(p); p != "" {
+			proxies = append(proxies, p)
+		}
+	}
+	if len(proxies) == 0 {
+		_ = router.SetTrustedProxies(nil)
+		return
+	}
+	if err := router.SetTrustedProxies(proxies); err != nil {
+		// Fall back closed rather than trusting everything.
+		logger.Error().Err(err).Strs("trusted_proxies", proxies).
+			Msg("invalid_trusted_proxies_falling_back_to_none")
+		_ = router.SetTrustedProxies(nil)
+	}
+}
+
+// buildPublicEngine returns the external-facing engine: full middleware stack
+// plus the optional inbound rate limit.
 func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
-	// Trust no proxies: gin's default trusts everything, so c.ClientIP() would
-	// honor a client-supplied X-Forwarded-For and let an attacker spoof a fresh
-	// IP per request — bypassing the per-IP rate limiter and growing its map. With
-	// no trusted proxies ClientIP() is the direct peer. A deployment that fronts
-	// this with a known LB and wants real per-IP limiting should instead configure
-	// that LB's CIDR here.
-	_ = router.SetTrustedProxies(nil)
+	configureTrustedProxies(router, cfg, logger)
 	router.Use(logging.RequestIDMiddleware(""))
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())
@@ -223,24 +215,24 @@ func buildPublicEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
 		router.Use(httpmw.HandlerTimeout(to))
 	}
-	if cfg.Server.PprofEnabled {
-		httpmw.RegisterPprof(router)
-	}
 	return router
 }
 
-// buildInternalEngine returns the engine used for the intra-cluster listener.
-// Rate-limit is stripped: callers are trusted pods inside the cluster, not
-// browsers or external clients. Logging, prometheus, recovery and per-handler
-// timeout stay — they protect against runaway internal callers and keep metrics
-// consistent.
+// buildInternalEngine returns the intra-cluster engine. The rate limit is
+// stripped: callers are trusted pods, not browsers.
 func buildInternalEngine(cfg *config.Config, logger *zerolog.Logger) *gin.Engine {
 	router := gin.New()
-	_ = router.SetTrustedProxies(nil) // see buildPublicEngine — never trust client XFF
+	configureTrustedProxies(router, cfg, logger)
 	router.Use(logging.RequestIDMiddleware(""))
 	router.Use(logging.RequestLogger(logger))
 	router.Use(httpmw.PrometheusHTTP())
 	router.Use(gin.Recovery())
+	// pprof discloses stack traces and lets anyone pin a CPU for 30s — internal
+	// listener only. Registered BEFORE the handler timeout so a long profile is
+	// not truncated (gin applies Use() only to routes registered after it).
+	if cfg.Server.PprofEnabled {
+		httpmw.RegisterPprof(router)
+	}
 	if to := cfg.Server.HandlerTimeout.D(); to > 0 {
 		router.Use(httpmw.HandlerTimeout(to))
 	}
@@ -255,10 +247,8 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxLimit:      cfg.Server.MaxQueryLimit,
 		DefaultLimit:  100,
 	}
-	// FA chart service runs over the existing TokenPriceRepository, which
-	// already satisfies CandleRepository (see token_price_repository.go).
-	// Converter is left nil — FA charts don't use ?in= (currency lookup
-	// happens in SQL via quote_currency).
+	// Converter stays nil: FA charts don't use ?in= — currency lookup happens
+	// in SQL via quote_currency.
 	tokenChartsDeps := handlers.TokenChartDeps{
 		Charts: &apiprices.ChartService{
 			Repo:     deps.TokenPriceRepo,
@@ -280,16 +270,12 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 		// ath + price-one-year-ago for /latest; same concrete repo as charts.
 		Stats: deps.RWAPriceRepo,
-		// Lets /v1/rwa/{symbol} and /latest serve primary-market assets, which
-		// have no orderbook pair and would otherwise 404.
+		// Serves primary-market assets, which have no orderbook pair.
 		Launches: launchResolver(deps.LaunchRepo),
 	}
-	// RWA chart service runs over RWAPriceRepository. Converter enables
-	// `?in=<currency>` close-of-bucket FX (see ADR-0015 / ADR-0013); when
-	// FXConverter is nil at the AppDeps level (e.g. CoinGecko key absent
-	// in dev) the chart handler 400s on `?in=` cleanly via preflight.
-	// Shared RWA chart service — reused by the per-symbol chart handlers AND the
-	// /v1/rwa overview list so they hit the same instance.
+	// Shared by the per-symbol chart handlers and the /v1/rwa overview list.
+	// Converter enables `?in=` close-of-bucket FX (ADR-0015 / ADR-0013); nil
+	// makes the chart handler 400 on `?in=` via preflight.
 	rwaChartService := &apiprices.ChartService{
 		Repo:      deps.RWAPriceRepo,
 		Converter: deps.FXConverter,
@@ -304,13 +290,8 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxLimit:      cfg.Server.MaxQueryLimit,
 		DefaultLimit:  100,
 	}
-	// /change endpoints — per design Decision #5, one ChangeService per class
-	// (FT and RWA), each with its own ChangeCache and Kind label so metrics
-	// stay disambiguated. Service composes ChangeRepository + cache + singleflight.
-	// Converter (Decision #19, post-FX-fix) enables `?in=usd,eur,...` on the
-	// RWA change endpoint with at-or-before FX semantics.
-	// Shared RWA change service — reused by /change and the /v1/rwa overview list
-	// (which reads `now` + the 24h anchor from it) so they share its cache.
+	// One ChangeService per class (Decision #5) so metrics stay disambiguated.
+	// The RWA one is shared with the /v1/rwa overview list so both use its cache.
 	rwaChangeService := &apiprices.ChangeService{
 		Repo:  deps.RWAChangeRepo,
 		Cache: apiprices.NewChangeCache(),
@@ -329,15 +310,13 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		RWASource:       prices.SourceEquiteez,
 		MaxInCurrencies: cfg.Server.MaxInCurrencies,
 	}
-	// GET /v1/pairs/rwa — discovery catalog: orderbook pairs unioned with
-	// primary-issuance launches, so clients learn every servable symbol.
+	// GET /v1/pairs/rwa — orderbook pairs unioned with primary-issuance launches.
 	rwaPairsDeps := handlers.RWAPairsDeps{
 		Lookup:   deps.Lookup,
 		Launches: launchLister(deps.LaunchRepo),
 		Source:   prices.SourceEquiteez,
 	}
-	// GET /v1/rwa — market-overview list. Composes the shared RWA change + chart
-	// services and the enabled-pair catalog. 5s response cache amortises the
+	// GET /v1/rwa — market-overview list; the 5s response cache amortises the
 	// per-asset fan-out across dashboard polls.
 	rwaOverviewDeps := handlers.NewRWAOverviewDeps(
 		deps.Lookup,
@@ -355,10 +334,8 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxInCurrencies:  cfg.Server.MaxInCurrencies,
 		TickerStaleAfter: time.Duration(cfg.Server.TickerStaleAfter),
 	}
-	// Legacy /quotes — restored for downstream services that still pin to
-	// the v0.1.0 wide-format route. MVRK + CoinGecko only by design;
-	// hard-coded rather than registry-looked-up so a missing tokens row
-	// doesn't break server startup.
+	// Legacy /quotes — frozen v0.1.0 route. MVRK + CoinGecko are hard-coded
+	// rather than registry-looked-up so a missing tokens row can't break startup.
 	legacyQuotesDeps := handlers.LegacyQuotesDeps{
 		Repo:        repositories.NewLegacyQuoteRepository(deps.DB),
 		TokenSymbol: "mvrk",
@@ -380,9 +357,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 	}
 }
 
-// Run starts both listeners (or just the public one in single-port mode) and
-// blocks until either returns. The first error from either server cancels the
-// errgroup so the caller's Shutdown can drain both cleanly.
+// Run starts the listener(s) and blocks until one of them returns.
 func (a *App) Run() error {
 	g, _ := errgroup.WithContext(context.Background())
 	g.Go(func() error {
@@ -404,8 +379,7 @@ func (a *App) Run() error {
 	return g.Wait()
 }
 
-// Shutdown gracefully stops both listeners in parallel. ctx is shared so a single
-// deadline applies to the whole drain — typical caller passes 30s.
+// Shutdown gracefully stops both listeners in parallel under one shared deadline.
 func (a *App) Shutdown(ctx context.Context) error {
 	g, _ := errgroup.WithContext(ctx)
 	g.Go(func() error { return a.publicServer.Shutdown(ctx) })
@@ -416,7 +390,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 
 // StartDraining flips /readyz to 503 so a load balancer pulls the pod out of
-// rotation before Shutdown stops accepting connections. Idempotent.
+// rotation before Shutdown. Idempotent.
 func (a *App) StartDraining() {
 	if a.readinessGate != nil {
 		a.readinessGate.StartDraining()

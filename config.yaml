@@ -22,23 +22,31 @@ server:
   # excludes stale rows regardless of caller flag.
   ticker_stale_after: "1h"
   pprof_enabled: false
-  # Per-handler ctx timeout (request budget). 0 disables.
+  # Per-handler ctx timeout (request budget). Omitted/0 selects the 10s
+  # default; a NEGATIVE duration disables it. /debug/pprof is exempt.
   handler_timeout: "10s"
   # During shutdown /readyz returns 503 for this many seconds before HTTP shutdown.
   shutdown_drain_seconds: 5
-  # Inbound rate limit. RPS=0 disables.
+  # Inbound rate limit. RPS=0 disables. /healthz and /readyz are exempt.
+  # Env overrides: SERVER_RATE_LIMIT_{RPS,BURST,PER_IP}.
   rate_limit:
     rps: 0
     burst: 0
     per_ip: true
+  # LB/proxy CIDRs whose X-Forwarded-For is honored for per-IP limiting.
+  # Empty = trust no proxy (ClientIP = direct peer). Env: SERVER_TRUSTED_PROXIES.
+  # trusted_proxies: ["10.0.0.0/8"]
 
+# No password / ssl_mode here: this file is baked into the production image.
+# Local dev falls back to the in-code defaults (postgres / prefer); deployed
+# envs must set POSTGRES_PASSWORD (+ POSTGRES_SSL). Nothing enforces this at
+# startup — a missing value silently falls back to the dev default, and release
+# mode only logs a warning.
 database:
   host: "localhost"
   port: "5432"
   user: "postgres"
-  password: "postgres"
   name: "quotes"
-  ssl_mode: "disable"
   # Pool tuning. 0 = driver default; production should set explicit values.
   max_open_conns: 25
   max_idle_conns: 5
@@ -105,7 +113,6 @@ backfill:
 rwa:
   enabled: false
   interval_seconds: 60
-  concurrency: 4
   # How often the Equiteez allowlist is re-read into rwa_pairs. Bounds how long
   # a newly listed asset stays invisible; the collector re-reads rwa_pairs every
   # tick, so no restart is involved. 0 = in-code default (3600).
@@ -136,8 +143,9 @@ tickers:
 #   "mbio-api-gateway", not a URL.
 # - mbio_jwt_audience: optional. MBIO does not currently mint `aud`, so leaving
 #   this empty is the correct default. A startup warn-log fires when empty.
-# - jwt_local_verify_public_key: base64-PEM of an RSA public key for local /
-#   CI verification. When set the middleware skips the JWKS fetch entirely.
+# - jwt_local_verify_public_key: base64-PEM of an RSA public key. When set it
+#   replaces the MBIO JWKS trust anchor in ANY gin mode (nothing refuses it at
+#   startup; the middleware logs a warning), so keep it to local / CI.
 auth:
   # enabled: <intentionally unset — defaults to true/verify; disable via AUTH_ENABLED=false env>
   mbio_jwt_base_url: ""

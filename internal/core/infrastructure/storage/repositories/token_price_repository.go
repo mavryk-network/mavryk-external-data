@@ -201,31 +201,78 @@ func (r *TokenPriceRepository) OldestTimestamp(ctx context.Context, source price
 	return parseSentinel(*ts.MinTs)
 }
 
-// LatestTimestamp returns MAX(ts) across all metrics for (token, source).
-func (r *TokenPriceRepository) LatestTimestamp(ctx context.Context, source prices.Source, tokenSymbol string) (sentinel, error) {
-	var holder struct {
-		MaxTs *string
-	}
-	row := r.db.WithContext(ctx).Raw(
-		`SELECT MAX(ts)::text AS max_ts
-		   FROM token_prices
-		  WHERE token_symbol = ? AND source_code = ?`,
-		tokenSymbol, string(source))
-	if err := row.Scan(&holder).Error; err != nil {
-		return sentinel{}, fmt.Errorf("latest token_prices ts: %w", err)
-	}
-	if holder.MaxTs == nil || *holder.MaxTs == "" {
+// LatestCommonTimestamp returns the newest ts that EVERY metric in `metrics`
+// has reached for (token, source) — MIN over the per-metric MAX(ts), counting
+// only metrics at or after notOlderThan.
+//
+// The LAGGIEST metric is the right anchor for a live catch-up window: the fetch
+// saves partial results, so a global MAX would sit at ~now while one erroring
+// currency's gap never got re-fetched (backfill only walks older than its own
+// cursor). notOlderThan drops a metric upstream has abandoned, so it can't pin
+// the anchor forever; when EVERY metric is beyond it the whole feed was down
+// and the horizon itself is returned. Empty `metrics` yields Found=false.
+//
+// The per-metric LATERAL keeps this an index seek on (token, source, currency);
+// the equivalent GROUP BY scans every chunk in retention.
+func (r *TokenPriceRepository) LatestCommonTimestamp(
+	ctx context.Context,
+	source prices.Source,
+	tokenSymbol string,
+	metrics []string,
+	notOlderThan time.Time,
+) (sentinel, error) {
+	if len(metrics) == 0 {
 		return sentinel{Found: false}, nil
 	}
-	return parseSentinel(*holder.MaxTs)
+	args := make([]any, 0, len(metrics)+3)
+	args = append(args, notOlderThan.UTC())
+	for _, m := range metrics {
+		args = append(args, m)
+	}
+	args = append(args, tokenSymbol, string(source))
+
+	var holder struct {
+		CommonTs *string
+		NewestTs *string
+	}
+	row := r.db.WithContext(ctx).Raw(
+		`SELECT MIN(m.max_ts) FILTER (WHERE m.max_ts >= ?)::text AS common_ts,
+		        MAX(m.max_ts)::text AS newest_ts
+		   FROM (VALUES `+metricValuesFragment(len(metrics))+`) AS c(metric)
+		   CROSS JOIN LATERAL (
+		         SELECT MAX(ts) AS max_ts
+		           FROM token_prices
+		          WHERE token_symbol = ? AND source_code = ?
+		            AND quote_currency = c.metric
+		   ) m`,
+		args...)
+	if err := row.Scan(&holder).Error; err != nil {
+		return sentinel{}, fmt.Errorf("latest common token_prices ts: %w", err)
+	}
+	if holder.CommonTs != nil && *holder.CommonTs != "" {
+		return parseSentinel(*holder.CommonTs)
+	}
+	// Nothing inside the horizon but history exists: the whole feed stalled —
+	// anchor at the horizon so the caller covers what it can.
+	if holder.NewestTs != nil && *holder.NewestTs != "" {
+		return sentinel{Found: true, TS: notOlderThan.UTC()}, nil
+	}
+	return sentinel{Found: false}, nil
 }
 
-// metricFilterFragment renders an optional `AND quote_currency IN (?,?,...)`
-// fragment. Each metric becomes its own placeholder so pgx-via-GORM binds
-// them as scalars; using `= ANY(?)` with a Go []string here would push the
-// whole slice as a single text-array literal and fail with `malformed array
-// literal` (pgx does not auto-wrap slices for raw SQL). All values still
-// flow through prepared-statement parameters — no SQL injection.
+// metricValuesFragment renders `(?::text),(?::text),...` for a VALUES list; the
+// cast pins the column type instead of leaving it to inference across a LATERAL.
+// Returns "" for n <= 0 (invalid SQL — callers must not reach it empty).
+func metricValuesFragment(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("(?::text),", n), ",")
+}
+
+// metricFilterFragment renders an optional `AND quote_currency IN (?,?,...)`.
+// One placeholder per metric: `= ANY(?)` with a Go slice fails as `malformed
+// array literal` (pgx does not auto-wrap slices for raw SQL).
 func metricFilterFragment(metrics []string) string {
 	if len(metrics) == 0 {
 		return ""
@@ -296,9 +343,10 @@ func (r *TokenPriceRepository) QueryCandles(
 		return nil, fmt.Errorf("query %s: %w", src.view, err)
 	}
 
+	// Rows arrive newest-first (see buildCandleSQL); reverse to ascending.
 	out := make([]apiprices.Candle, len(rows))
 	for i, rec := range rows {
-		out[i] = apiprices.Candle{
+		out[len(rows)-1-i] = apiprices.Candle{
 			Bucket:  rec.Bucket.UTC(),
 			Open:    rec.OpenPrice,
 			High:    rec.HighPrice,

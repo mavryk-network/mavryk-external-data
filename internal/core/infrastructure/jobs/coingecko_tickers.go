@@ -89,8 +89,9 @@ func (j *CoinGeckoTickersJob) Start(ctx context.Context) {
 	}
 
 	safeGo(&j.wg, j.logger, "tickers:"+j.tokenSymbol, func() {
-		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "tickers", func(c context.Context) {
-			j.collectOnce(c, tok)
+		// Per-token loop name — same masking rationale as the live job.
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "tickers:"+j.tokenSymbol, func(c context.Context) error {
+			return j.collectOnce(c, tok)
 		})
 	})
 }
@@ -102,9 +103,9 @@ func (j *CoinGeckoTickersJob) Stop() {
 }
 
 // collectOnce fetches the live tickers payload and writes the result.
-func (j *CoinGeckoTickersJob) collectOnce(ctx context.Context, token prices.Token) {
+func (j *CoinGeckoTickersJob) collectOnce(ctx context.Context, token prices.Token) error {
 	if err := ctx.Err(); err != nil {
-		return
+		return err
 	}
 	logger := j.logger.With().Str("token", string(token)).Logger()
 
@@ -119,21 +120,21 @@ func (j *CoinGeckoTickersJob) collectOnce(ctx context.Context, token prices.Toke
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("tickers", string(j.source), string(token), "fetch").Inc()
 		logger.Error().Err(err).Msg("tickers_fetch_failed")
-		return
+		return err
 	}
 
 	now := time.Now().UTC()
 	exchanges, rows := coingecko.MapToTickers(resp, j.source, token, now)
 	if len(rows) == 0 {
 		logger.Debug().Msg("tickers_no_rows_after_mapping")
-		return
+		return nil
 	}
 
 	n, err := j.repo.SaveSnapshot(ctx, exchanges, rows)
 	if err != nil {
 		metrics.JobErrorsTotal.WithLabelValues("tickers", string(j.source), string(token), "save").Inc()
 		logger.Error().Err(err).Msg("tickers_save_failed")
-		return
+		return err
 	}
 	metrics.JobRowsAffectedTotal.
 		WithLabelValues("tickers", string(j.source), string(token)).
@@ -153,4 +154,5 @@ func (j *CoinGeckoTickersJob) collectOnce(ctx context.Context, token prices.Toke
 		Int("rows", len(rows)).
 		Int64("rows_affected", n).
 		Msg("tickers_collected")
+	return nil
 }

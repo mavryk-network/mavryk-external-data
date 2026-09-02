@@ -9,19 +9,63 @@ import (
 func TestFlexibleFloat_UnmarshalJSON(t *testing.T) {
 	for _, tc := range []struct {
 		raw string
-		exp float64
+		exp string
 	}{
-		{`42.5`, 42.5},
-		{`"1000000"`, 1e6},
-		{`null`, 0},
+		{`42.5`, "42.5"},
+		{`"1000000"`, "1000000"},
+		{`null`, "0"},
+		// Exceeds float64's 53-bit exact-integer range — must survive intact.
+		{`"123456789012345678901234567890"`, "123456789012345678901234567890"},
 	} {
 		var f FlexibleFloat
 		if err := json.Unmarshal([]byte(tc.raw), &f); err != nil {
 			t.Fatalf("%s: %v", tc.raw, err)
 		}
-		if f.Float64() != tc.exp {
-			t.Fatalf("%s: got %v want %v", tc.raw, f.Float64(), tc.exp)
+		if f.Decimal().String() != tc.exp {
+			t.Fatalf("%s: got %v want %v", tc.raw, f.Decimal(), tc.exp)
 		}
+	}
+}
+
+// TestFlexibleFloat_TolerateNonFinite: NaN/Inf must decode to a flagged zero
+// rather than erroring — an error fails the whole response, blanking every
+// pair's tick and leaving the backfill cursor unable to pass the batch.
+func TestFlexibleFloat_TolerateNonFinite(t *testing.T) {
+	for _, raw := range []string{`"NaN"`, `"nan"`, `"Inf"`, `"+Inf"`, `"-Infinity"`, `"INFINITY"`} {
+		var f FlexibleFloat
+		if err := json.Unmarshal([]byte(raw), &f); err != nil {
+			t.Errorf("%s: unexpected error %v", raw, err)
+			continue
+		}
+		if !f.NonFinite() {
+			t.Errorf("%s: NonFinite() = false, want true", raw)
+		}
+		if !f.Decimal().IsZero() {
+			t.Errorf("%s: value = %v, want zero", raw, f.Decimal())
+		}
+	}
+}
+
+// Tolerance is narrow: anything else unparseable still errors the decode, so a
+// schema change cannot be silently swallowed as a zero.
+func TestFlexibleFloat_RejectsOtherGarbage(t *testing.T) {
+	for _, raw := range []string{`"abc"`, `"1,5"`, `"0x10"`, `{}`, `[]`} {
+		var f FlexibleFloat
+		if err := json.Unmarshal([]byte(raw), &f); err == nil {
+			t.Errorf("%s: expected error, parsed as %v", raw, f.Decimal())
+		}
+	}
+}
+
+// A legitimate null must NOT be flagged — a never-traded orderbook reports a
+// null last_matched_price, and that is normal, not a dropped value.
+func TestFlexibleFloat_NullIsNotFlagged(t *testing.T) {
+	var f FlexibleFloat
+	if err := json.Unmarshal([]byte(`null`), &f); err != nil {
+		t.Fatalf("null: %v", err)
+	}
+	if f.NonFinite() {
+		t.Error("null must not be flagged as non-finite")
 	}
 }
 
@@ -47,11 +91,11 @@ func TestOrderbookOrder_UnmarshalJSON(t *testing.T) {
 	if o.OrderType != 1 {
 		t.Errorf("order_type = %d, want 1", o.OrderType)
 	}
-	if o.PricePerRWAToken.Float64() != 55_000_000 {
-		t.Errorf("price = %v, want 55_000_000", o.PricePerRWAToken.Float64())
+	if o.PricePerRWAToken.Decimal().String() != "55000000" {
+		t.Errorf("price = %v, want 55000000", o.PricePerRWAToken.Decimal())
 	}
-	if o.FulfilledAmount.Float64() != 2_000_000 {
-		t.Errorf("fulfilled_amount = %v, want 2_000_000", o.FulfilledAmount.Float64())
+	if o.FulfilledAmount.Decimal().String() != "2000000" {
+		t.Errorf("fulfilled_amount = %v, want 2000000", o.FulfilledAmount.Decimal())
 	}
 	if _, err := time.Parse(time.RFC3339, o.EndedAt); err != nil {
 		t.Errorf("ended_at not RFC3339: %v", err)

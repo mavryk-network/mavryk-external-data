@@ -140,9 +140,18 @@ func ProgressPercent(totalBoughtRaw, maxCapRaw string) float64 {
 	if !ok1 || !ok2 || capacity.Sign() <= 0 {
 		return 0
 	}
+	// Before Quo: big.Float parses "Inf" and panics on Inf/Inf, and Sign() of
+	// +Inf is 1 so the cap check above misses it.
+	if total.IsInf() || capacity.IsInf() {
+		return 0
+	}
 	ratio := new(big.Float).Quo(total, capacity)
 	ratio.Mul(ratio, big.NewFloat(100))
 	f, _ := ratio.Float64()
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		// A non-finite float would break json.Marshal of the whole /v1/rwa page.
+		return 0
+	}
 	return math.Round(f*1e10) / 1e10
 }
 

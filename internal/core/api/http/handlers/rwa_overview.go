@@ -18,32 +18,24 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Mini-chart shape for the overview list: last 24h at 15m buckets (~96 close
-// points). Fixed (not query-parameterised) to keep the list payload bounded.
+// Mini-chart shape: last 24h at 15m buckets, fixed rather than
+// query-parameterised so the list payload stays bounded.
 const (
 	overviewSeriesInterval   = apiprices.Interval15m
 	overviewSeriesWindow     = 24 * time.Hour
 	defaultOverviewMaxAssets = 200
-	// overviewConcurrency bounds the per-asset query fan-out. Each asset does one
-	// (cached) change call + one series call; a small pool keeps single-request
-	// latency low without swamping the DB pool when many assets are enabled.
+	// overviewConcurrency bounds the per-asset query fan-out.
 	overviewConcurrency = 8
 
-	// market discriminates how an asset is priced, so a client knows which block
-	// to expect: a live secondary-market (orderbook) quote (+ series/change) or a
-	// fixed primary-market launchpad sale price (+ issuance progress).
+	// market tells a client which block to expect: a live orderbook quote or a
+	// fixed launchpad sale price.
 	marketSecondary = "secondary"
 	marketPrimary   = "primary"
 )
 
 // RWAOverviewDeps wires GET /v1/rwa — the market-overview list of enabled RWA
-// assets. Each asset carries its latest price, 24h change, and a short
-// (24h / 15m) close-price series.
-//
-// It composes the SAME service instances the per-symbol endpoints use: the RWA
-// ChangeService (which returns `now` + the 24h anchor in one cached, singleflight
-// call) and the RWA ChartService (the series). Sharing the instances means the
-// overview shares their caches with /v1/rwa/:symbol/change and /series.
+// assets. It composes the SAME ChangeService and ChartService instances the
+// per-symbol endpoints use, so the overview shares their caches.
 type RWAOverviewDeps struct {
 	Pairs     RWAPairsLister           // enabled asset catalog (EnabledRWAPairs)
 	Launches  RWALaunchLister          // optional: primary-issuance assets (no orderbook)
@@ -51,20 +43,16 @@ type RWAOverviewDeps struct {
 	Charts    *apiprices.ChartService  // required: 24h/15m close series
 	Converter apiprices.PriceConverter // optional; enables `?in=` (single currency)
 	Source    prices.Source            // typically prices.SourceEquiteez
-	// MaxAssets caps how many assets a single response may contain (defends the
-	// per-asset query fan-out). 0 falls back to defaultOverviewMaxAssets.
+	// MaxAssets caps assets per response, defending the fan-out; 0 uses the default.
 	MaxAssets int
 
-	// cache is an optional short-TTL response cache (see NewRWAOverviewDeps).
-	// nil / disabled means every request assembles fresh. Keyed by (limit, in)
-	// so distinct query shapes don't collide.
+	// cache is an optional short-TTL response cache keyed by (limit, in).
 	cache *cache.TTL[rwaOverviewDTO]
 }
 
 // NewRWAOverviewDeps wires the overview handler with an optional short-TTL
-// response cache (cacheTTL <= 0 disables it). The cache amortises the per-asset
-// query fan-out across the near-identical requests a polling dashboard produces;
-// the underlying ChangeService cache still bounds staleness within one build.
+// response cache (cacheTTL <= 0 disables it), which amortises the per-asset
+// fan-out across a polling dashboard's near-identical requests.
 func NewRWAOverviewDeps(
 	pairs RWAPairsLister,
 	launches RWALaunchLister,
@@ -94,15 +82,12 @@ func (d RWAOverviewDeps) maxAssets() int {
 
 // List — GET /v1/rwa
 //
-// Returns the list of enabled RWA assets with dynamic data. Empty catalog
-// returns `{ "assets": [] }`, not 404. Each asset carries its own `price_as_of`;
-// `token_address` is the on-chain RWA token contract (null when not synced yet).
+// Enabled RWA assets with dynamic data; an empty catalog returns
+// `{ "assets": [] }`, not 404.
 //
-// Query params:
 //   - limit (optional) — cap the number of assets; clamped to the server cap.
-//   - in    (optional) — single FX target; converts the latest price (flat
-//     top-level key per asset) and every mini-series point. >1 currency → 400,
-//     mirroring the chart endpoints (the mini-series supports one target).
+//   - in    (optional) — single FX target; converts the latest price and every
+//     mini-series point. >1 currency → 400, mirroring the chart endpoints.
 func (d RWAOverviewDeps) List() gin.HandlerFunc {
 	type request struct {
 		Limit int
@@ -136,26 +121,17 @@ func (d RWAOverviewDeps) List() gin.HandlerFunc {
 	return common.Wrap(bind, action)
 }
 
-// RWALaunchLister supplies primary-issuance assets — tokens sold on the
-// launchpad, which have no orderbook and therefore no rwa_pairs row. Optional:
-// a nil lister simply omits them.
+// RWALaunchLister supplies primary-issuance assets — launchpad tokens with no
+// orderbook and therefore no rwa_pairs row. A nil lister omits them.
 type RWALaunchLister interface {
 	EnabledLaunches(ctx context.Context, source prices.Source) ([]prices.RWALaunch, error)
 }
 
-// assemble builds the catalog: it unions the secondary-market pairs with the
-// primary-market launches, orders and truncates that union, and only then does
-// the per-asset work.
-//
-// Ordering matters. Truncating the pairs first (as an earlier version did) made
-// `limit` structurally unfair: with `limit` orderbook pairs there was no room
-// left and a primary-market asset could never appear, whatever its symbol. It
-// also spent change/series queries on assets the limit then discarded.
-//
-// Assets are keyed by `{base}-{quote}` — NOT by token address. One token can be
-// paired against several quotes (an orderbook in USDT and a launch in another
-// currency are two distinct assets), so an address key would wrongly collapse
-// them into one.
+// assemble unions the secondary-market pairs with the primary-market launches,
+// orders and truncates that union, and only then does the per-asset work —
+// truncating pairs first would make `limit` unfair to primary-market assets.
+// Assets are keyed by `{base}-{quote}`, NOT by token address: one token can be
+// paired against several quotes, which an address key would collapse into one.
 func (d RWAOverviewDeps) assemble(ctx context.Context, limit int, in []prices.Currency) (rwaOverviewDTO, error) {
 	pairs, err := d.Pairs.EnabledRWAPairs(ctx)
 	if err != nil {
@@ -183,9 +159,8 @@ func (d RWAOverviewDeps) assemble(ctx context.Context, limit int, in []prices.Cu
 		}
 		upsert(overviewSymbol(pairs[i])).pair = &pairs[i]
 	}
-	// Launches join the SAME entry when the symbol already trades, so an asset
-	// that is both listed and still in issuance is returned once carrying both
-	// facets instead of silently dropping the issuance.
+	// Launches join the SAME entry when the symbol already trades, so a listed
+	// asset still in issuance is returned once carrying both facets.
 	for _, l := range d.enabledLaunches(ctx) {
 		upsert(l.Symbol()).launch = &l //nolint:exportloopref // Go 1.22 per-iteration variable
 	}
@@ -216,9 +191,8 @@ func (d RWAOverviewDeps) assemble(ctx context.Context, limit int, in []prices.Cu
 			if err != nil {
 				return err
 			}
-			// Both facets: the live market quote stays the top-level price
-			// (`market` remains "secondary"), and the issuance block carries its
-			// own sale price so neither number is lost.
+			// Both facets: the live quote stays the top-level price and the
+			// issuance block carries its own sale price, so neither is lost.
 			if e.launch != nil {
 				asset.Issuance = issuanceBlock(*e.launch)
 			}
@@ -232,9 +206,8 @@ func (d RWAOverviewDeps) assemble(ctx context.Context, limit int, in []prices.Cu
 	return rwaOverviewDTO{Assets: assets}, nil
 }
 
-// enabledLaunches reads the primary-market catalog, degrading to an empty slice.
-// A launch-catalog failure must not fail the whole response: the secondary-market
-// side stays useful and the client simply sees no issuance data this round.
+// enabledLaunches reads the primary-market catalog, degrading to an empty slice:
+// a launch-catalog failure must not fail the whole response.
 func (d RWAOverviewDeps) enabledLaunches(ctx context.Context) []prices.RWALaunch {
 	if d.Launches == nil {
 		return nil
@@ -247,14 +220,8 @@ func (d RWAOverviewDeps) enabledLaunches(ctx context.Context) []prices.RWALaunch
 }
 
 // launchToAsset renders one primary-issuance launch in the same asset shape as
-// an orderbook pair, so a client iterates one list. `market` discriminates the
-// two; series/change stay empty because no trades exist yet.
-//
-// `?in=` applies here exactly as it does to an orderbook quote: a fixed sale
-// price is still a price in the asset's quote currency, so a client asking for
-// USD must get USD. Omitting the conversion made the two market types
-// gratuitously different on the wire — a client had to special-case `primary`
-// and convert the price itself.
+// an orderbook pair, so a client iterates one list; series/change stay empty
+// because no trades exist yet. `?in=` applies here as it does to a quote.
 func (d RWAOverviewDeps) launchToAsset(ctx context.Context, l prices.RWALaunch, in []prices.Currency) rwaOverviewAsset {
 	price := newNum6(l.Price)
 	priceAsOf := nullableRFC3339(l.LastSyncedAt)
@@ -272,20 +239,15 @@ func (d RWAOverviewDeps) launchToAsset(ctx context.Context, l prices.RWALaunch, 
 	}
 	if len(in) > 0 && d.Converter != nil {
 		if quoteToken, resolved := promoteQuoteToken(l.QuoteSymbol); resolved {
-			asset.Converted = convertNowFlat(ctx, d.Converter, quoteToken, in, l.Price, launchFXTime(l))
+			asset.Converted, asset.FX = convertNowFlat(ctx, d.Converter, quoteToken, in, l.Price, launchFXTime(l))
 		}
 	}
 	return asset
 }
 
-// launchFXTime is the timestamp a launch's price is converted at: when we last
-// read the launchpad, which is also the `price_as_of` / `timestamp` the response
-// reports. Converting at that instant keeps a row internally consistent — the
-// native and converted prices describe the same moment.
-//
-// The zero value falls back to now: the converter does an at-or-before lookup,
-// and a zero timestamp predates every FX row, which would silently drop every
-// target instead of using the freshest rate.
+// launchFXTime is when a launch's price converts: the launchpad read time, also
+// the reported `price_as_of`. The zero value falls back to now — an at-or-before
+// lookup against a zero timestamp would drop every target.
 func launchFXTime(l prices.RWALaunch) time.Time {
 	if l.LastSyncedAt.IsZero() {
 		return time.Now()
@@ -302,8 +264,7 @@ func nullableRFC3339Ptr(t *time.Time) *string {
 	return &s
 }
 
-// overviewCacheKey partitions cached responses by the params that shape them:
-// the asset cap and the (≤1) FX target currency.
+// overviewCacheKey partitions cached responses by asset cap and FX target.
 func overviewCacheKey(limit int, in []prices.Currency) string {
 	var b strings.Builder
 	b.WriteString(strconv.Itoa(limit))
@@ -317,8 +278,8 @@ func overviewCacheKey(limit int, in []prices.Currency) string {
 	return b.String()
 }
 
-// buildAsset assembles one asset's dynamic block. Missing data renders as
-// nulls / empty series — the asset still appears in the list.
+// buildAsset assembles one asset's dynamic block; missing data renders as nulls
+// or an empty series and the asset still appears in the list.
 func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, now time.Time, in []prices.Currency) (rwaOverviewAsset, error) {
 	nativeQuote := strings.ToLower(pair.QuoteSymbol)
 	asset := rwaOverviewAsset{
@@ -351,7 +312,7 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 			asset.PriceAsOf = &ts
 			if len(in) > 0 && d.Converter != nil {
 				if quoteToken, resolved := promoteQuoteToken(pair.QuoteSymbol); resolved {
-					asset.Converted = convertNowFlat(ctx, d.Converter, quoteToken, in, cur.Now, cur.NowTS)
+					asset.Converted, asset.FX = convertNowFlat(ctx, d.Converter, quoteToken, in, cur.Now, cur.NowTS)
 				}
 			}
 		}
@@ -362,8 +323,8 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 		}
 	}
 
-	// Mini series (24h / 15m). Unregistered native quote ⇒ drop `?in=` for the
-	// series (no FX source), same silent-drop semantics as the chart endpoint.
+	// Mini series (24h/15m). An unregistered native quote drops `?in=` here —
+	// no FX source — matching the chart endpoint.
 	var sourceToken prices.Token
 	seriesIn := in
 	if t, terr := prices.NewToken(pair.QuoteSymbol); terr == nil {
@@ -395,8 +356,7 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 	return asset, nil
 }
 
-// nilIfEmpty returns nil for an empty string so JSON renders `null` instead of
-// "" (e.g. an RWA pair synced without a token address yet).
+// nilIfEmpty renders an empty string as JSON `null` rather than "".
 func nilIfEmpty(s string) *string {
 	if s == "" {
 		return nil
@@ -415,9 +375,8 @@ type rwaOverviewDTO struct {
 	Assets []rwaOverviewAsset `json:"assets"`
 }
 
-// rwaOverviewAsset is one row of the overview. `?in=` conversions of the latest
-// price inline as flat top-level numeric keys (3-letter ISO codes never collide
-// with the reserved field names), matching /v1/rwa/:symbol/latest.
+// rwaOverviewAsset is one row of the overview. `?in=` conversions inline as flat
+// top-level numeric keys, matching /v1/rwa/:symbol/latest.
 type rwaOverviewAsset struct {
 	Symbol       string
 	Base         string
@@ -431,6 +390,8 @@ type rwaOverviewAsset struct {
 	Change24h    change24hDTO
 	Series       seriesMiniDTO
 	Converted    map[string]num6 // ?in= per-target latest price; nil when absent
+	// FX carries stale-rate flags per converted currency; omitted when fresh.
+	FX map[string]fxMetaDTO
 }
 
 func (a rwaOverviewAsset) MarshalJSON() ([]byte, error) {
@@ -451,31 +412,29 @@ func (a rwaOverviewAsset) MarshalJSON() ([]byte, error) {
 	for cur, v := range a.Converted {
 		out[cur] = v
 	}
+	if len(a.FX) > 0 {
+		out["fx"] = a.FX
+	}
 	return json.Marshal(out)
 }
 
-// change24hDTO is the 24h change block. delta_abs is in the native quote;
-// change_pct is unitless. Both null when the 24h anchor is missing or the
-// baseline price was zero (Decision #10, mirrors /change).
+// change24hDTO is the 24h change block: delta_abs in the native quote,
+// change_pct unitless. Both null when the anchor is missing (Decision #10).
 type change24hDTO struct {
 	DeltaAbs  *num6 `json:"delta_abs"`
 	ChangePct *num6 `json:"change_pct"`
 }
 
-// primaryIssuanceDTO is the launchpad block for an asset in primary issuance.
-// total_bought / max_amount_cap are raw on-chain nat strings (supply-scale
-// values overflow float64, and the client divides by the token's decimals);
-// progress_percent is precomputed server-side because the indexer does not
-// expose it, and stays float so tiny values (2.667e-7) survive.
+// primaryIssuanceDTO is the launchpad block. total_bought / max_amount_cap stay
+// raw on-chain nat strings because supply-scale values overflow float64;
+// progress_percent is computed server-side and stays float so 2.667e-7 survives.
 type primaryIssuanceDTO struct {
 	LaunchID int    `json:"launch_id"`
 	Name     string `json:"name"`
 	Status   string `json:"status"` // active | inactive | paused | closed
 	Active   bool   `json:"active"` // purchasable right now
-	// Price is the base-tier (undiscounted) sale price in the asset's quote
-	// currency. It lives INSIDE this block — not only at the top level — because
-	// an asset that also trades on an orderbook shows the live market quote as
-	// its top-level `price`, and the sale price would otherwise be lost.
+	// Price is the base-tier sale price. It lives INSIDE this block because a
+	// listed asset shows the live quote at the top level.
 	Price           num6    `json:"price"`
 	PriceAsOf       *string `json:"price_as_of"`
 	TotalBought     string  `json:"total_bought"`
@@ -485,8 +444,7 @@ type primaryIssuanceDTO struct {
 	SaleEnd         *string `json:"sale_end"`
 }
 
-// issuanceBlock renders the launch facet of an asset. Shared by the list and the
-// per-symbol endpoints so both describe an issuance identically.
+// issuanceBlock renders the launch facet, shared by the list and per-symbol endpoints.
 func issuanceBlock(l prices.RWALaunch) *primaryIssuanceDTO {
 	return &primaryIssuanceDTO{
 		LaunchID:        l.LaunchID,
@@ -503,9 +461,8 @@ func issuanceBlock(l prices.RWALaunch) *primaryIssuanceDTO {
 	}
 }
 
-// seriesMiniDTO is the short 1-day chart. Reuses SeriesPointDTO ({t,p}, plus
-// flat converted key per point on `?in=`) so clients parse the same point shape
-// as /v1/rwa/:symbol/series.
+// seriesMiniDTO is the short 1-day chart; it reuses SeriesPointDTO so clients
+// parse the same point shape as /v1/rwa/:symbol/series.
 type seriesMiniDTO struct {
 	Interval string           `json:"interval"`
 	Points   []SeriesPointDTO `json:"points"`

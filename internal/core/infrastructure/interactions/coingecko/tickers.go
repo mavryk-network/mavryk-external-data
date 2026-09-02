@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -52,18 +53,25 @@ type TickerMarket struct {
 // Pagination not implemented in v1 — single page is enough for MVRK in
 // foreseeable future. When MVRK is on >100 exchanges, page through `?page=1..`.
 func (c *Client) GetTickers(ctx context.Context, coinID string, includeLogo bool) (*TickersResponse, error) {
-	url := fmt.Sprintf("%s/coins/%s/tickers", c.baseURL, coinID)
-	if includeLogo {
-		url += "?include_exchange_logo=true"
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid coingecko base url %q: %w", c.baseURL, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// PathEscape + host-aware key header — same contract as GetMarketChartRange:
+	// an unescaped coinID could rewrite the request path, and the pro header on
+	// the demo host is rejected outright.
+	joinCoinPath(u, coinID, "tickers")
+	if includeLogo {
+		q := u.Query()
+		q.Set("include_exchange_logo", "true")
+		u.RawQuery = q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create tickers request: %w", err)
 	}
 	req.Header.Set("User-Agent", "mavryk-external-data/1.0")
-	if c.apiKey != "" {
-		req.Header.Set("x-cg-pro-api-key", c.apiKey)
-	}
+	c.setAPIKeyHeader(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("execute tickers request: %w", err)

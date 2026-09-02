@@ -20,10 +20,7 @@ func truncateLaunches(t *testing.T, db *gorm.DB) {
 	require.NoError(t, db.Exec("TRUNCATE TABLE rwa_launches").Error)
 }
 
-// TestLaunchRepository_RoundTrip exercises migration 0016 and the launch SQL
-// against a real TimescaleDB: the NUMERIC(78,0) raw-nat columns, the ON CONFLICT
-// clause, and the case-insensitive symbol lookup. Unit tests cannot cover any of
-// this — they never touch a driver.
+// Migration 0016: NUMERIC(78,0) raw nats, ON CONFLICT, case-insensitive lookup.
 func TestLaunchRepository_RoundTrip(t *testing.T) {
 	db := openGorm(t)
 	truncateLaunches(t, db)
@@ -48,8 +45,7 @@ func TestLaunchRepository_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 
-	// Raw nats must survive the driver round-trip exactly — the whole reason the
-	// columns are NUMERIC(78,0) rather than BIGINT.
+	// Exact raw nats are the whole reason the columns are NUMERIC(78,0).
 	require.Equal(t, "6667", got.TotalBought.String())
 	require.Equal(t, "2500000000000", got.MaxAmountCap.String())
 	require.True(t, got.Price.Equal(decimal.RequireFromString("100")), "price = %s", got.Price)
@@ -65,15 +61,12 @@ func TestLaunchRepository_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found, "symbol lookup must be case-insensitive")
 
-	// A symbol that is not a primary-market asset is a clean miss, not an error.
 	_, found, err = repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "nope", "usdt")
 	require.NoError(t, err)
 	require.False(t, found)
 }
 
-// A supply-scale cap of an 18-decimal token overflows int64. NUMERIC(78,0) must
-// carry it losslessly, and ProgressPercent must still resolve rather than
-// collapsing to 0 or NaN.
+// A supply-scale cap of an 18-decimal token overflows int64.
 func TestLaunchRepository_SupplyScaleAmounts(t *testing.T) {
 	db := openGorm(t)
 	truncateLaunches(t, db)
@@ -116,7 +109,6 @@ func TestLaunchRepository_UpsertPreservesOperatorDisable(t *testing.T) {
 	}
 	require.NoError(t, repo.Upsert(ctx, base, time.Now().UTC()))
 
-	// Operator hides the asset.
 	require.NoError(t, db.Exec(
 		"UPDATE rwa_launches SET enabled = FALSE WHERE token_addr = ?", "KT1OPS").Error)
 
@@ -130,7 +122,7 @@ func TestLaunchRepository_UpsertPreservesOperatorDisable(t *testing.T) {
 		"SELECT enabled FROM rwa_launches WHERE token_addr = ?", "KT1OPS").Scan(&enabled).Error)
 	require.False(t, enabled, "sync must not re-enable an operator-disabled launch")
 
-	// ...and the disabled row stays out of the catalog and the symbol lookup.
+	// ...while the disabled row stays out of the catalog and the symbol lookup.
 	list, err := repo.EnabledLaunches(ctx, prices.SourceEquiteez)
 	require.NoError(t, err)
 	require.Empty(t, list)
@@ -138,17 +130,14 @@ func TestLaunchRepository_UpsertPreservesOperatorDisable(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, found)
 
-	// But the refreshed values did land.
 	var price decimal.Decimal
 	require.NoError(t, db.Raw(
 		"SELECT price FROM rwa_launches WHERE token_addr = ?", "KT1OPS").Scan(&price).Error)
 	require.True(t, price.Equal(decimal.RequireFromString("11")), "price = %s", price)
 }
 
-// TestLaunchRepository_QuoteAddrRoundTrip exercises migration 0018: the
-// payment-token address must survive the driver, and — same preserve contract
-// as rwa_pairs.quote_addr — a later sync whose payment row lost its token ref
-// must NOT wipe a previously-good address.
+// Migration 0018. Same preserve contract as rwa_pairs.quote_addr: a later sync
+// whose payment row lost its token ref must not wipe a good address.
 func TestLaunchRepository_QuoteAddrRoundTrip(t *testing.T) {
 	db := openGorm(t)
 	truncateLaunches(t, db)
@@ -192,8 +181,7 @@ func TestLaunchRepository_QuoteAddrRoundTrip(t *testing.T) {
 	require.Equal(t, "KT1UsdtV2", list[0].QuoteAddr, "the catalog lister must carry the refreshed address")
 }
 
-// EnabledLaunches must return a deterministic, symbol-ordered catalog — the API
-// relies on it for a stable response.
+// The API relies on a stable catalog order.
 func TestLaunchRepository_EnabledLaunchesOrdered(t *testing.T) {
 	db := openGorm(t)
 	truncateLaunches(t, db)
@@ -216,9 +204,8 @@ func TestLaunchRepository_EnabledLaunchesOrdered(t *testing.T) {
 		[]string{list[0].BaseSymbol, list[1].BaseSymbol, list[2].BaseSymbol})
 }
 
-// TestBackfillState_CursorTsRoundTrip exercises migration 0015: the fill-time
-// keyset cursor must survive the driver, and ClearCaughtUp must resume only the
-// legacy caught_up rows while leaving terminal/operator disables alone.
+// Migration 0015: the fill-time keyset cursor must survive the driver, and
+// ClearCaughtUp must resume only caught_up rows, not operator disables.
 func TestBackfillState_CursorTsRoundTrip(t *testing.T) {
 	db := openGorm(t)
 	require.NoError(t, db.Exec("TRUNCATE TABLE backfill_state").Error)
@@ -262,4 +249,86 @@ func TestBackfillState_CursorTsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, manual.Disabled, "an operator disable must survive ClearCaughtUp")
 	require.Equal(t, repositories.BackfillDisabledReasonManual, manual.DisabledReason)
+}
+
+// Rows bricked by the legacy error threshold resume on deploy.
+func TestBackfillState_ClearAutoDisabled(t *testing.T) {
+	db := openGorm(t)
+	require.NoError(t, db.Exec("TRUNCATE TABLE backfill_state").Error)
+	repo := repositories.NewBackfillStateRepository(db)
+	ctx := context.Background()
+
+	require.NoError(t, repo.Upsert(ctx, &repositories.BackfillState{
+		Source: prices.SourceCoinGecko, EntityKey: "mvrk",
+		Disabled: true, DisabledReason: repositories.BackfillDisabledReasonAutoDisabled,
+		ErrorCount: 5, LastError: "coingecko returned status 502",
+	}))
+	require.NoError(t, repo.Upsert(ctx, &repositories.BackfillState{
+		Source: prices.SourceCoinGecko, EntityKey: "usdt",
+		Disabled: true, DisabledReason: repositories.BackfillDisabledReasonManual,
+	}))
+
+	resumed, err := repo.ClearAutoDisabled(ctx, prices.SourceCoinGecko)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), resumed, "only the auto_disabled row should resume")
+
+	back, err := repo.Get(ctx, prices.SourceCoinGecko, "mvrk")
+	require.NoError(t, err)
+	require.False(t, back.Disabled)
+	require.Zero(t, back.ErrorCount)
+	require.Empty(t, back.LastError)
+
+	manual, err := repo.Get(ctx, prices.SourceCoinGecko, "usdt")
+	require.NoError(t, err)
+	require.True(t, manual.Disabled, "an operator disable must survive ClearAutoDisabled")
+}
+
+// Migration 0020: a sync soft-disable is stamped 'sync_missing' and undone when
+// the launch reappears; an operator disable survives the same flow.
+func TestLaunchRepository_SyncDisableReenableCycle(t *testing.T) {
+	db := openGorm(t)
+	truncateLaunches(t, db)
+	repo := repositories.NewLaunchRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	mk := func(addr, base string) prices.RWALaunch {
+		return prices.RWALaunch{
+			Source: prices.SourceEquiteez, TokenAddr: addr, LaunchID: 7,
+			BaseSymbol: base, QuoteSymbol: "usdt", Status: "active",
+			Price:        decimal.RequireFromString("10"),
+			TotalBought:  decimal.Zero,
+			MaxAmountCap: decimal.RequireFromString("100"),
+		}
+	}
+	require.NoError(t, repo.Upsert(ctx, mk("KT1AAA", "aaa"), now))
+	require.NoError(t, repo.Upsert(ctx, mk("KT1BBB", "bbb"), now))
+	require.NoError(t, repo.Upsert(ctx, mk("KT1CCC", "ccc"), now))
+
+	// Operator hides ccc by hand (no reason recorded).
+	require.NoError(t, db.Exec(
+		"UPDATE rwa_launches SET enabled = FALSE WHERE token_addr = ?", "KT1CCC").Error)
+
+	// Sync view no longer contains bbb → sync-disabled with a reason.
+	disabled, err := repo.DisableMissingLaunches(ctx, prices.SourceEquiteez, []string{"KT1AAA"})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), disabled, "only enabled+missing rows are touched")
+
+	list, err := repo.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "aaa", list[0].BaseSymbol)
+
+	// bbb reappears upstream → the sync's own disable is undone on upsert.
+	require.NoError(t, repo.Upsert(ctx, mk("KT1BBB", "bbb"), now.Add(time.Hour)))
+	list, err = repo.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 2, "sync must undo its own soft-disable")
+
+	// ccc also comes through the same sync — operator disable must survive.
+	require.NoError(t, repo.Upsert(ctx, mk("KT1CCC", "ccc"), now.Add(time.Hour)))
+	var enabled bool
+	require.NoError(t, db.Raw(
+		"SELECT enabled FROM rwa_launches WHERE token_addr = ?", "KT1CCC").Scan(&enabled).Error)
+	require.False(t, enabled, "operator disables are never overridden by sync")
 }

@@ -2,7 +2,6 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -24,11 +23,9 @@ func NewLaunchRepository(db *gorm.DB) *LaunchRepository {
 	return &LaunchRepository{db: db}
 }
 
-// Upsert writes one launch, creating the row on first sight.
-//
-// `enabled` is set only on INSERT and never overwritten on conflict — same
-// contract as LookupRepository.UpsertRWAPair: it is the operator's kill-switch,
-// so a routine sync must not resurrect an asset someone deliberately hid.
+// Upsert writes one launch, creating the row on first sight. `enabled` follows
+// the UpsertRWAPair contract: re-set on conflict only for rows the sync itself
+// disabled; operator disables are never resurrected.
 func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now time.Time) error {
 	if l.Source == "" || l.TokenAddr == "" {
 		return fmt.Errorf("launch source and token_addr are required")
@@ -80,14 +77,47 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 	if l.QuoteAddr != "" {
 		updateCols = append(updateCols, "quote_addr")
 	}
+	set := clause.AssignmentColumns(updateCols)
+	set = append(set,
+		clause.Assignment{
+			Column: clause.Column{Name: "enabled"},
+			Value: gorm.Expr("CASE WHEN rwa_launches.disabled_reason = ? THEN TRUE ELSE rwa_launches.enabled END",
+				RWAPairDisabledReasonSyncMissing),
+		},
+		clause.Assignment{
+			Column: clause.Column{Name: "disabled_reason"},
+			Value: gorm.Expr("CASE WHEN rwa_launches.disabled_reason = ? THEN NULL ELSE rwa_launches.disabled_reason END",
+				RWAPairDisabledReasonSyncMissing),
+		},
+	)
 	res := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "source_code"}, {Name: "token_addr"}},
-		DoUpdates: clause.AssignmentColumns(updateCols),
+		DoUpdates: set,
 	}).Create(&e)
 	if res.Error != nil {
 		return fmt.Errorf("upsert rwa_launches: %w", res.Error)
 	}
 	return nil
+}
+
+// DisableMissingLaunches soft-disables enabled launches absent from keepAddrs,
+// stamping 'sync_missing' so a later sync can re-enable them (see Upsert).
+// Callers must pass a keep-set from a complete, non-empty upstream view.
+func (r *LaunchRepository) DisableMissingLaunches(ctx context.Context, source prices.Source, keepAddrs []string) (int64, error) {
+	tx := r.db.WithContext(ctx).Model(&entities.RWALaunchEntity{}).
+		Where("source_code = ? AND enabled = ?", string(source), true)
+	if len(keepAddrs) > 0 {
+		tx = tx.Where("token_addr NOT IN ?", keepAddrs)
+	}
+	res := tx.Updates(map[string]any{
+		"enabled":         false,
+		"disabled_reason": RWAPairDisabledReasonSyncMissing,
+		"updated_at":      time.Now().UTC(),
+	})
+	if res.Error != nil {
+		return 0, fmt.Errorf("disable missing rwa_launches: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // EnabledLaunches returns every enabled launch for `source`, ordered by symbol
@@ -111,20 +141,32 @@ func (r *LaunchRepository) EnabledLaunches(ctx context.Context, source prices.So
 // LaunchBySymbol resolves a `{base}-{quote}` symbol to its enabled launch.
 // Comparison is case-insensitive to match the URL parsing, which lowercases.
 // found=false (not an error) when the symbol is not a primary-market asset, so
-// the caller can keep its own 404.
+// the caller can keep its own 404. Two enabled launches sharing a symbol
+// return PairAmbiguousError (409) — same contract as LookupRWAPairBySymbol —
+// instead of Take()'s planner-dependent arbitrary row.
 func (r *LaunchRepository) LaunchBySymbol(ctx context.Context, source prices.Source, base, quote string) (prices.RWALaunch, bool, error) {
-	var e entities.RWALaunchEntity
+	var rows []entities.RWALaunchEntity
 	err := r.db.WithContext(ctx).
 		Where("source_code = ? AND enabled AND lower(base_symbol) = lower(?) AND lower(quote_symbol) = lower(?)",
 			string(source), base, quote).
-		Take(&e).Error
+		Order("token_addr").
+		Limit(2).
+		Find(&rows).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return prices.RWALaunch{}, false, nil
-		}
 		return prices.RWALaunch{}, false, fmt.Errorf("lookup rwa_launch by symbol: %w", err)
 	}
-	return entityToLaunch(e), true, nil
+	switch len(rows) {
+	case 0:
+		return prices.RWALaunch{}, false, nil
+	case 1:
+		return entityToLaunch(rows[0]), true, nil
+	default:
+		return prices.RWALaunch{}, false, &prices.PairAmbiguousError{
+			Base:  base,
+			Quote: quote,
+			IDs:   []int64{int64(rows[0].LaunchID), int64(rows[1].LaunchID)},
+		}
+	}
 }
 
 func entityToLaunch(e entities.RWALaunchEntity) prices.RWALaunch {

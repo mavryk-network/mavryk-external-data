@@ -3,6 +3,7 @@ package coingecko
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,19 +53,31 @@ func NewClient(cg config.CoinGeckoConfig, api *config.APIConfig, timeout time.Du
 	}
 }
 
-// newHTTPClient constructs the resilient transport stack. Refactoring v2 §3.4
-// — the rate-limiter sits OUTSIDE the logging transport so log latency reflects
-// only network time, not throttling wait. Order (outermost first):
+// newHTTPClient builds the transport stack, outermost first:
 //
-//	rate-limit → logging → retry/CB → response-size guard → pooled transport.
+//	rate-limit → logging → CB → retry → response-size guard → pooled transport.
+//
+// The limiter sits outside logging (so latency reflects network, not throttling
+// wait) and outside the breaker (so it only judges upstream health); logging
+// stays above the breaker so a fast-failed request still logs.
 func newHTTPClient(timeout time.Duration, cg config.CoinGeckoConfig, api *config.APIConfig, log *zerolog.Logger) *http.Client {
 	res := api.OutboundResilience("coingecko")
 	rl := cg.RateLimit.Settings("coingecko")
 	rt := httpclient.MaxBytesReader(httpclient.SharedTransport(), maxBytes(api))
 	rt = httpclient.WrapResilientTransport(rt, res)
+	rt = httpclient.WrapCircuitBreaker(rt, res)
 	rt = &logging.HTTPTransport{Base: rt, Logger: log, Component: "coingecko"}
 	rt = httpclient.WrapRateLimited(rt, rl)
-	return &http.Client{Timeout: timeout, Transport: rt}
+	return &http.Client{Timeout: timeout, Transport: rt, CheckRedirect: httpclient.SameHostRedirectPolicy}
+}
+
+// joinCoinPath appends "/coins/<id>/<suffix>", percent-encoding the id as ONE
+// path segment. Path holds the DECODED form — an escaped string assigned to
+// it alone double-encodes (% → %25); the paired RawPath keeps it correct.
+func joinCoinPath(u *url.URL, coinID, suffix string) {
+	rawBase := strings.TrimRight(u.EscapedPath(), "/")
+	u.Path = strings.TrimRight(u.Path, "/") + "/coins/" + coinID + "/" + suffix
+	u.RawPath = rawBase + "/coins/" + url.PathEscape(coinID) + "/" + suffix
 }
 
 func maxBytes(api *config.APIConfig) int64 {
@@ -74,10 +87,9 @@ func maxBytes(api *config.APIConfig) int64 {
 	return api.OutboundMaxResponseBytes
 }
 
-// setAPIKeyHeader attaches the API key under the header CoinGecko expects for the
-// configured host: the Pro host uses x-cg-pro-api-key, the free/demo host uses
-// x-cg-demo-api-key. Sending the pro header to the demo host (the default
-// api.coingecko.com) is rejected, and demo keys were previously unusable.
+// setAPIKeyHeader picks the header the configured host expects: the Pro host
+// takes x-cg-pro-api-key, the demo host x-cg-demo-api-key. The pro header on
+// the demo host is rejected outright.
 func (c *Client) setAPIKeyHeader(req *http.Request) {
 	if c.apiKey == "" {
 		return
@@ -95,11 +107,9 @@ func (c *Client) GetMarketChartRange(ctx context.Context, coinID, vsCurrency str
 	if err != nil {
 		return nil, fmt.Errorf("invalid coingecko base url %q: %w", c.baseURL, err)
 	}
-	// Escape path/query segments: coinID comes from tokens.cg_id (operator data
-	// today, but any admin/seed tooling could write it). Unescaped, a value with
-	// `/`, `?`, `#` or an authority would rewrite the request path/query sent with
-	// the API-key header attached.
-	u.Path = strings.TrimRight(u.Path, "/") + "/coins/" + url.PathEscape(coinID) + "/market_chart/range"
+	// coinID comes from tokens.cg_id: unescaped, a value with `/`, `?` or `#`
+	// would rewrite the path of a request carrying the API-key header.
+	joinCoinPath(u, coinID, "market_chart/range")
 	q := u.Query()
 	q.Set("vs_currency", vsCurrency)
 	q.Set("from", strconv.FormatInt(from, 10))
@@ -134,16 +144,24 @@ func (c *Client) GetMarketChartRange(ctx context.Context, coinID, vsCurrency str
 	return &result, nil
 }
 
-// GetMultipleCurrencies fetches one window for many vs_currencies. Returns the
-// first error and stops; partial results are dropped (caller logs and retries).
+// GetMultipleCurrencies fetches one window for many vs_currencies. Successful
+// currencies are always returned and failures come back joined in the error, so
+// one dead vs_currency cannot black out the rest; the map is empty only when
+// all failed. The live job saves partials, the backfill treats any error as a
+// failed chunk (its cursor must not skip a currency's history).
 func (c *Client) GetMultipleCurrencies(ctx context.Context, coinID string, currencies []prices.Currency, from, to int64) (map[prices.Currency]*MarketChartRangeResponse, error) {
 	results := make(map[prices.Currency]*MarketChartRangeResponse, len(currencies))
+	var errs []error
 	for _, cur := range currencies {
 		data, err := c.GetMarketChartRange(ctx, coinID, string(cur), from, to)
 		if err != nil {
-			return nil, fmt.Errorf("currency %s: %w", cur, err)
+			errs = append(errs, fmt.Errorf("currency %s: %w", cur, err))
+			continue
 		}
 		results[cur] = data
+	}
+	if len(errs) > 0 {
+		return results, errors.Join(errs...)
 	}
 	return results, nil
 }

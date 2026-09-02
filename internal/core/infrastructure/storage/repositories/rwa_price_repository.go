@@ -106,10 +106,8 @@ func (r *RWAPriceRepository) Query(ctx context.Context, q prices.Query) ([]price
 }
 
 func (r *RWAPriceRepository) latestPerSide(ctx context.Context, pairID int64, q prices.Query) ([]prices.PricePoint, error) {
-	// Build a `side IN (?,?,...)` fragment with one placeholder per metric;
-	// `= ANY(?)` with a Go []string would push the whole slice as a single
-	// text-array literal under pgx/raw-SQL and fail with `malformed array
-	// literal`. All values still flow through prepared-statement parameters.
+	// One placeholder per metric: `= ANY(?)` with a Go slice fails under
+	// pgx/raw-SQL as `malformed array literal`.
 	args := []any{pairID}
 	frag := ""
 	if q.HasMetricFilter() {
@@ -136,23 +134,13 @@ func (r *RWAPriceRepository) latestPerSide(ctx context.Context, pairID int64, q 
 	return out, nil
 }
 
-// QueryCandles serves chart reads for RWA pairs. Every supported interval
-// resolves to a continuous aggregate (`rwa_quote_prices_{1m,1h,1d}`); raw
-// `rwa_quote_prices` is never scanned on the hot path.
+// QueryCandles serves RWA chart reads: every interval resolves to a continuous
+// aggregate (1m/1h/1d direct, 5m/15m/4h re-bucketed at query time), so raw
+// rwa_quote_prices is never scanned on the hot path.
 //
-// AuxKey contract: orderbook side. The chart handler hardcodes `last`; the
-// field stays on the wire so a future spread-analysis endpoint can use
-// bid/ask without a repo refactor. Empty AuxKey is rejected.
-//
-// EntityKey is the decimal pair_id (matching `Save`/`Query`). Anything else
-// is INVALID_ARGUMENT.
-//
-// Source mapping per interval:
-//   - 1m / 1h / 1d → direct CA SELECT.
-//   - 5m / 15m     → re-bucket from rwa_quote_prices_1m at query time.
-//   - 4h           → re-bucket from rwa_quote_prices_1h at query time.
-//
-// ChartService.preflight rejects raw before it gets here.
+// EntityKey is the decimal pair_id; AuxKey is the orderbook side (the chart
+// handler hardcodes `last`). Both are required — anything else is
+// INVALID_ARGUMENT.
 func (r *RWAPriceRepository) QueryCandles(
 	ctx context.Context,
 	q apiprices.CandleQuery,
@@ -195,9 +183,10 @@ func (r *RWAPriceRepository) QueryCandles(
 		return nil, fmt.Errorf("query %s: %w", src.view, err)
 	}
 
+	// Rows arrive newest-first (see buildCandleSQL); reverse to ascending.
 	out := make([]apiprices.Candle, len(rows))
 	for i, rec := range rows {
-		out[i] = apiprices.Candle{
+		out[len(rows)-1-i] = apiprices.Candle{
 			Bucket:  rec.Bucket.UTC(),
 			Open:    rec.OpenPrice,
 			High:    rec.HighPrice,
