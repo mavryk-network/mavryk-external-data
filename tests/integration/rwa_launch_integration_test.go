@@ -216,6 +216,34 @@ func TestLaunchRepository_EnabledLaunchesOrdered(t *testing.T) {
 		[]string{list[0].BaseSymbol, list[1].BaseSymbol, list[2].BaseSymbol})
 }
 
+func TestLaunchRepository_DisableMissing(t *testing.T) {
+	db := openGorm(t)
+	truncateLaunches(t, db)
+	repo := repositories.NewLaunchRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	for _, addr := range []string{"KT1KEEP", "KT1GONE", "KT1HIDDEN"} {
+		require.NoError(t, repo.Upsert(ctx, prices.RWALaunch{
+			Source: prices.SourceEquiteez, TokenAddr: addr, LaunchID: 1,
+			BaseSymbol: addr, QuoteSymbol: "usdt", Status: "active",
+			Price: decimal.RequireFromString("1"), TotalBought: decimal.Zero,
+			MaxAmountCap: decimal.RequireFromString("1"),
+		}, now))
+	}
+	require.NoError(t, db.Exec(
+		"UPDATE rwa_launches SET enabled = FALSE WHERE token_addr = ?", "KT1HIDDEN").Error)
+
+	n, err := repo.DisableMissing(ctx, prices.SourceEquiteez, []string{"KT1KEEP"})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n, "only the enabled delisted row changes")
+
+	list, err := repo.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "KT1KEEP", list[0].TokenAddr)
+}
+
 // TestBackfillState_CursorTsRoundTrip exercises migration 0015: the fill-time
 // keyset cursor must survive the driver, and ClearCaughtUp must resume only the
 // legacy caught_up rows while leaving terminal/operator disables alone.

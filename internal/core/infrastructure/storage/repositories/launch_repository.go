@@ -90,6 +90,21 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 	return nil
 }
 
+// DisableMissing soft-disables enabled launches of `source` whose token is not in
+// `keepTokens`. Upsert never re-enables a row, so the keep set must be complete.
+func (r *LaunchRepository) DisableMissing(ctx context.Context, source prices.Source, keepTokens []string) (int64, error) {
+	tx := r.db.WithContext(ctx).Model(&entities.RWALaunchEntity{}).
+		Where("source_code = ? AND enabled = ?", string(source), true)
+	if len(keepTokens) > 0 {
+		tx = tx.Where("token_addr NOT IN ?", keepTokens)
+	}
+	res := tx.Update("enabled", false)
+	if res.Error != nil {
+		return 0, fmt.Errorf("disable missing rwa_launches: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // EnabledLaunches returns every enabled launch for `source`, ordered by symbol
 // so the API response is deterministic.
 func (r *LaunchRepository) EnabledLaunches(ctx context.Context, source prices.Source) ([]prices.RWALaunch, error) {

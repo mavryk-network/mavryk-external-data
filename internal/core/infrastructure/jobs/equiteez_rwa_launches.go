@@ -32,6 +32,8 @@ const defaultLaunchQuoteDecimals = 6
 // launch and zero orderbooks — so SyncRWAPairs produces no row for it and the
 // collector never sees it.
 //
+// Launches of tokens that left the allowlist are disabled, as in SyncRWAPairs.
+//
 // Returns the number of launches stored. Per-token failures are logged and
 // skipped so one bad launch cannot abort the catalog.
 func SyncRWALaunches(
@@ -106,11 +108,19 @@ func SyncRWALaunches(
 		stored++
 	}
 
+	// Keyed by the allowlist, not the stored rows: a skipped upsert is transient,
+	// a disable is permanent. The empty-allowlist return above guards a resync.
+	disabled, err := launches.DisableMissing(ctx, prices.SourceEquiteez, addresses)
+	if err != nil {
+		return 0, fmt.Errorf("disable delisted launches: %w", err)
+	}
+
 	log.Info().
 		Int("tokens", len(addresses)).
 		Int("launches", len(rows)).
 		Int("stored", stored).
 		Int("skipped", skipped).
+		Int64("disabled_delisted", disabled).
 		Msg("rwa_launch_sync_completed")
 	return stored, nil
 }
