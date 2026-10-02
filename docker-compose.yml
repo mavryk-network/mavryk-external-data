@@ -73,10 +73,14 @@ services:
     # shouldn't be able to starve the host into a restart loop.
     mem_limit: 512m
     ports:
-      - "${SERVER_PORT:-3010}:3010"
+      - "${SERVER_PORT:-3010}:${SERVER_PORT:-3010}"
+      # Internal routes bypass JWT auth, so publish them on loopback only.
+      # This mapping is idle while SERVER_INTERNAL_PORT is unset (no listener).
+      - "127.0.0.1:${SERVER_INTERNAL_PORT:-3011}:${SERVER_INTERNAL_PORT:-3011}"
     environment:
       # Server Configuration
       SERVER_PORT: ${SERVER_PORT:-3010}
+      SERVER_INTERNAL_PORT: ${SERVER_INTERNAL_PORT:-}
       SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
       # Local-dev stack runs gin debug mode explicitly: with no
       # SERVER_INTERNAL_PORT set, debug is what keeps /metrics mounted on the
@@ -89,6 +93,12 @@ services:
       # carry this into a production deploy — leave AUTH_ENABLED unset there so the
       # RWA routes require a token on the public listener.
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_MBIO_API_GATEWAY_BASE_URL: ${AUTH_MBIO_API_GATEWAY_BASE_URL:-}
+      AUTH_MBIO_JWT_BASE_URL: ${AUTH_MBIO_JWT_BASE_URL:-}
+      AUTH_MBIO_JWT_ISSUER: ${AUTH_MBIO_JWT_ISSUER:-}
+      AUTH_MBIO_JWT_AUDIENCE: ${AUTH_MBIO_JWT_AUDIENCE:-}
+      AUTH_JWKS_CACHE_TTL: ${AUTH_JWKS_CACHE_TTL:-}
+      AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY: ${AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY:-}
 
       # Database Configuration
       POSTGRES_HOST: postgres
@@ -115,6 +125,37 @@ services:
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-api_key}
       COINGECKO_BASE_URL: ${COINGECKO_BASE_URL:-https://api.coingecko.com/api/v3}
 
+      # Equiteez clients and live RWA discovery/collection. Compose's .env is
+      # used for interpolation only; each application variable must be passed.
+      # Empty optional values keep config.yaml / application defaults intact.
+      EQUITEEZ_INDEXER_URL: ${EQUITEEZ_INDEXER_URL:-}
+      EQUITEEZ_INDEXER_PASSWORD: ${EQUITEEZ_INDEXER_PASSWORD:-}
+      EQUITEEZ_RATE_LIMIT_RPS: ${EQUITEEZ_RATE_LIMIT_RPS:-}
+      EQUITEEZ_RATE_LIMIT_BURST: ${EQUITEEZ_RATE_LIMIT_BURST:-}
+      RWA_ENABLED: ${RWA_ENABLED:-false}
+      RWA_INTERVAL_SECONDS: ${RWA_INTERVAL_SECONDS:-}
+      RWA_PAIR_SYNC_INTERVAL_SECONDS: ${RWA_PAIR_SYNC_INTERVAL_SECONDS:-}
+
+      # Historical Equiteez ingestion is opt-in, independently of live RWA.
+      EQUITEEZ_BACKFILL_ENABLED: ${EQUITEEZ_BACKFILL_ENABLED:-false}
+      EQUITEEZ_BACKFILL_START_FROM: ${EQUITEEZ_BACKFILL_START_FROM:-}
+      EQUITEEZ_BACKFILL_TICK_SECONDS: ${EQUITEEZ_BACKFILL_TICK_SECONDS:-}
+      EQUITEEZ_BACKFILL_BATCH_SIZE: ${EQUITEEZ_BACKFILL_BATCH_SIZE:-}
+      EQUITEEZ_BACKFILL_JITTER_MS: ${EQUITEEZ_BACKFILL_JITTER_MS:-}
+      EQUITEEZ_BACKFILL_MAX_ERRORS: ${EQUITEEZ_BACKFILL_MAX_ERRORS:-}
+      EQUITEEZ_BACKFILL_BACKOFF_INITIAL_MS: ${EQUITEEZ_BACKFILL_BACKOFF_INITIAL_MS:-}
+      EQUITEEZ_BACKFILL_BACKOFF_MAX_MS: ${EQUITEEZ_BACKFILL_BACKOFF_MAX_MS:-}
+      EQUITEEZ_BACKFILL_MAX_BACKOFF_MS: ${EQUITEEZ_BACKFILL_MAX_BACKOFF_MS:-}
+
+      # Per-exchange ticker collection and its independent cache settings.
+      TICKERS_ENABLED: ${TICKERS_ENABLED:-false}
+      TICKERS_TOKEN_SYMBOL: ${TICKERS_TOKEN_SYMBOL:-}
+      TICKERS_INTERVAL_SECONDS: ${TICKERS_INTERVAL_SECONDS:-}
+      TICKERS_HTTP_TIMEOUT: ${TICKERS_HTTP_TIMEOUT:-}
+      TICKERS_INCLUDE_EXCHANGE_LOGO: ${TICKERS_INCLUDE_EXCHANGE_LOGO:-}
+      TICKERS_CACHE_LATEST_TTL_SECONDS: ${TICKERS_CACHE_LATEST_TTL_SECONDS:-}
+      TICKERS_CACHE_DISTRIBUTION_TTL_SECONDS: ${TICKERS_CACHE_DISTRIBUTION_TTL_SECONDS:-}
+
       # Backfill configuration
       BACKFILL_ENABLED: ${BACKFILL_ENABLED:-false}
       BACKFILL_START_FROM: ${BACKFILL_START_FROM:-}
@@ -128,7 +169,7 @@ services:
     networks:
       - mavryk-external-data-network
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3010/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:${SERVER_PORT:-3010}/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
