@@ -26,7 +26,11 @@ const defaultLaunchQuoteDecimals = 6
 // SyncRWALaunches mirrors the Equiteez launchpad into `rwa_launches`, storing
 // each allowlisted token's base-tier price and sale progress. This is what
 // makes a primary-issuance asset (no orderbook, so SyncRWAPairs never sees it)
-// visible to GET /v1/rwa. Per-token failures are logged and skipped.
+// visible to GET /v1/rwa. A successful, non-empty sync disables delisted tokens
+// and launches explicitly returned without a usable price. Still-allowlisted
+// tokens omitted from a partial launches response keep their stored state.
+// Per-token failures are logged and skip that disable pass; failure of every
+// upsert is returned to the caller so the job cannot report a healthy tick.
 func SyncRWALaunches(
 	ctx context.Context,
 	cfg *config.Config,
@@ -84,7 +88,15 @@ func SyncRWALaunches(
 	now := time.Now().UTC()
 	byToken := groupLaunchesByToken(rows)
 	stored, skipped, upsertFailed := 0, 0, 0
-	keepAddrs := make([]string, 0, len(byToken))
+	// Keep the union of successfully refreshed launches and allowlisted tokens
+	// absent from the launch response: an omitted join is not a delisting.
+	// Explicitly returned but unusable launches stay out of this keep-set.
+	keepAddrs := make([]string, 0, len(addresses))
+	for _, addr := range addresses {
+		if _, present := byToken[addr]; !present {
+			keepAddrs = append(keepAddrs, addr)
+		}
+	}
 	for addr, tokenRows := range byToken {
 		launch, ok := buildLaunch(tokenRows, baseSymbols[addr], now)
 		if !ok {
@@ -103,15 +115,16 @@ func SyncRWALaunches(
 		stored++
 	}
 
-	// Same completeness guard as the pair sync: an empty/failed view must not
-	// wipe the catalog. Disables are undone by the next sync that sees them.
+	// Same completeness guard as the pair sync: require a successful write,
+	// not just preserved addresses, so an empty/failed view cannot wipe the
+	// catalog. Disables are undone by the next sync that sees them.
 	var disabled int64
-	if shouldDisableMissingPairs(len(tokens), len(keepAddrs), upsertFailed) {
+	if shouldDisableMissingPairs(len(tokens), stored, upsertFailed) {
 		disabled, err = launches.DisableMissingLaunches(ctx, prices.SourceEquiteez, keepAddrs)
 		if err != nil {
 			return 0, fmt.Errorf("disable missing launches: %w", err)
 		}
-	} else if upsertFailed > 0 || len(keepAddrs) == 0 {
+	} else if upsertFailed > 0 || stored == 0 {
 		log.Warn().
 			Int("tokens", len(tokens)).
 			Int("stored", stored).
@@ -130,7 +143,7 @@ func SyncRWALaunches(
 
 	// Upstream had launches and none landed (DB refusing writes): report it
 	// so the tick doesn't stamp a last-success — same contract as SyncRWAPairs.
-	if upsertFailed > 0 && len(keepAddrs) == 0 {
+	if upsertFailed > 0 && stored == 0 {
 		return 0, fmt.Errorf("rwa launch sync: all %d upserts failed", upsertFailed)
 	}
 	return stored, nil
