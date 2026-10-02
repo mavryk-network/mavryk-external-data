@@ -44,6 +44,7 @@ type RWAPairEntity struct {
 	OrderbookAddr       *string    `gorm:"column:orderbook_addr"`
 	EquiteezOrderbookID *int32     `gorm:"column:equiteez_orderbook_id"`
 	Enabled             bool       `gorm:"column:enabled;not null"`
+	DisabledReason      *string    `gorm:"column:disabled_reason"`
 	LastSyncedAt        *time.Time `gorm:"column:last_synced_at"`
 	CreatedAt           time.Time  `gorm:"column:created_at;<-:false"`
 }

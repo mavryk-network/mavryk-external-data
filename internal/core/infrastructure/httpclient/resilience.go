@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -62,25 +63,32 @@ func (s ResilienceSettings) Normalized() ResilienceSettings {
 	return out
 }
 
-// WrapResilientTransport returns base wrapped with retry, then optionally a circuit breaker (outermost).
-// Order: circuit breaker → retry → counter → base.
-// The counter sits inside retry so each attempt (including retries) increments
-// outbound_http_requests_total — `total - outbound_http_retries_total` then
-// gives logical-request count.
+// WrapResilientTransport wraps base with retry → counter → base. The counter
+// sits inside retry so every attempt increments outbound_http_requests_total.
+// The circuit breaker is applied separately (see WrapCircuitBreaker).
 func WrapResilientTransport(base http.RoundTripper, s ResilienceSettings) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	s = s.Normalized()
 	counted := WrapCounted(base, s.Component)
-	if s.CircuitBreakerDisabled && s.RetryMaxAttempts == 1 {
+	if s.RetryMaxAttempts == 1 {
 		return counted
 	}
-	rt := http.RoundTripper(&retryTransport{next: counted, s: s})
-	if !s.CircuitBreakerDisabled {
-		rt = newCircuitBreakerRoundTripper(s, rt)
+	return &retryTransport{next: counted, s: s}
+}
+
+// WrapCircuitBreaker wraps rt with the component's shared breaker (no-op when
+// disabled). Must be applied UNDER the rate limiter: gobreaker counts every
+// non-nil error as an upstream failure, so a limiter Wait that fast-fails
+// would trip the breaker on purely self-inflicted throttling. The cost is that
+// an open breaker still spends a limiter token before fast-failing.
+func WrapCircuitBreaker(rt http.RoundTripper, s ResilienceSettings) http.RoundTripper {
+	s = s.Normalized()
+	if s.CircuitBreakerDisabled {
+		return rt
 	}
-	return rt
+	return newCircuitBreakerRoundTripper(s, rt)
 }
 
 func shouldRetryHTTPStatus(code int) bool {
@@ -232,14 +240,16 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if attempt >= attempts || !retryableErr(err) {
 				return nil, err
 			}
-			if comp != "" {
-				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
-			}
+			// Failing to stage the retry is OUR constraint, not the upstream's:
+			// surface the upstream error so the breaker judges only upstream.
 			if werr := waitContext(req.Context(), bo.NextBackOff()); werr != nil {
-				return nil, werr
+				return nil, err
 			}
 			if werr := limiterWait(req.Context(), lim, comp); werr != nil {
-				return nil, werr
+				return nil, err
+			}
+			if comp != "" {
+				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
 			}
 			continue
 		}
@@ -247,21 +257,23 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if attempt >= attempts {
 				return resp, nil
 			}
-			// Honor Retry-After (delta-seconds or HTTP-date) on 429/503 instead
-			// of blind exponential backoff; fall back to backoff when absent.
+			// Retry-After (delta-seconds or HTTP-date) wins over backoff.
 			wait := bo.NextBackOff()
 			if ra := retryAfter(resp); ra > 0 {
 				wait = ra
 			}
-			_ = resp.Body.Close()
-			if comp != "" {
-				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
-			}
+			// Buffer and close BEFORE waiting: an unclosed body pins its pooled
+			// connection for the whole (minutes-long) Retry-After. The copy
+			// keeps the response returnable if the retry can't be staged.
+			bufferErrorBody(resp)
 			if werr := waitContext(req.Context(), wait); werr != nil {
-				return nil, werr
+				return resp, nil
 			}
 			if werr := limiterWait(req.Context(), lim, comp); werr != nil {
-				return nil, werr
+				return resp, nil
+			}
+			if comp != "" {
+				metrics.OutboundHTTPRetriesTotal.WithLabelValues(comp).Inc()
 			}
 			continue
 		}
@@ -278,7 +290,39 @@ type circuitBreakerRoundTripper struct {
 	next http.RoundTripper
 }
 
-func newCircuitBreakerRoundTripper(s ResilienceSettings, next http.RoundTripper) http.RoundTripper {
+// sharedBreakers holds one breaker per component (mirroring sharedLimiters):
+// per-instance breakers would each need their own failure streak to trip, and
+// a client rebuilt per tick could never trip at all. First construction wins.
+var (
+	sharedBreakersMu sync.Mutex
+	sharedBreakers   = map[string]*gobreaker.CircuitBreaker{}
+)
+
+func sharedBreaker(s ResilienceSettings) *gobreaker.CircuitBreaker {
+	if s.Component == "" {
+		return newBreaker(s) // isolated (tests)
+	}
+	sharedBreakersMu.Lock()
+	defer sharedBreakersMu.Unlock()
+	if cb, ok := sharedBreakers[s.Component]; ok {
+		return cb
+	}
+	cb := newBreaker(s)
+	sharedBreakers[s.Component] = cb
+	return cb
+}
+
+// ResetSharedBreakers clears the registry so breakers start closed again.
+// Test helper (mirrors ResetSharedLimiters); production never calls it.
+func ResetSharedBreakers() {
+	sharedBreakersMu.Lock()
+	defer sharedBreakersMu.Unlock()
+	for k := range sharedBreakers {
+		delete(sharedBreakers, k)
+	}
+}
+
+func newBreaker(s ResilienceSettings) *gobreaker.CircuitBreaker {
 	st := gobreaker.Settings{}
 	st.Name = s.Component
 	st.MaxRequests = s.CBHalfOpenMaxRequests
@@ -295,19 +339,19 @@ func newCircuitBreakerRoundTripper(s ResilienceSettings, next http.RoundTripper)
 		metrics.OutboundHTTPCircuitBreakerTransitionsTotal.WithLabelValues(comp, from.String(), to.String()).Inc()
 		metrics.OutboundHTTPCircuitBreakerState.WithLabelValues(comp).Set(cbStateValue(to))
 	}
-	// Initial state — gobreaker starts closed; record so the gauge isn't blank
-	// until the first failure.
+	// Seed the gauge so it isn't blank until the first failure.
 	metrics.OutboundHTTPCircuitBreakerState.WithLabelValues(comp).Set(cbStateValue(gobreaker.StateClosed))
+	return gobreaker.NewCircuitBreaker(st)
+}
+
+func newCircuitBreakerRoundTripper(s ResilienceSettings, next http.RoundTripper) http.RoundTripper {
 	return &circuitBreakerRoundTripper{
-		cb:   gobreaker.NewCircuitBreaker(st),
+		cb:   sharedBreaker(s),
 		next: next,
 	}
 }
 
-// cbStateValue maps gobreaker states to numeric gauge values so dashboards can
-// render "current state" without joining transition counters.
-//
-//	0 = closed, 1 = open, 2 = half-open
+// cbStateValue maps breaker states to gauge values: 0 closed, 1 open, 2 half-open.
 func cbStateValue(s gobreaker.State) float64 {
 	switch s {
 	case gobreaker.StateOpen:
@@ -319,16 +363,36 @@ func cbStateValue(s gobreaker.State) float64 {
 	}
 }
 
-// errUpstream5xx is an internal sentinel: the callback returns it alongside a
-// real 5xx response so gobreaker records a failure, then RoundTrip unwraps it and
-// hands the caller the real response. Without this the breaker only ever sees
-// transport-level errors and never opens against an upstream that is hard-down
-// but still answering 500/503.
+const maxBufferedErrorBody = 32 << 10
+
+// bufferErrorBody swaps resp.Body for an in-memory copy and closes the
+// original, releasing its pooled connection across the retry wait.
+func bufferErrorBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	buf, _ := io.ReadAll(io.LimitReader(resp.Body, maxBufferedErrorBody))
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(buf))
+	// A truncated body under the original ContentLength mis-frames Response.Write.
+	resp.ContentLength = int64(len(buf))
+}
+
+// errUpstream5xx makes gobreaker count a 5xx as a failure; RoundTrip unwraps it
+// and returns the real response. Without it the breaker never opens against an
+// upstream that is hard-down but still answering 500/503.
 var errUpstream5xx = errors.New("upstream returned 5xx (counted as circuit-breaker failure)")
 
 func (c *circuitBreakerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if c.next == nil {
 		c.next = http.DefaultTransport
+	}
+	// An already-cancelled caller (job shutdown, expired tick budget) says
+	// nothing about upstream health. Fail before Execute so gobreaker — which
+	// has no "neutral" outcome — does not record it as a failure and inch the
+	// shared breaker toward tripping during an ordinary drain.
+	if err := req.Context().Err(); err != nil {
+		return nil, err
 	}
 	v, err := c.cb.Execute(func() (interface{}, error) {
 		resp, rerr := c.next.RoundTrip(req)

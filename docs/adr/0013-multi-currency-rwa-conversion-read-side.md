@@ -1,8 +1,15 @@
 # ADR-0013: Multi-currency RWA conversion is read-side, not stored
 
-- **Status**: Accepted
+- **Status**: Accepted (wire shape superseded)
 - **Date**: 2026-04-28
 - **Deciders**: backend team
+
+> **Supersession note (2026-08):** the read-side conversion decision stands,
+> but the wrapped `{values, in.<target>.{values,fx}}` wire shape described
+> below was replaced by flat top-level numeric keys per converted currency
+> (plus an `fx` block only for stale rates). The `RWAExtendedSnapshot` /
+> `ConvertedSnapshotBlock` / `FXMeta` schema names never shipped — see
+> `RWAPrice` in `docs/openapi.yaml` for the actual contract.
 
 ## Context
 

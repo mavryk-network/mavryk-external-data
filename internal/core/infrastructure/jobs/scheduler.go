@@ -5,6 +5,8 @@ package jobs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -16,25 +18,25 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// runTickerLoop runs `tick` once immediately, then on every interval, until the
-// context is cancelled or the stop channel closes. Centralizes the boilerplate
-// each job otherwise duplicates (immediate first call, ticker, ctx-aware exit,
-// per-tick correlation id).
+// runTickerLoop runs `tick` immediately, then every interval, until ctx is
+// cancelled or stopCh closes. jitter (> 0) delays the FIRST tick by a random
+// duration in [0, jitter) so replicas don't hammer upstream in lockstep.
 //
-// jitter (when > 0) delays the FIRST tick by a random duration in [0, jitter) —
-// good practice for multi-replica deployments to avoid synchronized hammering of
-// upstream on a coordinated restart.
-//
-// Each tick gets a fresh `tick_id` (uuid) propagated via context so all log
-// lines emitted while the tick is running can be correlated post-hoc.
+// A tick returns an error when it could not do its work; only a successful one
+// advances metrics.JobLastSuccessTimestamp, so its staleness alert can see a
+// dead upstream.
 func runTickerLoop(
 	ctx context.Context,
 	stopCh <-chan struct{},
 	interval, jitter time.Duration,
 	logger *zerolog.Logger,
 	name string,
-	tick func(ctx context.Context),
+	tick func(ctx context.Context) error,
 ) {
+	// Seed BEFORE the jitter sleep: a GaugeVec with no children is absent from
+	// /metrics entirely, so a from-boot outage could not alert.
+	metrics.JobLastSuccessTimestamp.WithLabelValues(name).SetToCurrentTime()
+
 	if jitter > 0 {
 		// [0, jitter): a ±jitter offset around a common start point collapsed to
 		// zero delay ~half the time, defeating the anti-thundering-herd purpose.
@@ -48,7 +50,8 @@ func runTickerLoop(
 		}
 	}
 
-	runTickWithCorrelation(ctx, logger, name, tick)
+	budget := tickBudget(interval)
+	runTickWithCorrelation(ctx, budget, logger, name, tick)
 
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -65,23 +68,39 @@ func runTickerLoop(
 			}
 			return
 		case <-t.C:
-			runTickWithCorrelation(ctx, logger, name, tick)
+			runTickWithCorrelation(ctx, budget, logger, name, tick)
 		}
 	}
 }
 
+// tickBudget bounds one tick — without it a TCP black hole stalls the job
+// forever and Stop() blocks until SIGKILL. max(2×interval, 5m) keeps
+// slow-but-progressing work from being cut.
+func tickBudget(interval time.Duration) time.Duration {
+	const floor = 5 * time.Minute
+	if b := 2 * interval; b > floor {
+		return b
+	}
+	return floor
+}
+
+// defaultJitter staggers the first tick across replicas.
+func defaultJitter(interval time.Duration) time.Duration {
+	return interval / 10
+}
+
 // runTickWithCorrelation injects a fresh tick_id into ctx (re-using the
-// request_id key so logging.RequestLogger and HTTPTransport pick it up
-// transparently) and recovers from a panic in the tick.
-//
-// The recover MUST live here, per-tick, not only in safeGo: a panic that
-// unwinds past this frame terminates the whole ticker goroutine, silently
-// stopping the job (for the shared backfill goroutine, ALL tokens/pairs) until
-// process restart. Recovering per tick logs + counts the panic and lets the
-// loop keep running; safeGo's recover stays as a last resort.
-func runTickWithCorrelation(ctx context.Context, logger *zerolog.Logger, name string, tick func(context.Context)) {
+// request_id key, so the logger and HTTPTransport pick it up) and recovers
+// panics PER TICK — a panic unwinding past this frame would kill the ticker
+// goroutine and silently stop the job until restart.
+func runTickWithCorrelation(ctx context.Context, timeout time.Duration, logger *zerolog.Logger, name string, tick func(context.Context) error) {
 	tickID := "tick-" + uuid.NewString()
 	tickCtx := logging.WithRequestID(ctx, tickID)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		tickCtx, cancel = context.WithTimeout(tickCtx, timeout)
+		defer cancel()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.JobTickPanicsTotal.WithLabelValues(name).Inc()
@@ -90,7 +109,56 @@ func runTickWithCorrelation(ctx context.Context, logger *zerolog.Logger, name st
 			}
 		}
 	}()
-	tick(tickCtx)
+	if err := tick(tickCtx); err != nil {
+		if logger != nil {
+			// A cancelled tick is an ordinary shutdown drain, not an incident —
+			// keep it out of the warning stream, but still withhold the stamp.
+			level := logger.Warn()
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				level = logger.Debug()
+			}
+			level.Err(err).Str("job", name).Str("tick_id", tickID).Msg("job_tick_unsuccessful")
+		}
+		return
+	}
+	metrics.JobLastSuccessTimestamp.WithLabelValues(name).SetToCurrentTime()
+}
+
+// tickOutcome tallies per-entity results so a tick walking many entities can
+// report one verdict. Skips abstain rather than counting as successes: they are
+// permanent states here (a token at its floor skips forever), and one finished
+// token must not keep the last-success gauge fresh while the rest fail.
+type tickOutcome struct {
+	worked  int
+	failed  int
+	skipped int
+}
+
+func (o *tickOutcome) record(err error) {
+	switch {
+	case err == nil:
+		o.worked++
+	case errors.Is(err, errBackfillSkipped):
+		o.skipped++
+	default:
+		o.failed++
+	}
+}
+
+// verdict fails only when NOTHING got through. Partial success is progress, or
+// one broken entity would mask every healthy one behind the same job.
+func (o tickOutcome) verdict(ctx context.Context, what string) error {
+	if o.worked > 0 {
+		return nil
+	}
+	if o.failed > 0 {
+		return fmt.Errorf("%s: all %d acting entities failed", what, o.failed)
+	}
+	if o.skipped > 0 {
+		return nil // nothing to do this tick
+	}
+	// Nothing attempted: no work at all (nil), or cancelled before starting.
+	return ctx.Err()
 }
 
 // safeGo runs f in a new goroutine with panic-recovery, logging the panic via

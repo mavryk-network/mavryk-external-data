@@ -35,7 +35,7 @@ Status values:
 |------|-------|--------|
 | [0001](0001-long-format-price-storage.md) | Long-format price storage in TimescaleDB | Accepted |
 | [0002](0002-two-domain-tables-ft-vs-rwa.md) | Two domain tables (`token_prices`, `rwa_quote_prices`) | Accepted |
-| [0003](0003-decimal-for-numeric-precision.md) | `shopspring/decimal` for monetary values | Accepted |
+| [0003](0003-decimal-for-numeric-precision.md) | `shopspring/decimal` for monetary values | Partially superseded (wire format is 6-dp JSON numbers) |
 | [0004](0004-migration-tool-psql-loop.md) | Plain-SQL migrations via Makefile psql-loop | Accepted (revisit after 12 months) |
 | [0005](0005-orm-keep-gorm.md) | Keep GORM (defer `sqlc` migration) | Accepted (revisit if SQL surface grows) |
 | [0006](0006-generic-handler-wrap.md) | Generic `Wrap[Req, Res]` HTTP handler adapter | Accepted |
@@ -44,12 +44,11 @@ Status values:
 | [0009](0009-inbound-rate-limit-in-process.md) | In-process inbound rate limiter | Accepted |
 | [0010](0010-runtime-token-registry.md) | Token registry loaded from DB at startup | Accepted |
 | [0011](0011-openapi-3-hand-written.md) | Hand-written OpenAPI 3.0 spec; drop `swaggo/swag` | Accepted |
-| [0012](0012-rwa-pair-discovery-and-normalization.md) | RWA pair discovery from Equiteez allowlist + price normalization via `tokens.decimals` | Accepted |
-| [0013](0013-multi-currency-rwa-conversion-read-side.md) | Multi-currency RWA conversion is read-side, not stored (`?in=`) | Accepted |
+| [0012](0012-rwa-pair-discovery-and-normalization.md) | RWA pair discovery from Equiteez allowlist + price normalization via `tokens.decimals` | Accepted (sync cadence superseded: hourly, not one-shot) |
+| [0013](0013-multi-currency-rwa-conversion-read-side.md) | Multi-currency RWA conversion is read-side, not stored (`?in=`) | Accepted (wire shape superseded: flat keys) |
 | [0014](0014-rwa-backfill-via-orderbook-order.md) | RWA backfill via `orderbook_order` event log (last-only, forward cursor) | Accepted |
+| [0015](0015-charts-line-ohlc-ohlcv.md) | Chart endpoints (series/OHLC) from continuous aggregates | Proposed |
 
 ## Related
 
-- [Upgrade plan](../../upgrade-plan.md) — the greenfield blueprint these ADRs codify.
-- [Refactoring v2](../../refactoring_v2.md) — open follow-ups and anti-goals.
-- [Working notes](../notes/) — design discussions that pre-dated the ADRs (informal).
+- [docs/openapi.yaml](../openapi.yaml) — the API contract these decisions produce.

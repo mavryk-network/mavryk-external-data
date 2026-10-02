@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -43,6 +44,41 @@ func overrideWithEnv(config *Config) error {
 		}
 		config.Server.LatestQuoteCacheTTLSeconds = val
 	}
+	if v := os.Getenv("SERVER_RATE_LIMIT_RPS"); v != "" {
+		val, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("SERVER_RATE_LIMIT_RPS: invalid float %q: %w", v, err)
+		}
+		// ParseFloat accepts NaN/Inf; rate.Limit(NaN) would 429 ALL traffic.
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			return fmt.Errorf("SERVER_RATE_LIMIT_RPS: must be a finite number, got %q", v)
+		}
+		config.Server.RateLimit.RPS = val
+	}
+	if v := os.Getenv("SERVER_RATE_LIMIT_BURST"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("SERVER_RATE_LIMIT_BURST: invalid int %q: %w", v, err)
+		}
+		config.Server.RateLimit.Burst = val
+	}
+	if v := os.Getenv("SERVER_RATE_LIMIT_PER_IP"); v != "" {
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("SERVER_RATE_LIMIT_PER_IP: invalid bool %q: %w", v, err)
+		}
+		config.Server.RateLimit.PerIP = val
+	}
+	if v := os.Getenv("SERVER_TRUSTED_PROXIES"); v != "" {
+		parts := strings.Split(v, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		config.Server.TrustedProxies = out
+	}
 	for _, e := range []struct {
 		env string
 		dst *DurationYAML
@@ -53,6 +89,7 @@ func overrideWithEnv(config *Config) error {
 		{"SERVER_IDLE_TIMEOUT", &config.Server.IdleTimeout},
 		{"SERVER_HANDLER_TIMEOUT", &config.Server.HandlerTimeout},
 		{"SERVER_TICKER_STALE_AFTER", &config.Server.TickerStaleAfter},
+		{"POSTGRES_STATEMENT_TIMEOUT", &config.Database.StatementTimeout},
 	} {
 		if v := os.Getenv(e.env); v != "" {
 			d, err := time.ParseDuration(v)
@@ -286,14 +323,6 @@ func overrideWithEnv(config *Config) error {
 		}
 		config.RWA.PairSyncIntervalSeconds = val
 	}
-	if v := os.Getenv("RWA_CONCURRENCY"); v != "" {
-		val, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("RWA_CONCURRENCY: invalid int %q: %w", v, err)
-		}
-		config.RWA.Concurrency = val
-	}
-
 	if v := os.Getenv("TICKERS_ENABLED"); v != "" {
 		val, err := strconv.ParseBool(v)
 		if err != nil {
@@ -368,12 +397,10 @@ func overrideWithEnv(config *Config) error {
 	return applyTokenEnvOverrides(config)
 }
 
-// applyTokenEnvOverrides scans TOKEN_<NAME>__<FIELD> env vars and merges them
-// into config.Tokens. Double underscore separates the token name from the
-// field name so tokens with underscores in the name (wrapped_btc) parse
-// unambiguously. Tokens absent from yaml get Enabled=true by default —
-// matches GetTokenConfig's "unknown token = enabled" semantics, so a one-off
-// `TOKEN_FOO__INTERVAL_SECONDS=60` doesn't silently land disabled.
+// applyTokenEnvOverrides merges TOKEN_<NAME>__<FIELD> env vars into
+// config.Tokens. The double underscore keeps names containing underscores
+// (wrapped_btc) unambiguous. Tokens absent from yaml default to Enabled=true,
+// matching GetTokenConfig's "unknown token = enabled".
 func applyTokenEnvOverrides(config *Config) error {
 	const prefix = "TOKEN_"
 	const sep = "__"

@@ -76,15 +76,9 @@ func (r *BackfillStateRepository) Get(ctx context.Context, source prices.Source,
 	return entityToState(&e), nil
 }
 
-// ClearCaughtUp re-enables every row for `source` that a previous build parked
-// with disabled_reason='caught_up', returning how many were resumed.
-//
-// `cursor_id` is deliberately left intact so the walk resumes exactly where it
-// stopped instead of replaying history. Rows disabled for a genuinely terminal
-// or operator-owned reason (reached_floor, auto_disabled, manual) are untouched.
-//
-// Called at job start so a deploy self-heals pairs frozen by the old sticky
-// behaviour — no ops SQL required.
+// ClearCaughtUp re-enables rows an older build parked as 'caught_up', keeping
+// cursor_id so the walk resumes instead of replaying history. Terminal and
+// operator reasons (reached_floor, manual) are untouched. Called at job start.
 func (r *BackfillStateRepository) ClearCaughtUp(ctx context.Context, source prices.Source) (int64, error) {
 	if source == "" {
 		return 0, fmt.Errorf("source is required")
@@ -103,6 +97,31 @@ func (r *BackfillStateRepository) ClearCaughtUp(ctx context.Context, source pric
 		})
 	if res.Error != nil {
 		return 0, fmt.Errorf("clear caught_up backfill_state: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
+// ClearAutoDisabled re-enables rows parked as 'auto_disabled' — a reason only
+// older builds wrote, whose rows would otherwise stay dead across deploys.
+// Operator/terminal disables survive.
+func (r *BackfillStateRepository) ClearAutoDisabled(ctx context.Context, source prices.Source) (int64, error) {
+	if source == "" {
+		return 0, fmt.Errorf("source is required")
+	}
+	res := r.db.WithContext(ctx).
+		Model(&entities.BackfillStateEntity{}).
+		Where("source_code = ? AND disabled = ? AND disabled_reason = ?",
+			string(source), true, BackfillDisabledReasonAutoDisabled).
+		Updates(map[string]any{
+			"disabled":        false,
+			"disabled_reason": "",
+			"next_attempt_at": nil,
+			"error_count":     0,
+			"last_error":      "",
+			"updated_at":      time.Now().UTC(),
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("clear auto_disabled backfill_state: %w", res.Error)
 	}
 	return res.RowsAffected, nil
 }

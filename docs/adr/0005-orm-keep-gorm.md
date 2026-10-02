@@ -62,4 +62,4 @@ already the pattern in `token_price_repository.go`.
 - Repositories: `internal/core/infrastructure/storage/repositories/`.
 - Entities: `internal/core/infrastructure/storage/entities/`.
 - This decision is the open follow-up to
-  [upgrade-plan.md §6.4](../../upgrade-plan.md).
+  `upgrade-plan.md` §6.4 (historical; not in this repo).

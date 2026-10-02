@@ -15,12 +15,8 @@ import (
 	"quotes/internal/core/infrastructure/storage/repositories"
 )
 
-// fixtureSavePoints inserts ticks via the production Save() path — same
-// upsert clause, same batching, same column mapping. Uses (mvrk, coingecko,
-// usd) which is seeded in 0009_seed.sql.
-//
-// Returns the ts of the first and last point so tests can build queries
-// that span the inserted window.
+// Inserts ticks via the production Save() path on the (mvrk, coingecko, usd)
+// row seeded by 0009_seed.sql, returning the first and last ts.
 func fixtureSavePoints(t *testing.T, repo *repositories.TokenPriceRepository, anchor time.Time, prices_ []decimal.Decimal) (firstTS, lastTS time.Time) {
 	t.Helper()
 	pts := make([]prices.PricePoint, 0, len(prices_))
@@ -49,14 +45,12 @@ func dec(s string) decimal.Decimal {
 	return d
 }
 
-// --- 5m re-bucket from token_prices_1m (Stage 3) ---
-
 func TestQueryCandles_5m_RebucketFrom1m(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
 	repo := repositories.NewTokenPriceRepository(db)
 
-	// 5 minute-buckets across one 5-minute bucket. Bucket-aligned at 12:00.
+	// Five 1m buckets inside one bucket-aligned 5m bucket.
 	bk := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	pts := []prices.PricePoint{
 		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk, Metric: "usd", Price: dec("100.00")},                      // open
@@ -86,8 +80,6 @@ func TestQueryCandles_5m_RebucketFrom1m(t *testing.T) {
 	require.True(t, c.Close.Equal(dec("103.00")), "close=%s", c.Close)
 	require.Equal(t, int64(5), c.Samples, "samples summed across the inner buckets")
 }
-
-// --- 15m re-bucket: many minute-buckets, ordering preserved ---
 
 func TestQueryCandles_15m_RebucketFrom1m(t *testing.T) {
 	db := openGorm(t)
@@ -120,8 +112,6 @@ func TestQueryCandles_15m_RebucketFrom1m(t *testing.T) {
 	require.True(t, candles[1].Close.Equal(dec("30.00")))
 }
 
-// --- 4h re-bucket from token_prices_1h ---
-
 func TestQueryCandles_4h_RebucketFrom1h(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -151,15 +141,12 @@ func TestQueryCandles_4h_RebucketFrom1h(t *testing.T) {
 	require.True(t, candles[0].Close.Equal(dec("2.00")))
 }
 
-// --- 1m candle from 60 ticks ---
-
 func TestQueryCandles_1m_OHLC(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
 	repo := repositories.NewTokenPriceRepository(db)
 
-	// 5 ticks within one minute. Open=first by ts, close=last, high=max,
-	// low=min — that's the CA contract.
+	// Five ticks in one minute; the CA contract is open=first by ts, close=last.
 	bucketStart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	prices_ := []decimal.Decimal{
 		dec("100.00"), // open
@@ -197,17 +184,13 @@ func TestQueryCandles_1m_OHLC(t *testing.T) {
 	require.False(t, c.VolumeQuote.Valid, "VolumeQuote should be null in Stage 1")
 }
 
-// --- 1h candle from ticks across 60 minutes ---
-
 func TestQueryCandles_1h_AggregatesAcrossMinutes(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
 	repo := repositories.NewTokenPriceRepository(db)
 
-	// 4 ticks spread across one hour, one per quarter — verifies the
-	// 1h CA aggregates across the 1m buckets it's built from (the CA
-	// looks at raw ticks, not _1m, so this works even though _1m and
-	// _1h are independent CAs).
+	// One tick per quarter hour. _1h reads raw ticks, not _1m — the two CAs are
+	// independent — so no _1m refresh is needed here.
 	bucketStart := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
 	pts := []prices.PricePoint{
 		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bucketStart, Metric: "usd", Price: dec("50.00")},                       // open
@@ -239,8 +222,6 @@ func TestQueryCandles_1h_AggregatesAcrossMinutes(t *testing.T) {
 	require.True(t, c.Close.Equal(dec("52.00")))
 	require.Equal(t, int64(4), c.Samples)
 }
-
-// --- Two adjacent 1h buckets, ordering and isolation ---
 
 func TestQueryCandles_1h_TwoBuckets_OrderASC(t *testing.T) {
 	db := openGorm(t)
@@ -278,7 +259,76 @@ func TestQueryCandles_1h_TwoBuckets_OrderASC(t *testing.T) {
 	require.True(t, candles[1].Close.Equal(dec("11.00")))
 }
 
-// --- Currency / source isolation ---
+func TestQueryCandles_LatestMode_ReturnsNewestBuckets(t *testing.T) {
+	db := openGorm(t)
+	truncateTokenPrices(t, db)
+	repo := repositories.NewTokenPriceRepository(db)
+
+	bk := time.Date(2026, 5, 1, 8, 0, 0, 0, time.UTC)
+	pts := make([]prices.PricePoint, 0, 5)
+	for i := 0; i < 5; i++ {
+		pts = append(pts, prices.PricePoint{
+			Source:    prices.SourceCoinGecko,
+			EntityKey: "mvrk",
+			Timestamp: bk.Add(time.Duration(i) * time.Hour),
+			Metric:    "usd",
+			Price:     dec("10.00").Add(decimal.NewFromInt(int64(i))),
+		})
+	}
+	_, err := repo.Save(context.Background(), pts)
+	require.NoError(t, err)
+	refreshCA(t, db, "token_prices_1h")
+
+	candles, err := repo.QueryCandles(context.Background(), apiprices.CandleQuery{
+		EntityKey: "mvrk",
+		AuxKey:    "coingecko|usd",
+		Interval:  apiprices.Interval1h,
+		Limit:     3,
+	})
+	require.NoError(t, err)
+	require.Len(t, candles, 3)
+
+	require.True(t, candles[0].Bucket.Equal(bk.Add(2*time.Hour)),
+		"latest mode must drop the oldest buckets, got first=%s", candles[0].Bucket)
+	require.True(t, candles[2].Bucket.Equal(bk.Add(4*time.Hour)),
+		"latest mode must include the newest bucket, got last=%s", candles[2].Bucket)
+	require.True(t, candles[0].Bucket.Before(candles[1].Bucket))
+	require.True(t, candles[1].Bucket.Before(candles[2].Bucket))
+}
+
+func TestQueryCandles_WindowLimit_KeepsNewestBuckets(t *testing.T) {
+	db := openGorm(t)
+	truncateTokenPrices(t, db)
+	repo := repositories.NewTokenPriceRepository(db)
+
+	bk := time.Date(2026, 5, 2, 8, 0, 0, 0, time.UTC)
+	pts := make([]prices.PricePoint, 0, 4)
+	for i := 0; i < 4; i++ {
+		pts = append(pts, prices.PricePoint{
+			Source:    prices.SourceCoinGecko,
+			EntityKey: "mvrk",
+			Timestamp: bk.Add(time.Duration(i) * time.Hour),
+			Metric:    "usd",
+			Price:     dec("20.00").Add(decimal.NewFromInt(int64(i))),
+		})
+	}
+	_, err := repo.Save(context.Background(), pts)
+	require.NoError(t, err)
+	refreshCA(t, db, "token_prices_1h")
+
+	candles, err := repo.QueryCandles(context.Background(), apiprices.CandleQuery{
+		EntityKey: "mvrk",
+		AuxKey:    "coingecko|usd",
+		Interval:  apiprices.Interval1h,
+		From:      bk.Add(-time.Minute),
+		To:        bk.Add(5 * time.Hour),
+		Limit:     2,
+	})
+	require.NoError(t, err)
+	require.Len(t, candles, 2)
+	require.True(t, candles[0].Bucket.Equal(bk.Add(2*time.Hour)))
+	require.True(t, candles[1].Bucket.Equal(bk.Add(3*time.Hour)))
+}
 
 func TestQueryCandles_FiltersByCurrency(t *testing.T) {
 	db := openGorm(t)
@@ -314,8 +364,6 @@ func TestQueryCandles_FiltersByCurrency(t *testing.T) {
 	require.True(t, eur[0].Close.Equal(dec("0.85")))
 }
 
-// --- Empty range returns []  ---
-
 func TestQueryCandles_EmptyRangeReturnsZeroCandles(t *testing.T) {
 	db := openGorm(t)
 	truncateTokenPrices(t, db)
@@ -331,11 +379,8 @@ func TestQueryCandles_EmptyRangeReturnsZeroCandles(t *testing.T) {
 	require.Empty(t, candles)
 }
 
-// --- Stage 1 caveat: 5m / 15m / 4h not yet wired ---
-
+// raw fits no CA — there is no 0-second bucket.
 func TestQueryCandles_RawIntervalStillRejected(t *testing.T) {
-	// raw doesn't fit any CA — there's no 0-second bucket. Stage 3 added
-	// 5m/15m/4h via re-bucket; raw stays a future-stage caveat.
 	db := openGorm(t)
 	repo := repositories.NewTokenPriceRepository(db)
 
@@ -345,8 +390,6 @@ func TestQueryCandles_RawIntervalStillRejected(t *testing.T) {
 	})
 	require.Error(t, err)
 }
-
-// --- AuxKey contract ---
 
 func TestQueryCandles_BadAuxKey_400(t *testing.T) {
 	db := openGorm(t)
@@ -359,4 +402,29 @@ func TestQueryCandles_BadAuxKey_400(t *testing.T) {
 		})
 		require.Errorf(t, err, "AuxKey=%q should be rejected", aux)
 	}
+}
+
+func TestQueryCandles_RealtimeAggregation_SeesUnmaterializedBucket(t *testing.T) {
+	db := openGorm(t)
+	truncateTokenPrices(t, db)
+	repo := repositories.NewTokenPriceRepository(db)
+
+	// Deliberately NO refreshCA: with materialized_only=false (migration 0021)
+	// the CAGG must union the raw hypertable tail.
+	bk := time.Date(2026, 5, 3, 9, 0, 0, 0, time.UTC)
+	_, err := repo.Save(context.Background(), []prices.PricePoint{
+		{Source: prices.SourceCoinGecko, EntityKey: "mvrk", Timestamp: bk, Metric: "usd", Price: dec("55.00")},
+	})
+	require.NoError(t, err)
+
+	candles, err := repo.QueryCandles(context.Background(), apiprices.CandleQuery{
+		EntityKey: "mvrk",
+		AuxKey:    "coingecko|usd",
+		Interval:  apiprices.Interval1h,
+		From:      bk.Add(-time.Minute),
+		To:        bk.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.Len(t, candles, 1, "real-time aggregation must surface the in-progress bucket without a refresh")
+	require.True(t, candles[0].Close.Equal(dec("55.00")))
 }

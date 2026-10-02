@@ -23,19 +23,14 @@ import (
 // the alternative (dropping the asset) hides it from the catalog entirely.
 const defaultLaunchQuoteDecimals = 6
 
-// SyncRWALaunches mirrors the Equiteez launchpad into `rwa_launches`: for every
-// allowlisted token it picks the surfaced launch and stores its base-tier price
-// and sale progress.
-//
-// This is what makes a primary-issuance asset visible to GET /v1/rwa. Such a
-// token has no orderbook — XAUG / MCDX / KHBE are allowlisted with an active
-// launch and zero orderbooks — so SyncRWAPairs produces no row for it and the
-// collector never sees it.
-//
-// Launches of tokens that left the allowlist are disabled, as in SyncRWAPairs.
-//
-// Returns the number of launches stored. Per-token failures are logged and
-// skipped so one bad launch cannot abort the catalog.
+// SyncRWALaunches mirrors the Equiteez launchpad into `rwa_launches`, storing
+// each allowlisted token's base-tier price and sale progress. This is what
+// makes a primary-issuance asset (no orderbook, so SyncRWAPairs never sees it)
+// visible to GET /v1/rwa. A successful, non-empty sync disables delisted tokens
+// and launches explicitly returned without a usable price. Still-allowlisted
+// tokens omitted from a partial launches response keep their stored state.
+// Per-token failures are logged and skip that disable pass; failure of every
+// upsert is returned to the caller so the job cannot report a healthy tick.
 func SyncRWALaunches(
 	ctx context.Context,
 	cfg *config.Config,
@@ -92,27 +87,49 @@ func SyncRWALaunches(
 
 	now := time.Now().UTC()
 	byToken := groupLaunchesByToken(rows)
-	stored, skipped := 0, 0
+	stored, skipped, upsertFailed := 0, 0, 0
+	// Keep the union of successfully refreshed launches and allowlisted tokens
+	// absent from the launch response: an omitted join is not a delisting.
+	// Explicitly returned but unusable launches stay out of this keep-set.
+	keepAddrs := make([]string, 0, len(addresses))
+	for _, addr := range addresses {
+		if _, present := byToken[addr]; !present {
+			keepAddrs = append(keepAddrs, addr)
+		}
+	}
 	for addr, tokenRows := range byToken {
 		launch, ok := buildLaunch(tokenRows, baseSymbols[addr], now)
 		if !ok {
+			// Deliberately NOT in keepAddrs: the disable pass below retires the
+			// stored row instead of serving its last price forever.
 			skipped++
 			log.Debug().Str("token_addr", addr).Msg("rwa_launch_sync_skipped_no_usable_launch")
 			continue
 		}
 		if err := launches.Upsert(ctx, launch, now); err != nil {
-			skipped++
+			upsertFailed++
 			log.Error().Err(err).Str("token_addr", addr).Msg("rwa_launch_sync_upsert_failed")
 			continue
 		}
+		keepAddrs = append(keepAddrs, addr)
 		stored++
 	}
 
-	// Keyed by the allowlist, not the stored rows: a skipped upsert is transient,
-	// a disable is permanent. The empty-allowlist return above guards a resync.
-	disabled, err := launches.DisableMissing(ctx, prices.SourceEquiteez, addresses)
-	if err != nil {
-		return 0, fmt.Errorf("disable delisted launches: %w", err)
+	// Same completeness guard as the pair sync: require a successful write,
+	// not just preserved addresses, so an empty/failed view cannot wipe the
+	// catalog. Disables are undone by the next sync that sees them.
+	var disabled int64
+	if shouldDisableMissingPairs(len(tokens), stored, upsertFailed) {
+		disabled, err = launches.DisableMissingLaunches(ctx, prices.SourceEquiteez, keepAddrs)
+		if err != nil {
+			return 0, fmt.Errorf("disable missing launches: %w", err)
+		}
+	} else if upsertFailed > 0 || stored == 0 {
+		log.Warn().
+			Int("tokens", len(tokens)).
+			Int("stored", stored).
+			Int("upsert_failed", upsertFailed).
+			Msg("rwa_launch_sync_skipping_disable_incomplete_view")
 	}
 
 	log.Info().
@@ -120,8 +137,15 @@ func SyncRWALaunches(
 		Int("launches", len(rows)).
 		Int("stored", stored).
 		Int("skipped", skipped).
-		Int64("disabled_delisted", disabled).
+		Int("upsert_failed", upsertFailed).
+		Int64("disabled_missing", disabled).
 		Msg("rwa_launch_sync_completed")
+
+	// Upstream had launches and none landed (DB refusing writes): report it
+	// so the tick doesn't stamp a last-success — same contract as SyncRWAPairs.
+	if upsertFailed > 0 && stored == 0 {
+		return 0, fmt.Errorf("rwa launch sync: all %d upserts failed", upsertFailed)
+	}
 	return stored, nil
 }
 

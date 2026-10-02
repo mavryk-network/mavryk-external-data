@@ -17,14 +17,9 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// ChangeDeps wires both FT and RWA change handlers. The same ChangeService
-// type is reused for both classes (per Decision #5: opaque ChangeRepository
-// interface, one service serves both); only the Repo and Kind label differ
-// at construction time.
-//
-// FT — `FTService` runs over a TokenChangeRepository.
-// RWA — `RWAService` runs over an RWAChangeRepository. `Converter` (when
-// set) enables `?in=usd,eur,...` on `/v1/rwa/:symbol/change` (Decision #19).
+// ChangeDeps wires both FT and RWA change handlers over the same ChangeService
+// type (Decision #5); only the Repo and Kind label differ at construction.
+// Converter, when set, enables `?in=` on /v1/rwa/:symbol/change (Decision #19).
 type ChangeDeps struct {
 	FTService     *apiprices.ChangeService
 	RWAService    *apiprices.ChangeService
@@ -32,11 +27,9 @@ type ChangeDeps struct {
 	Converter     apiprices.PriceConverter // optional; when nil, ?in= returns 400
 	DefaultSource prices.Source            // typically prices.SourceCoinGecko for FT
 	RWASource     prices.Source            // typically prices.SourceEquiteez for RWA
-	// MaxPeriods caps the number of periods accepted in ?periods=.
-	// 0 means use len(prices.AllPeriods) — the full whitelist.
+	// MaxPeriods caps ?periods=; 0 means the full prices.AllPeriods whitelist.
 	MaxPeriods int
-	// MaxInCurrencies caps the number of comma-separated currencies in
-	// ?in= for the RWA endpoint. 0 falls back to 10.
+	// MaxInCurrencies caps ?in= on the RWA endpoint; 0 falls back to 10.
 	MaxInCurrencies int
 }
 
@@ -90,10 +83,8 @@ func (d ChangeDeps) ChangeFT() gin.HandlerFunc {
 //
 // Query params:
 //   - periods (optional, csv) — defaults to 24h,7d,30d
-//   - in (optional, csv)      — read-side FX conversion of `now`. Each
-//     target gets the at-or-before rate matching the `now` timestamp
-//     (Decision #19). Per-target failures drop the key silently;
-//     the request stays 200 as long as the native price was found.
+//   - in (optional, csv)      — at-or-before FX conversion of `now`
+//     (Decision #19). Per-target failures drop the key silently.
 func (d ChangeDeps) ChangeRWA() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
@@ -135,26 +126,25 @@ func (d ChangeDeps) ChangeRWA() gin.HandlerFunc {
 		}
 		symbol := strings.ToLower(req.Pair.BaseSymbol) + "-" + nativeQuote
 
-		// Optional ?in= conversion of `now`. Uses converter's at-or-before
-		// semantics (Decision #19). Failed conversions drop silently.
+		// Optional ?in= conversion of `now`; failures drop silently.
 		var converted map[string]num6
+		var fxMeta map[string]fxMetaDTO
 		if len(req.InTargets) > 0 && d.Converter != nil {
 			cur, hasCur := res.Currencies[nativeQuote]
 			if hasCur && cur.NowFound {
 				quoteToken, quoteResolved := promoteQuoteToken(req.Pair.QuoteSymbol)
 				if quoteResolved {
-					converted = convertNowFlat(ctx, d.Converter, quoteToken, req.InTargets, cur.Now, cur.NowTS)
+					converted, fxMeta = convertNowFlat(ctx, d.Converter, quoteToken, req.InTargets, cur.Now, cur.NowTS)
 				}
 			}
 		}
-		return renderRWAChange(symbol, nativeQuote, req.Periods, converted, res), nil
+		return renderRWAChange(symbol, nativeQuote, req.Periods, converted, fxMeta, res), nil
 	}
 	return common.Wrap(bind, action)
 }
 
-// parseRWAInQuery validates the `?in=` parameter against the supported
-// currency registry and the configured cap (MaxInCurrencies). Mirrors the
-// existing RWAPriceDeps.parseInQuery convention.
+// parseRWAInQuery validates `?in=` against the currency registry and
+// MaxInCurrencies, mirroring RWAPriceDeps.parseInQuery.
 func (d ChangeDeps) parseRWAInQuery(c *gin.Context) ([]prices.Currency, error) {
 	raw := strings.TrimSpace(c.Query("in"))
 	if raw == "" {
@@ -186,15 +176,10 @@ func (d ChangeDeps) parseRWAInQuery(c *gin.Context) ([]prices.Currency, error) {
 	return out, nil
 }
 
-// convertNowFlat returns a per-target-currency map for the `now` price.
-// Failed conversions (no FX rate, unsupported target) drop silently, just
-// like the existing /v1/rwa/:symbol/latest?in= flow. Returns nil when no
-// target succeeded so the response stays clean.
-//
-// Conversions go through timedConvert so the fx_* metric families (outcome,
-// duration, stale ratio) cover these edges too — this helper serves GET /v1/rwa
-// (every asset in the list) and /change, which a polling dashboard hits far
-// more often than the per-symbol endpoints convertFlat meters.
+// convertNowFlat returns the per-target map for the `now` price plus stale-rate
+// flags for the `fx` block. Failed conversions drop silently; nil comes back
+// when none succeeded. Conversions go through timedConvert so the fx_* metrics
+// cover GET /v1/rwa and /change too.
 func convertNowFlat(
 	ctx context.Context,
 	conv apiprices.PriceConverter,
@@ -202,8 +187,9 @@ func convertNowFlat(
 	targets []prices.Currency,
 	nativePrice decimal.Decimal,
 	nativeTS time.Time,
-) map[string]num6 {
+) (map[string]num6, map[string]fxMetaDTO) {
 	out := make(map[string]num6, len(targets))
+	var fx map[string]fxMetaDTO
 	for _, target := range targets {
 		res, err := timedConvert(ctx, conv, quoteToken, target, nativePrice, nativeTS)
 		if err != nil {
@@ -212,12 +198,16 @@ func convertNowFlat(
 		out[string(target)] = newNum6(res.Amount)
 		if res.Stale {
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
+			if fx == nil {
+				fx = make(map[string]fxMetaDTO, 1)
+			}
+			fx[string(target)] = fxMetaDTO{RateTS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, fx
 }
 
 func (d ChangeDeps) maxPeriods() int {
@@ -234,7 +224,6 @@ func (d ChangeDeps) maxPeriods() int {
 func parsePeriodsParam(c *gin.Context, maxCount int) ([]prices.Period, error) {
 	raw := strings.TrimSpace(c.Query("periods"))
 	if raw == "" {
-		// Default contract per design doc: 24h,7d,30d.
 		out := make([]prices.Period, len(prices.DefaultChangePeriods))
 		copy(out, prices.DefaultChangePeriods)
 		return out, nil
@@ -266,9 +255,8 @@ func parsePeriodsParam(c *gin.Context, maxCount int) ([]prices.Period, error) {
 	return out, nil
 }
 
-// parseFTCurrenciesParam reads ?currency=<csv> and validates each value
-// against the closed Currency enum. Empty / missing returns the canonical
-// 10-currency list, matching /latest's "all currencies" semantics.
+// parseFTCurrenciesParam reads ?currency=<csv> and validates each value against
+// the closed Currency enum. Empty returns the canonical 10-currency list.
 func parseFTCurrenciesParam(c *gin.Context) ([]string, error) {
 	raw := strings.TrimSpace(c.Query("currency"))
 	if raw == "" {
@@ -307,20 +295,6 @@ func parseFTCurrenciesParam(c *gin.Context) ([]string, error) {
 // --- DTOs ---
 
 // ftChangeDTO is the wire shape of GET /v1/prices/:token/change.
-//
-//	{
-//	  "token": "mvrk",
-//	  "as_of": "2026-05-08T12:00:00Z",
-//	  "currencies": {
-//	    "usd": {
-//	      "now": 0.071541,
-//	      "periods": {
-//	        "24h": {"from_ts": "...", "from": ..., "delta_abs": ..., "change_pct": ...},
-//	        ...
-//	      }
-//	    }
-//	  }
-//	}
 type ftChangeDTO struct {
 	Token      string                            `json:"token"`
 	AsOf       *string                           `json:"as_of"`
@@ -332,21 +306,15 @@ type ftChangeForCurrencyDTO struct {
 	Periods orderedPeriodsDTO `json:"periods"`
 }
 
-// orderedPeriodsDTO renders the per-period block as a JSON object whose
-// keys appear in the client-requested order (or DefaultChangePeriods when
-// omitted). Necessary because Go map iteration is randomised — without
-// this wrapper, snapshot tests and human readers see periods in arbitrary
-// order. JSON spec doesn't require key order, so this is a UX improvement,
-// not a contract change.
+// orderedPeriodsDTO renders the per-period block with keys in the requested
+// order; Go map iteration is randomised, which would otherwise scramble them.
 type orderedPeriodsDTO struct {
 	order []prices.Period
 	data  map[prices.Period]ftChangePeriodDTO
 }
 
-// MarshalJSON emits keys in `order`. Missing keys (a Period in `order`
-// that isn't in `data`) emit a default-value (`null`-everything) period
-// block — defensive, since the renderer always populates every requested
-// period.
+// MarshalJSON emits keys in `order`. A period missing from `data` emits an
+// all-null block — defensive; the renderer always populates every requested one.
 func (o orderedPeriodsDTO) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
@@ -370,9 +338,8 @@ func (o orderedPeriodsDTO) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ftChangePeriodDTO uses pointer-num6 for the nullable fields so the
-// JSON renders `null` instead of `0` when the anchor is missing or
-// p_then is zero.
+// ftChangePeriodDTO uses pointer-num6 so a missing anchor or zero p_then
+// renders `null` rather than `0`.
 type ftChangePeriodDTO struct {
 	FromTS    *string `json:"from_ts"`
 	From      *num6   `json:"from"`
@@ -381,32 +348,21 @@ type ftChangePeriodDTO struct {
 }
 
 // rwaChangeDTO is the wire shape of GET /v1/rwa/:symbol/change.
-//
-//	{
-//	  "symbol": "mars1-usdt",
-//	  "native_quote": "usdt",
-//	  "as_of": "2026-05-08T12:00:00Z",
-//	  "now": 56.25,
-//	  "periods": { "24h": {...} }
-//	}
 type rwaChangeDTO struct {
 	Symbol      string            `json:"symbol"`
 	NativeQuote string            `json:"native_quote"`
 	AsOf        *string           `json:"as_of"`
 	Now         *num6             `json:"now"`
 	Periods     orderedPeriodsDTO `json:"periods"`
-	// Converted is the per-currency map populated when ?in= succeeds.
-	// Renders as flat top-level numeric keys (one per requested target)
-	// — same convention as /v1/rwa/:symbol/latest. Empty map omits the
-	// keys entirely.
+	// Converted renders as flat top-level numeric keys, one per successful
+	// ?in= target — same convention as /v1/rwa/:symbol/latest.
 	Converted map[string]num6 `json:"-"`
+	// FX carries stale-rate flags per converted currency; omitted when fresh.
+	FX map[string]fxMetaDTO `json:"-"`
 }
 
-// MarshalJSON for rwaChangeDTO flattens Converted onto the top-level
-// object so a client reads `response.usd` (number) instead of
-// `response.converted.usd`. Currency codes are 3 letters and never
-// collide with reserved keys (`symbol`, `native_quote`, `as_of`,
-// `now`, `periods`).
+// MarshalJSON flattens Converted onto the top-level object so a client reads
+// `response.usd`. 3-letter currency codes never collide with the reserved keys.
 func (d rwaChangeDTO) MarshalJSON() ([]byte, error) {
 	out := make(map[string]any, 5+len(d.Converted))
 	out["symbol"] = d.Symbol
@@ -416,6 +372,9 @@ func (d rwaChangeDTO) MarshalJSON() ([]byte, error) {
 	out["periods"] = d.Periods
 	for cur, v := range d.Converted {
 		out[cur] = v
+	}
+	if len(d.FX) > 0 {
+		out["fx"] = d.FX
 	}
 	return json.Marshal(out)
 }
@@ -431,8 +390,7 @@ func renderFTChange(token string, periods []prices.Period, currencies []string, 
 	for _, cur := range currencies {
 		c, ok := res.Currencies[cur]
 		if !ok {
-			// The service composes an entry for every requested currency,
-			// so this branch is defensive — keep the key with all-nulls.
+			// Defensive: the service composes an entry per requested currency.
 			out.Currencies[cur] = ftChangeForCurrencyDTO{
 				Periods: orderedPeriodsDTO{order: periods, data: emptyPeriodsData(periods)},
 			}
@@ -451,7 +409,7 @@ func renderFTChange(token string, periods []prices.Period, currencies []string, 
 	return out
 }
 
-func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, converted map[string]num6, res apiprices.ChangeResult) rwaChangeDTO {
+func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, converted map[string]num6, fx map[string]fxMetaDTO, res apiprices.ChangeResult) rwaChangeDTO {
 	cur, ok := res.Currencies[nativeQuote]
 	if !ok {
 		// Defensive — service always emits the requested currency entry.
@@ -461,6 +419,7 @@ func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, conver
 			AsOf:        nullableRFC3339(res.AsOf),
 			Periods:     orderedPeriodsDTO{order: periods, data: emptyPeriodsData(periods)},
 			Converted:   converted,
+			FX:          fx,
 		}
 	}
 	var nowVal *num6
@@ -475,6 +434,7 @@ func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, conver
 		Now:         nowVal,
 		Periods:     orderedPeriodsDTO{order: periods, data: renderPeriodsData(periods, cur.ByPeriod)},
 		Converted:   converted,
+		FX:          fx,
 	}
 }
 
@@ -503,8 +463,7 @@ func renderPeriodDTO(cfp apiprices.ChangeForPeriod) ftChangePeriodDTO {
 		dto.DeltaAbs = &da
 		dto.ChangePct = &cp
 	}
-	// If !ChangePctValid (p_then == 0): from/from_ts populated, delta_abs +
-	// change_pct stay nil → render as null. Decision #10.
+	// p_then == 0 ⇒ delta_abs + change_pct stay nil → null (Decision #10).
 	return dto
 }
 
@@ -516,9 +475,8 @@ func emptyPeriodsData(periods []prices.Period) map[prices.Period]ftChangePeriodD
 	return out
 }
 
-// nullableRFC3339 returns nil for the zero time (so JSON renders `null`)
-// and a pointer to the formatted UTC string otherwise. Used for `as_of`
-// when no currency has data yet — Decision #20.
+// nullableRFC3339 renders the zero time as JSON `null` — used for `as_of` when
+// no currency has data yet (Decision #20).
 func nullableRFC3339(t time.Time) *string {
 	if t.IsZero() {
 		return nil

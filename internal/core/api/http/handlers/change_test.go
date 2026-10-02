@@ -426,3 +426,90 @@ type rwaChangeResponse struct {
 	Now         *decimal.Decimal                  `json:"now"`
 	Periods     map[string]ftChangePeriodResponse `json:"periods"`
 }
+
+func TestChangeRWA_InConversion_StaleRateFlagged(t *testing.T) {
+	// Registered here rather than inherited from a neighbouring test: the token
+	// registry is process-wide, and any test that registers a different set
+	// (registerTestTokens installs mvrk only) evicts usdt. Without this the
+	// quote token no longer resolves, the conversion is refused instead of
+	// served stale, and the assertion below fails under -shuffle or -count=2.
+	prices.RegisterTokens([]prices.TokenInfo{
+		{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true},
+	})
+	pair := prices.RWAPair{ID: 42, BaseSymbol: "mars1", QuoteSymbol: "usdt"}
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	repo := &stubChangeRepo{
+		res: apiprices.ChangeRepoResult{
+			Now: []apiprices.ChangeNow{{Currency: "usdt", Price: decimal.RequireFromString("100"), TS: now, Found: true}},
+		},
+	}
+	rateTS := now.Add(-2 * time.Hour)
+	conv := &stubConverter{result: apiprices.ConversionResult{
+		Rate:   decimal.RequireFromString("1.0001"),
+		Amount: decimal.RequireFromString("100.01"),
+		RateTS: rateTS,
+		Stale:  true,
+	}}
+	deps := ChangeDeps{
+		RWAService:      &apiprices.ChangeService{Repo: repo, Cache: apiprices.NewChangeCache(), Kind: "rwa"},
+		Lookup:          &stubLookup{pair: pair},
+		Converter:       conv,
+		RWASource:       prices.SourceEquiteez,
+		MaxInCurrencies: 10,
+	}
+	r := newChangeEngine(t, deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt/change?in=usd&periods=24h", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"fx":{"usd":{"rate_ts":"2026-05-08T10:00:00Z","stale":true}}`) {
+		t.Errorf("expected stale fx block in response, got: %s", body)
+	}
+}
+
+// TestChangeFT_SubMicroPrices_DeltaAndPctAgree reproduces the review's BTC
+// scenario end to end: at 6 decimal places `now`/`from` collapsed to 0.000001,
+// delta_abs rendered 0 and contradicted a live change_pct.
+func TestChangeFT_SubMicroPrices_DeltaAndPctAgree(t *testing.T) {
+	registerTestTokens(t)
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	repo := &stubChangeRepo{
+		res: apiprices.ChangeRepoResult{
+			Now: []apiprices.ChangeNow{{
+				Currency: "btc", Price: decimal.RequireFromString("0.00000068464"), TS: now, Found: true,
+			}},
+			Anchors: []apiprices.ChangeAnchor{{
+				Currency: "btc", Period: prices.Period24h,
+				Price: decimal.RequireFromString("0.00000071541"), Bucket: now.Add(-24 * time.Hour), Found: true,
+			}},
+		},
+	}
+	deps := ChangeDeps{
+		FTService:     &apiprices.ChangeService{Repo: repo, Cache: apiprices.NewChangeCache(), Kind: "ft"},
+		DefaultSource: prices.SourceCoinGecko,
+	}
+	r := newChangeEngine(t, deps)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/prices/mvrk/change?currency=btc&periods=24h", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"now":0.00000068464`,
+		`"from":0.00000071541`,
+		`"delta_abs":-0.00000003077`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s in %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"delta_abs":0`) {
+		t.Errorf("delta_abs collapsed to 0 while change_pct is non-zero: %s", body)
+	}
+}

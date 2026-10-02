@@ -21,6 +21,8 @@ func OpenAPISpec() gin.HandlerFunc {
 // Bind /docs (no trailing slash) and /docs/ to this handler so deep-links work.
 func SwaggerUI() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// frame-ancestors is enforced only in an HTTP header, not a meta tag.
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", docs.SwaggerUIHTML)
 	}
 }

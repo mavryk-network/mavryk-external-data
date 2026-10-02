@@ -43,6 +43,7 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	}
 	rt := httpclient.MaxBytesReader(httpclient.SharedTransport(), maxBytes)
 	rt = httpclient.WrapResilientTransport(rt, res)
+	rt = httpclient.WrapCircuitBreaker(rt, res)
 	rt = &logging.HTTPTransport{
 		Base:      rt,
 		Logger:    componentLogger,
@@ -52,23 +53,20 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	return &Client{
 		indexerURL: indexerRequestURL(eq.IndexerURL, eq.IndexerPassword),
 		httpClient: &http.Client{
-			Timeout:   timeout,
-			Transport: rt,
+			Timeout:       timeout,
+			Transport:     rt,
+			CheckRedirect: httpclient.SameHostRedirectPolicy,
 		},
 		logger: componentLogger,
 	}
 }
 
-// indexerRequestURL builds the URL used for every indexer GraphQL request.
+// indexerRequestURL builds the URL for every indexer GraphQL request.
 //
-// Auth lives in the equiteez Cloudflare worker (e.g. basenet.api.equiteez.com): it
-// injects the Hasura admin-secret itself and authorizes deployed callers by
-// origin/domain, so the backend sends NO x-hasura-admin-secret header.
-//
-// Local dev and CI tests have no allowed origin, so the worker also accepts a
-// `?bypass=<secret>` query param in place of the header. When the password is set
-// (local/CI only) we append it once here; in deployed (in-cluster) envs it is empty
-// and the URL is used as-is.
+// Auth lives in the Cloudflare worker fronting the indexer: it injects the
+// Hasura admin-secret and authorizes deployed callers by origin, so we send no
+// secret header. Local/CI have no allowed origin, so a `?bypass=<secret>` param
+// stands in — appended only when the password is set.
 func indexerRequestURL(rawURL, password string) string {
 	if password == "" {
 		return rawURL
@@ -83,10 +81,8 @@ func indexerRequestURL(rawURL, password string) string {
 	return u.String()
 }
 
-// GetAllowlistedTokensAndOrderbooks discovers active RWA pairs from the indexer:
-// returns every token where `in_allowlist=true` together with its orderbooks
-// where `in_allowlist=true`. The sync job (jobs/equiteez_rwa_sync.go) calls
-// this at startup and upserts the result into `rwa_pairs`.
+// GetAllowlistedTokensAndOrderbooks returns every allowlisted token with its
+// allowlisted orderbooks — the discovery source for `rwa_pairs`.
 func (c *Client) GetAllowlistedTokensAndOrderbooks(ctx context.Context) ([]TokenWithOrderbooks, error) {
 	query := `
 		query allowlistedTokensWithOrderbooks {

@@ -6,7 +6,7 @@ servers:
 
 info:
   title: Mavryk External Data API
-  version: "2.4.0"
+  version: "2.5.0"
   description: |
     Long-format price service.
 
@@ -16,8 +16,23 @@ info:
         24h volume, 1D change %) plus volume-distribution pie chart data
         for a given token.
 
-    All prices are returned as **JSON numbers** rounded to 6 decimal places.
+    FT and RWA prices are returned as **JSON numbers**: rounded to 6 decimal
+    places at or above 0.01, and to 6 significant digits below it, so a
+    sub-microunit quote (a BTC- or ETH-denominated price) keeps its value
+    instead of collapsing to `0.000001` or `0`. The relative rounding error is
+    bounded at 5e-5 across the whole range. Ticker endpoints are the
+    exception: their prices/volumes are full-precision JSON **strings** (see
+    `TickersSnapshot`).
     Timestamps are RFC3339 in UTC.
+
+    **2.5.0 wire changes** (vs 2.4.0): sub-0.01 prices switched from a flat
+    6-decimal grid to 6 significant digits; chart latest mode and over-full
+    chart windows now return the NEWEST buckets; `RWAPrice`/`RWAChangeResponse`
+    and the `/v1/rwa` overview gained an `fx` stale-rate marker;
+    `market`/`primary_issuance` are documented as always-present facets;
+    `/quotes` gained a default `limit`; 401/403 and their error codes were
+    added; ticker `change_24h_pct` anchors inside a `[ts-25h, ts-24h]`
+    bracket.
   license:
     name: Apache 2.0
     url: http://www.apache.org/licenses/LICENSE-2.0.html
@@ -99,12 +114,17 @@ paths:
       tags: [health]
       summary: Prometheus metrics
       description: |
-        Prometheus exposition format. See `internal/metrics/prometheus.go`
-        for the registered collectors:
+        Prometheus exposition format. **Listener caveat:** with
+        `server.internal_port` set, `/metrics` is served on the INTERNAL
+        listener only; in single-port mode it appears on the public listener
+        only outside release mode (a release single-port deploy has no
+        `/metrics` at all — set the internal port).
+
+        See `internal/metrics/prometheus.go` for the registered collectors:
 
           * `http_*` — request counts, latencies, response classes.
           * `outbound_http_*` — retries, CB transitions, CB current state, RL wait.
-          * `job_*` — tick duration, error counters, rows written.
+          * `job_*` — tick duration, error counters, rows written, last-success timestamp.
           * `backfill_*` — oldest_ts cursor, auto-disable counter.
           * `db_pool_*` — connection pool stats.
       operationId: metrics
@@ -115,6 +135,63 @@ paths:
             text/plain:
               schema:
                 type: string
+
+  /quotes:
+    get:
+      tags: [health]
+      summary: Legacy wide-format quotes (deprecated)
+      deprecated: true
+      description: |
+        Pre-v1 compatibility endpoint: MVRK prices pivoted into one row per
+        timestamp with a fixed currency column set, values as JSON numbers
+        (float64 — NOT the v1 precision contract). Superseded by
+        `/v1/prices/{token}`; new integrations must not use it.
+
+        `from`/`to` are RFC3339 and the window is unbounded. `limit` is
+        validated against `server.max_query_limit` and **defaults to it** when
+        absent, so a response is always bounded. When a window holds more
+        timestamps than the limit, the **oldest** are returned: re-issue with
+        `from` set just past the last timestamp seen (both window bounds are
+        inclusive) to page forward through history.
+      operationId: legacyQuotes
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Array of wide rows, ts ASC.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    timestamp: { type: string, format: date-time }
+                    btc: { type: number }
+                    usd: { type: number }
+                    eur: { type: number }
+                    cny: { type: number }
+                    jpy: { type: number }
+                    krw: { type: number }
+                    eth: { type: number }
+                    gbp: { type: number }
+        "400":
+          description: |
+            Invalid parameters. NOTE — this frozen route keeps its v0.1.0
+            error envelope `{"error": "..."}`, NOT the v1 `{code, message}`
+            envelope (only the 429, written by shared middleware, uses the
+            v1 shape).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500":
+          description: Query failure, in the frozen v0.1.0 envelope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyErrorResponse" }
 
   /v1/prices/{token}:
     get:
@@ -194,6 +271,7 @@ paths:
               schema: { $ref: "#/components/schemas/CountResponse" }
               example: { token: mvrk, count: 524160 }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
   /v1/prices/{token}/change:
@@ -244,6 +322,7 @@ paths:
                       "30d": { from_ts: null, from: null, delta_abs: null, change_pct: null }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
   /v1/prices/{token}/series:
@@ -257,8 +336,10 @@ paths:
         of `_1m` and `_1h` at query time.
 
         Either `from`+`to` define a window or both are absent for
-        latest mode. Range caps per interval:
-        `1m` ≤ 7 days, `1h` ≤ 1 year, `1d` unlimited.
+        latest mode — the NEWEST `limit` buckets (default 100), served in
+        ascending order. A window holding more buckets than `limit` is
+        truncated from the OLD end (the newest buckets are kept). Range
+        caps per interval: `1m` ≤ 7 days, `1h` ≤ 1 year, `1d` unlimited.
 
         `currency` is required (one value, no comma-list).
       operationId: tokenSeries
@@ -400,6 +481,8 @@ paths:
             Applies to BOTH market types: a `primary` asset's fixed sale price
             converts exactly like a live orderbook quote (its mini-series is
             empty, so there is nothing to convert there).
+            A conversion served with a stale FX rate is flagged in the asset's
+            `fx` object (same shape as `RWAPrice.fx`; absent when fresh).
       responses:
         "200":
           description: List of RWA assets with latest price, 24h change and a 1d series.
@@ -440,6 +523,18 @@ paths:
                                 properties:
                                   t: { type: string, format: date-time }
                                   p: { type: number }
+                        fx:
+                          type: object
+                          description: >
+                            Present only when at least one `?in=` conversion
+                            was served with a stale FX rate — same shape as
+                            `RWAPrice.fx` (one `{rate_ts, stale}` object per
+                            stale target).
+                          additionalProperties:
+                            type: object
+                            properties:
+                              rate_ts: { type: string, format: date-time }
+                              stale: { type: boolean }
                         primary_issuance:
                           type: object
                           description: >
@@ -496,7 +591,7 @@ paths:
                     token_address: KT1FBJnqyY3EHB8dpwZ51gZqHBAXZifxwDnc
                     market: primary
                     price: 100
-                    price_as_of: null
+                    price_as_of: "2026-07-27T09:00:00Z"
                     change_24h: { delta_abs: null, change_pct: null }
                     series_1d: { interval: 15m, points: [] }
                     primary_issuance:
@@ -510,6 +605,8 @@ paths:
                       max_amount_cap: "2500000000000"
                       progress_percent: 2.667e-7
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
@@ -560,9 +657,11 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/RWAPrice" }
               example:
-                - { timestamp: "2026-04-27T12:00:00Z", native_quote: usdt, price: 100.42, usd: 100.4300, eur: 85.62 }
-                - { timestamp: "2026-04-27T11:00:00Z", native_quote: usdt, price: 99.80 }
+                - { timestamp: "2026-04-27T12:00:00Z", native_quote: usdt, price: 100.42, market: secondary, usd: 100.4300, eur: 85.62 }
+                - { timestamp: "2026-04-27T11:00:00Z", native_quote: usdt, price: 99.80, market: secondary }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -611,6 +710,8 @@ paths:
                   - { t: "2026-04-27T12:00:00Z", p: 100.42, usd: 100.4300 }
                   - { t: "2026-04-27T13:00:00Z", p: 99.80,  usd: 99.8050 }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
@@ -668,6 +769,8 @@ paths:
                       rate: 1.0005
                       rate_ts: "2026-04-27T12:55:00Z"
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
@@ -691,6 +794,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Symbol"
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "501":
           description: OHLCV is parked until Stage 4.
           content:
@@ -756,6 +861,7 @@ paths:
                 timestamp: "2026-04-27T12:00:00Z"
                 native_quote: usdt
                 price: 100.45
+                market: secondary
                 usd: 100.46
                 eur: 85.63
                 aed: 368.72
@@ -771,8 +877,11 @@ paths:
                   eur: 70.16
                   aed: 302.30
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
   /v1/rwa/{symbol}/change:
@@ -791,7 +900,8 @@ paths:
           top-level numeric keys, same convention as
           `/v1/rwa/{symbol}/latest?in=`. The conversion uses the
           at-or-before FX rate matching the `now` timestamp — historical
-          accuracy is preserved.
+          accuracy is preserved. A conversion served with a stale rate is
+          flagged in the top-level `fx` object (absent when fresh).
         - Period anchors come from raw `rwa_quote_prices` via PK index
           seek, same data source as `now` for symmetry.
       operationId: rwaChange
@@ -819,8 +929,11 @@ paths:
                   "7d":  { from_ts: "2026-05-01T00:00:00Z", from: 54.10, delta_abs: 2.15, change_pct: 3.9741 }
                   "30d": { from_ts: "2026-04-08T00:00:00Z", from: 51.20, delta_abs: 5.05, change_pct: 9.8633 }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
   /v1/tickers/{token}/latest:
@@ -828,11 +941,13 @@ paths:
       tags: [prices-tickers]
       summary: Latest per-exchange tickers for a token
       description: |
-        Returns one row per `(exchange, target_symbol)` for `{token}` —
-        freshest first. Each row carries the native `last_price` in
-        `target` units, `volume_24h_base` in token units, and a
-        query-time-computed `change_24h_pct` (null when no row exists
-        at `ts - 24h`).
+        Returns one row per `(exchange, target_symbol)` for `{token}`,
+        ordered by 24h base-token volume descending (ties broken by
+        exchange, then target). Each row carries the native `last_price`
+        in `target` units, `volume_24h_base` in token units, and a
+        query-time-computed `change_24h_pct` (null when no row falls
+        inside the `[ts-25h, ts-24h]` anchor bracket — cold start,
+        ingestion gap, delisting).
 
         Rows whose latest `ts` is older than `server.ticker_stale_after`
         (default 1h) are filtered out by default. Set `?include_stale=true`
@@ -886,6 +1001,7 @@ paths:
                           stale: false
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
   /v1/tickers/{token}/distribution:
@@ -950,6 +1066,7 @@ paths:
                     share_pct: "22.730000"
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
   /v1/pairs/rwa:
@@ -1005,6 +1122,9 @@ paths:
                   quote_addr: KT1VAymQuoteAddr
                   orderbook_addr: KT1A3JhOrderbook
                   source: equiteez
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
 
 components:
@@ -1066,7 +1186,16 @@ components:
       name: limit
       in: query
       required: false
-      description: Cap on returned rows. Capped server-side by `server.max_query_limit` (default 10000).
+      description: |
+        Cap on returned rows. Validated against `server.max_query_limit`
+        (default 10000) and, when a time window is requested, defaulted to it —
+        a windowed response is never unbounded.
+
+        Truncation direction when a window holds more rows than the cap:
+        LIST endpoints (`/v1/prices/{token}`, `/v1/rwa/{symbol}`, `/quotes`)
+        keep the OLDEST rows — page forward by re-issuing with `from` just
+        past the last timestamp seen. CHART endpoints (`/series`, `/ohlc`)
+        keep the NEWEST buckets. Truncation is not otherwise signaled.
       schema:
         type: integer
         minimum: 1
@@ -1226,6 +1355,23 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
           example: { code: RATE_LIMITED, message: "Too many requests" }
+    Unauthorized:
+      description: |
+        Missing, malformed, expired, or unverifiable Bearer JWT
+        (`code: UNAUTHORIZED`). Returned by the MBIO JWT middleware on the
+        public listener's RWA routes.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: UNAUTHORIZED, message: "Authorization header required" }
+    Forbidden:
+      description: |
+        Token verified but unusable — e.g. missing `sub` or invalid claims
+        (`code: FORBIDDEN`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { code: FORBIDDEN, message: "JWT missing subject" }
     Internal:
       description: "Unexpected server error (`code: INTERNAL`)."
       content:
@@ -1233,6 +1379,18 @@ components:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   schemas:
+    LegacyErrorResponse:
+      type: object
+      description: |
+        Frozen v0.1.0 error envelope used ONLY by the deprecated `/quotes`
+        route for its own 400/500 errors. All v1 endpoints use
+        `ErrorResponse`.
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: "Invalid 'from' parameter format. Use RFC3339 format (e.g., 2023-01-01T00:00:00Z)"
+
     TokenPricePoint:
       type: object
       required: [timestamp, currency, price]
@@ -1247,26 +1405,29 @@ components:
           example: usd
         price:
           type: number
-          description: Price rounded to 6 decimal places, serialised as a JSON number.
+          description: Price at wire precision (6 dp at or above 0.01, else 6 significant digits), serialised as a JSON number.
           example: 0.071541
 
     RWAPrice:
       type: object
       description: |
         One RWA price observation. `price` is the `last` trade price in
-        the orderbook's native quote currency (e.g. 56.25 USDT), rounded
-        to 6 decimal places and serialised as a JSON number.
+        the orderbook's native quote currency (e.g. 56.25 USDT), at wire
+        precision (6 dp at or above 0.01, else 6 significant digits) and
+        serialised as a JSON number.
 
         When `?in=usd,eur,...` is requested, each successfully converted
         currency appears as an additional top-level numeric key (lowercase
         ISO-4217 code). Targets that fail conversion are silently absent —
-        the response stays 200 as long as the native price was found.
+        the response stays 200 as long as the native price was found. A
+        conversion served with a stale FX rate is flagged in the `fx` object.
 
-        Top-level reserved keys: `timestamp`, `native_quote`, `price`, and —
-        on `/latest` only — the optional `ath` and `price_one_year_ago`
-        objects. All other top-level keys are converted currencies (3-letter
-        codes that can never collide with the reserved names).
-      required: [timestamp, native_quote, price]
+        Top-level reserved keys: `timestamp`, `native_quote`, `price`,
+        `market`, and the optional `primary_issuance`, `fx`, and — on
+        `/latest` only — `ath` / `price_one_year_ago` objects. All other
+        top-level keys are converted currencies (3-letter codes that can
+        never collide with the reserved names).
+      required: [timestamp, native_quote, price, market]
       properties:
         timestamp:
           type: string
@@ -1282,9 +1443,37 @@ components:
         price:
           type: number
           description: |
-            Last price in `native_quote`, rounded to 6 decimal places.
-            Serialised as a JSON number (not a quoted string).
+            Last price in `native_quote` at wire precision (6 dp at or above
+            0.01, else 6 significant digits). Serialised as a JSON number (not
+            a quoted string).
           example: 100.45
+        market:
+          type: string
+          enum: [secondary, primary]
+          description: |
+            How the asset is priced: `secondary` = live orderbook quote,
+            `primary` = fixed launchpad sale price (the `primary_issuance`
+            block carries the sale detail).
+          example: secondary
+        primary_issuance:
+          $ref: "#/components/schemas/RWAPrimaryIssuance"
+        fx:
+          type: object
+          description: |
+            Present only when at least one `?in=` conversion was served with
+            an FX rate older than the freshness budget
+            (`server.fx_max_staleness_seconds`). One key per stale target.
+          additionalProperties:
+            type: object
+            required: [rate_ts, stale]
+            properties:
+              rate_ts:
+                type: string
+                format: date-time
+                description: Timestamp of the FX rate actually used.
+              stale:
+                type: boolean
+                enum: [true]
         ath:
           $ref: "#/components/schemas/RWAAllTimeHigh"
         price_one_year_ago:
@@ -1294,7 +1483,46 @@ components:
         description: |
           Converted price for a target currency from `?in=`.
           Key is the lowercase ISO-4217 code (`usd`, `eur`, `aed`, …).
-          Rounded to 6 decimal places.
+          At wire precision (6 dp at or above 0.01, else 6 significant digits).
+
+    RWAPrimaryIssuance:
+      type: object
+      description: |
+        Launchpad facet for an asset in primary issuance (`primary_issuance`
+        key). Present on `market: primary` assets, and on `market: secondary`
+        latest-mode responses when the asset also still sells on the launchpad.
+      required: [launch_id, name, status, active, price, total_bought, max_amount_cap, progress_percent]
+      properties:
+        launch_id: { type: integer, example: 6 }
+        name: { type: string, example: KHBE-issuance-v2 }
+        status:
+          type: string
+          enum: [active, inactive, paused, closed]
+        active:
+          type: boolean
+          description: Purchasable right now.
+        price:
+          type: number
+          description: Base-tier (undiscounted) sale price in the asset's quote currency, 6 dp.
+          example: 100
+        price_as_of:
+          type: string
+          format: date-time
+          nullable: true
+        total_bought:
+          type: string
+          description: Raw on-chain nat (supply-scale values overflow float64).
+          example: "6667"
+        max_amount_cap:
+          type: string
+          description: Raw on-chain nat.
+          example: "2500000000000"
+        progress_percent:
+          type: number
+          description: total_bought / max_amount_cap × 100, precomputed server-side.
+          example: 2.667e-7
+        sale_start: { type: string, format: date-time, nullable: true }
+        sale_end: { type: string, format: date-time, nullable: true }
 
     RWAAllTimeHigh:
       type: object
@@ -1416,7 +1644,8 @@ components:
         values:
           type: object
           description: |
-            Map of currency → price, rounded to 6 decimal places and
+            Map of currency → price at wire precision (6 dp at or above 0.01,
+            else 6 significant digits) and
             serialised as a JSON number (not a quoted string).
           additionalProperties:
             type: number
@@ -1496,7 +1725,7 @@ components:
           description: Bucket start time (RFC3339 UTC).
         p:
           type: number
-          description: Bucket close price, rounded to 6 decimal places.
+          description: Bucket close price at wire precision (6 dp at or above 0.01, else 6 significant digits).
       additionalProperties:
         type: number
         description: Converted close price for a `?in=` target currency.
@@ -1601,15 +1830,15 @@ components:
         from:
           type: number
           nullable: true
-          description: Anchor price (CA bucket close), 6 d.p., or `null`.
+          description: Anchor price (CA bucket close) at wire precision, or `null`.
         delta_abs:
           type: number
           nullable: true
-          description: "`now − from`, signed, 6 d.p. `null` when `from` is missing or zero."
+          description: "`now − from`, signed, at wire precision — a sub-0.01 delta keeps 6 significant digits rather than collapsing to 0. `null` when `from` is missing or zero."
         change_pct:
           type: number
           nullable: true
-          description: "`(now − from) / from × 100`, signed, 6 d.p. `null` when `from` is missing or zero."
+          description: "`(now − from) / from × 100`, signed, at wire precision — a move under 0.01% keeps 6 significant digits rather than reading as flat. `null` when `from` is missing or zero."
 
     FTChangeForCurrency:
       type: object
@@ -1668,6 +1897,24 @@ components:
           type: object
           description: Map keyed by period code (`1h`, `24h`, `7d`, `30d`).
           additionalProperties: { $ref: "#/components/schemas/ChangePeriod" }
+        fx:
+          type: object
+          description: |
+            Present only when at least one `?in=` conversion of `now` was
+            served with an FX rate older than the freshness budget
+            (`server.fx_max_staleness_seconds`). One key per stale target —
+            same shape as `RWAPrice.fx`. Absent when every rate was fresh.
+          additionalProperties:
+            type: object
+            required: [rate_ts, stale]
+            properties:
+              rate_ts:
+                type: string
+                format: date-time
+                description: Timestamp of the FX rate that was used.
+              stale:
+                type: boolean
+                example: true
       additionalProperties:
         type: number
         description: |
@@ -1679,9 +1926,9 @@ components:
       type: object
       description: |
         Envelope for `/v1/tickers/:token/latest`. One row per
-        `(exchange, target_symbol)`. Numbers are JSON strings (preserves
-        full `numeric(38,18)` precision, same convention as
-        `/v1/prices/:token`).
+        `(exchange, target_symbol)`. Ticker numbers are full-precision JSON
+        **strings** (preserving `numeric(38,18)`) — unlike the FT/RWA price
+        endpoints, which serve JSON numbers at wire precision.
       required: [source, entity, timestamp, tickers]
       properties:
         source:
@@ -1739,22 +1986,23 @@ components:
           example: "0.000021"
         volume_24h_base:
           type: string
-          nullable: true
           description: |
             24h trading volume in **token units** (e.g. count of MVRK).
-            Null when upstream omits it.
+            The key is OMITTED (not null) when upstream omits the value.
           example: "1234567.89"
         change_24h_pct:
           type: string
           nullable: true
           description: |
             Price change over 24h as percent, rounded to 6dp. Null when no
-            row exists at `ts - 24h` (cold start, exchange delisted then
-            relisted, etc.).
+            row falls inside the `[ts-25h, ts-24h]` anchor bracket (cold
+            start, ingestion gap, exchange delisted then relisted, etc.) —
+            an older row outside the bracket is deliberately NOT used, so a
+            multi-week move is never reported as a 24h change.
           example: "5.34"
         bid_ask_spread_pct:
           type: string
-          nullable: true
+          description: The key is OMITTED (not null) when upstream omits it.
           example: "0.10"
         trust_score:
           type: string
@@ -1834,7 +2082,10 @@ components:
           type: boolean
           description: |
             True when the FX rate is older than `server.fx_max_staleness_seconds`
-            (default 300s). Still served; UI may want to flag.
+            (default 300s). Still served; UI may want to flag. Past a fixed 26h
+            hard cap the conversion is refused instead — here the block is
+            returned with `error: no_rate`, while the flat `?in=` shapes drop
+            the currency key entirely.
         error:
           type: string
           enum: [no_rate, unsupported_target, unregistered_source, query_error]
@@ -1934,7 +2185,7 @@ components:
       properties:
         code:
           type: string
-          enum: [INVALID_ARGUMENT, NOT_FOUND, CONFLICT, RANGE_NOT_SATISFIABLE, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED, NOT_IMPLEMENTED]
+          enum: [INVALID_ARGUMENT, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, RANGE_NOT_SATISFIABLE, UNAVAILABLE, INTERNAL, RATE_LIMITED, OHLCV_NOT_IMPLEMENTED, NOT_IMPLEMENTED]
         message:
           type: string
           description: Client-safe message. Internal causes are NOT included; check server logs by `request_id` for the underlying error.

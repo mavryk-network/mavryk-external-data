@@ -307,11 +307,11 @@ func newRWAChartEngineFX(t *testing.T, repo *stubCandleRepo, lookup PairLookup, 
 }
 
 // pairWithRegisteredQuote returns a pair whose QuoteSymbol resolves through
-// prices.NewToken — required for FX since SourceToken must be in the
-// runtime token registry. The seed in token_prices_test.go registers mvrk
-// and usdt; we use usdt here.
+// prices.NewToken — required for FX since SourceToken must be in the runtime
+// token registry. RegisterTokens REPLACES the registry and registerTestTokens
+// installs mvrk only, so usdt is registered here explicitly rather than
+// inherited: the order tests run in must not decide whether this works.
 func pairWithRegisteredQuote() prices.RWAPair {
-	registerTestTokens(&testing.T{}) // ensure mvrk+usdt are registered
 	prices.RegisterTokens([]prices.TokenInfo{
 		{Symbol: "usdt", Name: "Tether", Enabled: true, CoinGeckoID: "tether"},
 	})

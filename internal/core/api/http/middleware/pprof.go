@@ -6,9 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// RegisterPprof attaches net/http/pprof under /debug/pprof/* on the given engine.
-// Off by default; opt-in via cfg.Server.PprofEnabled. Bind to a private interface
-// in production — pprof can disclose stack traces and code paths.
+// RegisterPprof attaches net/http/pprof under /debug/pprof/*. Opt-in via
+// cfg.Server.PprofEnabled and mounted only on the INTERNAL engine — pprof
+// discloses stack traces and code paths and must never face the public listener.
 func RegisterPprof(engine *gin.Engine) {
 	g := engine.Group("/debug/pprof")
 	g.GET("/", gin.WrapF(pprof.Index))

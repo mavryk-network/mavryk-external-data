@@ -50,16 +50,22 @@ BEGIN
 
     -- Compression: same shape as the underlying hypertable (0008). Older
     -- minute rows compress aggressively since segmentby keys are wide.
-    BEGIN
+    -- Existence check instead of EXCEPTION WHEN others: a broad catch would
+    -- mislabel a real ALTER failure as "already configured" (0008 pattern).
+    IF NOT EXISTS (
+        SELECT 1
+        FROM timescaledb_information.continuous_aggregates ca
+        JOIN timescaledb_information.compression_settings cs
+          ON cs.hypertable_name = ca.materialization_hypertable_name
+        WHERE ca.view_name = 'token_prices_1m'
+    ) THEN
         EXECUTE $sql$
             ALTER MATERIALIZED VIEW token_prices_1m SET (
                 timescaledb.compress,
                 timescaledb.compress_segmentby = 'token_symbol, source_code, quote_currency'
             )
         $sql$;
-    EXCEPTION WHEN others THEN
-        RAISE NOTICE 'compression already configured on token_prices_1m';
-    END;
+    END IF;
     BEGIN
         PERFORM add_compression_policy('token_prices_1m', INTERVAL '14 days');
     EXCEPTION WHEN duplicate_object THEN

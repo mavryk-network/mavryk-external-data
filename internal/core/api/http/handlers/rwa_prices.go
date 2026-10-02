@@ -18,26 +18,19 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// maxSymbolLen caps `{base}-{quote}` URL length defensively. Sync produces
-// short tickers; anything longer is gateway-grade input noise.
+// maxSymbolLen caps `{base}-{quote}` URL length defensively.
 const maxSymbolLen = 64
 
-// lastSide is the only orderbook side surfaced on the read-side. bid/ask/mid
-// stay in storage for future endpoints (e.g. /orderbook), but are not part
-// of this contract — which keeps the response flat and the SQL narrow.
+// lastSide is the only orderbook side surfaced on the read-side.
 const lastSide = "last"
 
-// PairLookup is the read-only contract handlers need to resolve a pair
-// `{base}-{quote}` symbol into the canonical RWAPair (used for both the
-// price query EntityKey and the `?in=` quote-token resolution).
+// PairLookup resolves a `{base}-{quote}` symbol to its canonical RWAPair.
 type PairLookup interface {
 	LookupRWAPairBySymbol(ctx context.Context, base, quote string) (prices.RWAPair, error)
 }
 
-// RWAStatsReader supplies the derived per-pair stats that enrich the /latest
-// snapshot: the all-time-high (price + date) and the price one year ago. Both
-// are read on the `last` side. Optional on RWAPriceDeps — when the reader is
-// nil, /latest simply omits the `ath` / `price_one_year_ago` blocks.
+// RWAStatsReader supplies the derived `last`-side stats that enrich /latest:
+// the all-time high (price + date) and the price one year ago.
 type RWAStatsReader interface {
 	AllTimeHighLast(ctx context.Context, pairID int64, side string) (decimal.Decimal, time.Time, bool, error)
 	PriceAtOrBefore(ctx context.Context, pairID int64, side string, ts time.Time) (decimal.Decimal, time.Time, bool, error)
@@ -51,45 +44,33 @@ type RWAPriceDeps struct {
 	DefaultSource prices.Source            // typically prices.SourceEquiteez
 	MaxLimit      int
 	DefaultLimit  int
-	// MaxInCurrencies caps the number of comma-separated currencies in `?in=`.
-	// 0 means unlimited (not recommended); production should pin to e.g. 10.
+	// MaxInCurrencies caps the currencies accepted in `?in=`; 0 is unlimited.
 	MaxInCurrencies int
-	// Stats is optional; supplies ath + price-one-year-ago for /latest. When
-	// nil those blocks are omitted (keeps the endpoint back-compatible and lets
-	// unit tests that don't exercise them stay minimal).
+	// Stats is optional; nil omits the ath / price_one_year_ago blocks.
 	Stats RWAStatsReader
-	// Launches is optional; resolves a symbol that has no orderbook pair to its
-	// primary-market launch, so /v1/rwa/{symbol} and /latest serve issuance
-	// assets instead of 404ing. Nil keeps the previous pair-only behaviour.
+	// Launches is optional; resolves a symbol with no orderbook pair to its
+	// primary-market launch instead of 404ing.
 	Launches RWALaunchResolver
 }
 
 // RWALaunchResolver resolves one `{base}-{quote}` symbol to its primary-market
-// launch. found=false means "not a primary-market asset" and is not an error —
-// the caller keeps its own 404.
+// launch. found=false means "not a primary-market asset" and is not an error.
 type RWALaunchResolver interface {
 	LaunchBySymbol(ctx context.Context, source prices.Source, base, quote string) (prices.RWALaunch, bool, error)
 }
 
-// rwaTarget is what a `:symbol` resolves to. Both facets are independent: an
-// asset can trade on an orderbook, still be in primary issuance, or both at
-// once — so this is not an either/or.
+// rwaTarget is what a `:symbol` resolves to. The facets are independent: an
+// asset can trade on an orderbook, be in primary issuance, or both at once.
 type rwaTarget struct {
 	Pair    prices.RWAPair
 	HasPair bool
 	Launch  *prices.RWALaunch
 }
 
-// resolveTargetFromPath resolves `:symbol` against BOTH catalogs.
-//
-// An asset that trades on an orderbook can still be in primary issuance, so a
-// successful pair lookup does not end the search — an earlier version returned
-// on the first hit and silently hid the issuance facet of such an asset.
-//
-// Error handling stays conservative: only a genuine "no such pair" miss lets a
-// launch answer the request, so a malformed symbol keeps its 400 and an
-// ambiguous pair its 409. A launch-catalog failure never escalates — it degrades
-// to "no issuance facet" (or to the pair's own 404 when there is no pair).
+// resolveTargetFromPath resolves `:symbol` against BOTH catalogs, since a traded
+// asset can still be in issuance. Only a genuine "no such pair" miss lets a
+// launch answer, so a malformed symbol keeps its 400 and an ambiguous pair its
+// 409; a launch-catalog failure degrades to "no issuance facet".
 func (d RWAPriceDeps) resolveTargetFromPath(c *gin.Context) (rwaTarget, error) {
 	pair, pairErr := d.resolvePairFromPath(c)
 	if pairErr != nil && !stderrors.Is(pairErr, prices.ErrPairNotFound) {
@@ -111,12 +92,8 @@ func (d RWAPriceDeps) resolveTargetFromPath(c *gin.Context) (rwaTarget, error) {
 }
 
 // launchPriceDTO renders a primary-market launch as a price snapshot: the fixed
-// base-tier sale price, stamped with when we last read the launchpad.
-//
-// `?in=` targets convert here just as they do for an orderbook quote — a fixed
-// sale price is still a price in the asset's quote currency. Conversion uses the
-// launchpad read time (the same instant the row reports as its `timestamp`), so
-// native and converted prices describe one moment.
+// base-tier sale price, stamped with when we last read the launchpad. `?in=`
+// converts at that same instant, so native and converted describe one moment.
 func (d RWAPriceDeps) launchPriceDTO(ctx context.Context, l prices.RWALaunch, targets []prices.Currency) rwaPriceDTO {
 	dto := rwaPriceDTO{
 		Timestamp:   formatRFC3339(l.LastSyncedAt),
@@ -127,16 +104,15 @@ func (d RWAPriceDeps) launchPriceDTO(ctx context.Context, l prices.RWALaunch, ta
 	}
 	if len(targets) > 0 {
 		quoteToken, quoteResolved := promoteQuoteToken(l.QuoteSymbol)
-		dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, l.Price, launchFXTime(l))
+		dto.Converted, dto.FX = d.convertFlat(ctx, quoteToken, quoteResolved, targets, l.Price, launchFXTime(l))
 	}
 	return dto
 }
 
 // ListBySymbol — GET /v1/rwa/:symbol
 //
-// Returns an array of RWAPrice objects (one per timestamp, only `last`
-// side). Optional `?in=usd,eur,...` adds converted prices as flat
-// top-level keys per row.
+// Array of RWAPrice objects (`last` side only). `?in=usd,eur,...` adds converted
+// prices as flat top-level keys per row.
 func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
@@ -183,10 +159,8 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 	}
 	action := func(ctx context.Context, req request) ([]rwaPriceDTO, error) {
 		if !req.HasPair {
-			// Primary-only asset: no trade history at all. A from/to window has
-			// genuinely no observations, so return [] rather than inventing a
-			// point at "now" (which would corrupt any chart drawn from it); in
-			// latest mode the fixed sale price IS the current quote.
+			// Primary-only asset: a window has genuinely no observations, so
+			// return [] rather than inventing a point at "now".
 			if req.Window {
 				return []rwaPriceDTO{}, nil
 			}
@@ -207,14 +181,12 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 				Market:      marketSecondary,
 			}
 			if len(req.InTargets) > 0 {
-				row.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, p.Price, p.Timestamp)
+				row.Converted, row.FX = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, p.Price, p.Timestamp)
 			}
 			out = append(out, row)
 		}
-		// The issuance facet is asset-level metadata, not a per-observation
-		// field: repeating it on every row of a windowed response (up to
-		// MaxLimit rows) would bloat the payload for no gain. Latest mode is the
-		// one shape that describes "the asset right now", so it carries it.
+		// The issuance facet is asset-level metadata, not per-observation: only
+		// latest mode ("the asset right now") carries it.
 		if req.Launch != nil && !req.Window && len(out) > 0 {
 			out[0].Issuance = issuanceBlock(*req.Launch)
 		}
@@ -225,8 +197,8 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 
 // LatestBySymbol — GET /v1/rwa/:symbol/latest
 //
-// Returns one RWAPrice object — same shape as a single element of
-// ListBySymbol's array. 404 when the pair has no `last` row yet.
+// One RWAPrice object, same shape as an element of ListBySymbol's array. 404
+// when the pair has no `last` row yet.
 func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
@@ -253,8 +225,7 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 				Source:    d.DefaultSource,
 				EntityKey: pair.EntityKey(),
 				Metrics:   []string{lastSide},
-				// Empty From/To ⇒ IsLatest ⇒ DISTINCT ON (side) DESC; with
-				// Metrics narrowed to [last] only one row comes back.
+				// Empty From/To ⇒ latest mode: DISTINCT ON (side), one row.
 			},
 			InTargets: inTargets,
 		}, nil
@@ -280,11 +251,11 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 			Market:      marketSecondary,
 		}
 		if len(req.InTargets) > 0 {
-			dto.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, picked.Price, picked.Timestamp)
+			dto.Converted, dto.FX = d.convertFlat(ctx, quoteToken, quoteResolved, req.InTargets, picked.Price, picked.Timestamp)
 		}
 		d.enrichLatest(ctx, &dto, req.Pair, quoteToken, quoteResolved, req.InTargets, picked.Timestamp)
-		// Still in primary issuance while already trading: the live quote stays
-		// the top-level price, and the block carries the sale price alongside.
+		// Trading while still in issuance: the live quote stays the top-level
+		// price and the block carries the sale price alongside.
 		if req.Launch != nil {
 			dto.Issuance = issuanceBlock(*req.Launch)
 		}
@@ -293,16 +264,10 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	return common.Wrap(bind, action)
 }
 
-// enrichLatest adds the `ath` and `price_one_year_ago` blocks to a /latest DTO
-// when a Stats reader is configured. Each block carries the native-quote value
-// plus — when `?in=` targets are present — the same flat per-currency
-// conversions as the top-level price. Conversions use the snapshot's own FX
-// rate (quoteTS, the latest `last` tick time), matching the top-level price's
-// rate, so the converted ATH / year-ago values are always present whenever the
-// top-level conversions are (rather than being dropped for lack of FX history
-// at the historical block date). The `ath.date` field still reports when the
-// ATH actually occurred. A nil reader, missing data, or a repo error simply
-// omits the block: the core price snapshot still returns 200.
+// enrichLatest adds the `ath` and `price_one_year_ago` blocks when a Stats
+// reader is configured. Both convert at the snapshot's own FX rate, not the
+// historical block date, so they are present whenever the top-level conversions
+// are; `ath.date` still reports when the ATH occurred.
 func (d RWAPriceDeps) enrichLatest(
 	ctx context.Context,
 	dto *rwaPriceDTO,
@@ -318,7 +283,8 @@ func (d RWAPriceDeps) enrichLatest(
 	if price, ts, found, err := d.Stats.AllTimeHighLast(ctx, pair.ID, lastSide); err == nil && found {
 		ath := &athDTO{Price: newNum6(price), Date: ts.Format("2006-01-02")}
 		if len(targets) > 0 {
-			ath.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
+			// Same snapshot rate as the top-level price — its fx flags cover these.
+			ath.Converted, _ = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
 		}
 		dto.ATH = ath
 	}
@@ -326,7 +292,7 @@ func (d RWAPriceDeps) enrichLatest(
 	if price, _, found, err := d.Stats.PriceAtOrBefore(ctx, pair.ID, lastSide, yearAgo); err == nil && found {
 		p1y := &priceAtDTO{Price: newNum6(price)}
 		if len(targets) > 0 {
-			p1y.Converted = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
+			p1y.Converted, _ = d.convertFlat(ctx, quoteToken, quoteResolved, targets, price, quoteTS)
 		}
 		dto.PriceOneYearAgo = p1y
 	}
@@ -334,27 +300,22 @@ func (d RWAPriceDeps) enrichLatest(
 
 // --- DTO ---
 
-// rwaPriceDTO is the on-wire shape of a single RWA price observation.
-// Used identically by the list and latest endpoints — only the cardinality
-// differs (array vs single object).
-//
-// Top-level keys are `timestamp`, `native_quote`, `price`, plus one
-// numeric key per converted currency. The converted currencies are
-// inlined via custom MarshalJSON so the response stays flat. ISO-4217
-// codes are 3 letters and never collide with the reserved keys.
+// rwaPriceDTO is the on-wire shape of one RWA price observation, shared by the
+// list and latest endpoints. Converted currencies inline as flat top-level keys
+// via custom MarshalJSON; 3-letter ISO codes never collide with reserved keys.
 type rwaPriceDTO struct {
 	Timestamp   string
 	NativeQuote string
 	Price       num6
-	// Market discriminates a live secondary-market quote from a fixed
-	// primary-market sale price (see GET /v1/rwa).
+	// Market discriminates a live secondary quote from a fixed primary sale price.
 	Market string
 	// Issuance is present only for a primary-market asset.
 	Issuance  *primaryIssuanceDTO
 	Converted map[string]num6 // optional; one key per `?in=` target that succeeded
-	// Optional enrichment (only on /latest, only when a Stats reader is wired).
-	// `ath` / `price_one_year_ago` are nested objects (not flat currency keys)
-	// so they don't collide with the top-level converted-price currency keys.
+	// FX carries stale-rate flags per converted currency; omitted when fresh.
+	FX map[string]fxMetaDTO
+	// /latest only. Nested objects, not flat currency keys, so they cannot
+	// collide with the converted-price keys.
 	ATH             *athDTO
 	PriceOneYearAgo *priceAtDTO
 }
@@ -373,6 +334,9 @@ func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
 	for cur, v := range d.Converted {
 		out[cur] = v
 	}
+	if len(d.FX) > 0 {
+		out["fx"] = d.FX
+	}
 	if d.ATH != nil {
 		out["ath"] = d.ATH
 	}
@@ -382,11 +346,8 @@ func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// athDTO is the all-time-high block on /latest: native-quote `price`, the
-// `date` (YYYY-MM-DD) it occurred, plus one numeric key per `?in=` currency
-// (converted at the snapshot's current FX rate, same as the top-level price).
-// Same flat-currency-inline convention as rwaPriceDTO, scoped inside the `ath`
-// object.
+// athDTO is the all-time-high block on /latest: native-quote `price`, the `date`
+// it occurred (YYYY-MM-DD), plus one flat numeric key per `?in=` currency.
 type athDTO struct {
 	Price     num6
 	Date      string
@@ -403,9 +364,7 @@ func (a athDTO) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// priceAtDTO is a bare price block (price-one-year-ago): native-quote `price`
-// plus one numeric key per `?in=` currency, converted at the snapshot's
-// current FX rate (same as the top-level price).
+// priceAtDTO is a bare price block plus one flat key per `?in=` currency.
 type priceAtDTO struct {
 	Price     num6
 	Converted map[string]num6
@@ -420,26 +379,63 @@ func (p priceAtDTO) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// num6 carries a price rounded to 6 decimal places and serialises as a
-// JSON number (no quotes). Stays in decimal precision — no float64
-// round-trip — so values like 156.25 don't drift to 156.249999...
+// fxMetaDTO flags a conversion served with a stale rate, under an `fx` key.
+type fxMetaDTO struct {
+	RateTS string `json:"rate_ts"`
+	Stale  bool   `json:"stale"`
+}
+
+// Wire number precision. A fixed 6-decimal grid destroys sub-cent values (a
+// 6.8e-7 price renders as 0.000001 or 0), so below 0.01 the grid goes relative:
+// 6 significant digits. At or above 0.01 the bytes are unchanged.
+const (
+	wirePlaces    = 6
+	wireSigDigits = 6
+	// maxWirePlaces stops a corrupt exponent from asking Round() for a
+	// 10^n big.Int; numeric(38,18) never needs more than 34 places.
+	maxWirePlaces = 36
+)
+
+var wireSmallValueThreshold = decimal.New(1, -2)
+
+// num6 serialises a wire-rounded price as a JSON number, staying in decimal
+// precision — no float64 round-trip — so 156.25 doesn't drift.
 type num6 struct{ d decimal.Decimal }
 
-func newNum6(d decimal.Decimal) num6 { return num6{d: d.Round(6)} }
+func newNum6(d decimal.Decimal) num6 { return num6{d: roundForWire(d)} }
+
+// roundForWire: |d| >= 0.01 → Round(6); below that, 6 significant digits.
+func roundForWire(d decimal.Decimal) decimal.Decimal {
+	if d.IsZero() || d.Abs().GreaterThanOrEqual(wireSmallValueThreshold) {
+		return d.Round(wirePlaces)
+	}
+	places := wireSigDigits - 1 - leadingDigitPos(d)
+	if places > maxWirePlaces {
+		places = maxWirePlaces
+	}
+	return d.Round(int32(places)) //nolint:gosec // places is bounded by maxWirePlaces
+}
+
+// leadingDigitPos returns floor(log10(|d|)). decimal.NumDigits() is not used:
+// its float64 fast path misreports coefficients around 10^15.
+func leadingDigitPos(d decimal.Decimal) int {
+	s := d.Coefficient().String()
+	digits := len(s)
+	if digits > 0 && s[0] == '-' {
+		digits--
+	}
+	return digits + int(d.Exponent()) - 1
+}
 
 func (n num6) MarshalJSON() ([]byte, error) {
-	// decimal.String() is the canonical form: "34", "0.5", "124.857494".
-	// No trailing zeros, no quotes — already a valid JSON number.
+	// decimal.String() is canonical fixed-point: already a valid JSON number.
 	return []byte(n.d.String()), nil
 }
 
 // --- internal helpers ---
 
-// resolvePairFromPath parses `:symbol` and resolves it to a single enabled
-// RWAPair. Returns:
-//   - 400 INVALID_ARGUMENT — symbol does not parse as `{base}-{quote}`.
-//   - 404 NOT_FOUND        — no enabled pair matches (via ErrPairNotFound).
-//   - 409 CONFLICT         — 2+ enabled pairs match (via PairAmbiguousError).
+// resolvePairFromPath resolves `:symbol` to a single enabled RWAPair: 400 when
+// it does not parse, 404 (ErrPairNotFound) on a miss, 409 when 2+ pairs match.
 func (d RWAPriceDeps) resolvePairFromPath(c *gin.Context) (prices.RWAPair, error) {
 	raw := c.Param("symbol")
 	base, quote, ok := parseRWASymbol(raw)
@@ -450,9 +446,8 @@ func (d RWAPriceDeps) resolvePairFromPath(c *gin.Context) (prices.RWAPair, error
 	return d.Lookup.LookupRWAPairBySymbol(c.Request.Context(), base, quote)
 }
 
-// parseRWASymbol splits `{base}-{quote}` on the LAST hyphen so that future
-// dashes inside `base_symbol` (e.g. `X-AT-USDT`) keep parsing. Returns
-// lowercased components for case-insensitive SQL comparison.
+// parseRWASymbol splits `{base}-{quote}` on the LAST hyphen so dashes inside
+// `base_symbol` (`X-AT-USDT`) keep parsing. Components come back lowercased.
 func parseRWASymbol(s string) (base, quote string, ok bool) {
 	s = strings.TrimSpace(s)
 	if s == "" || len(s) > maxSymbolLen {
@@ -470,10 +465,8 @@ func parseRWASymbol(s string) (base, quote string, ok bool) {
 	return base, quote, true
 }
 
-// pickLatestLast returns the single freshest `last` PricePoint. Defensive
-// — the repository's latestPerSide already returns at most one row when
-// Metrics is pinned to [last], so this is a tiebreaker for the (rare)
-// case where stub or test data carries multiple last-rows.
+// pickLatestLast returns the freshest `last` PricePoint. Defensive: the repo
+// already returns at most one row when Metrics is pinned to [last].
 func pickLatestLast(points []prices.PricePoint) (prices.PricePoint, bool) {
 	var picked prices.PricePoint
 	found := false
@@ -489,10 +482,8 @@ func pickLatestLast(points []prices.PricePoint) (prices.PricePoint, bool) {
 	return picked, found
 }
 
-// promoteQuoteToken tries to lift the pair's quote_symbol into a registered
-// Token. Returns (zero, false) when the symbol is unregistered — the
-// flat-response handler then simply omits all converted-currency keys
-// (we'd never get a usable rate without a registered source token).
+// promoteQuoteToken lifts the pair's quote_symbol into a registered Token.
+// (zero, false) means unregistered: the handler omits all converted keys.
 func promoteQuoteToken(quoteSymbol string) (prices.Token, bool) {
 	t, err := prices.NewToken(quoteSymbol)
 	if err != nil {
@@ -501,9 +492,8 @@ func promoteQuoteToken(quoteSymbol string) (prices.Token, bool) {
 	return t, true
 }
 
-// parseInQuery validates the comma-separated `?in=` parameter against
-// `prices.NewCurrency`. Empty / missing returns nil. Unknown values OR
-// requests larger than MaxInCurrencies fail with 400 INVALID_ARGUMENT.
+// parseInQuery validates the comma-separated `?in=` parameter. Empty returns
+// nil; unknown values or more than MaxInCurrencies fail with 400.
 func (d RWAPriceDeps) parseInQuery(c *gin.Context) ([]prices.Currency, error) {
 	raw := strings.TrimSpace(c.Query("in"))
 	if raw == "" {
@@ -531,10 +521,8 @@ func (d RWAPriceDeps) parseInQuery(c *gin.Context) ([]prices.Currency, error) {
 	return out, nil
 }
 
-// convertFlat builds the per-currency map for one row. Failed conversions
-// (no FX rate, unsupported target, unregistered source) are silently
-// dropped from the output map — observability lives in the
-// `fx_conversions_total` counter, not on the wire.
+// convertFlat builds the per-currency map for one row. Failed conversions drop
+// silently (see `fx_conversions_total`); stale rates are flagged in `fx`.
 func (d RWAPriceDeps) convertFlat(
 	ctx context.Context,
 	quoteToken prices.Token,
@@ -542,16 +530,16 @@ func (d RWAPriceDeps) convertFlat(
 	targets []prices.Currency,
 	native decimal.Decimal,
 	ts time.Time,
-) map[string]num6 {
+) (map[string]num6, map[string]fxMetaDTO) {
 	if !quoteResolved {
-		// Account for the registry-miss in metrics for every requested target;
-		// the wire response just omits the currency keys.
+		// Meter the registry miss; the wire response just omits the keys.
 		for _, t := range targets {
 			metrics.FXConversionsTotal.WithLabelValues("unknown", string(t), "unregistered_source").Inc()
 		}
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]num6, len(targets))
+	var fx map[string]fxMetaDTO
 	for _, target := range targets {
 		res, err := timedConvert(ctx, d.Converter, quoteToken, target, native, ts)
 		if err != nil {
@@ -560,12 +548,16 @@ func (d RWAPriceDeps) convertFlat(
 		out[string(target)] = newNum6(res.Amount)
 		if res.Stale {
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
+			if fx == nil {
+				fx = make(map[string]fxMetaDTO, 1)
+			}
+			fx[string(target)] = fxMetaDTO{RateTS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, fx
 }
 
 // timedConvert wraps PriceConverter.Convert with timing + outcome metrics.
@@ -605,5 +597,4 @@ func errToMetricLabel(err error) string {
 	}
 }
 
-// Compile-time sanity: real *repositories.LookupRepository satisfies PairLookup.
 var _ PairLookup = (*repositories.LookupRepository)(nil)

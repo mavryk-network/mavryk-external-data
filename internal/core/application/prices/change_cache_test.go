@@ -17,11 +17,11 @@ func TestChangeCacheNowRoundTrip(t *testing.T) {
 	price := decimal.RequireFromString("0.071541")
 	ts := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 
-	if _, _, ok := c.GetNow(src, ent, cur); ok {
+	if _, _, ok := c.GetNow(src, ent, "last", cur); ok {
 		t.Fatal("GetNow on empty cache must miss")
 	}
-	c.SetNow(src, ent, cur, price, ts)
-	got, gotTS, ok := c.GetNow(src, ent, cur)
+	c.SetNow(src, ent, "last", cur, price, ts)
+	got, gotTS, ok := c.GetNow(src, ent, "last", cur)
 	if !ok {
 		t.Fatal("GetNow after SetNow must hit")
 	}
@@ -42,11 +42,11 @@ func TestChangeCacheAnchorRoundTrip(t *testing.T) {
 	price := decimal.RequireFromString("0.072100")
 	ts := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
-	if _, _, ok := c.GetAnchor(src, ent, cur, per); ok {
+	if _, _, ok := c.GetAnchor(src, ent, "last", cur, per); ok {
 		t.Fatal("GetAnchor on empty cache must miss")
 	}
-	c.SetAnchor(src, ent, cur, per, price, ts)
-	got, gotTS, ok := c.GetAnchor(src, ent, cur, per)
+	c.SetAnchor(src, ent, "last", cur, per, price, ts)
+	got, gotTS, ok := c.GetAnchor(src, ent, "last", cur, per)
 	if !ok {
 		t.Fatal("GetAnchor after SetAnchor must hit")
 	}
@@ -69,13 +69,13 @@ func TestChangeCacheNowAndAnchorAreIndependent(t *testing.T) {
 
 	now := decimal.RequireFromString("100")
 	anchor := decimal.RequireFromString("90")
-	c.SetNow(src, ent, cur, now, time.Now())
-	c.SetAnchor(src, ent, cur, per, anchor, time.Now().Add(-24*time.Hour))
+	c.SetNow(src, ent, "last", cur, now, time.Now())
+	c.SetAnchor(src, ent, "last", cur, per, anchor, time.Now().Add(-24*time.Hour))
 
-	if got, _, _ := c.GetNow(src, ent, cur); !got.Equal(now) {
+	if got, _, _ := c.GetNow(src, ent, "last", cur); !got.Equal(now) {
 		t.Errorf("now = %s, want %s", got, now)
 	}
-	if got, _, _ := c.GetAnchor(src, ent, cur, per); !got.Equal(anchor) {
+	if got, _, _ := c.GetAnchor(src, ent, "last", cur, per); !got.Equal(anchor) {
 		t.Errorf("anchor = %s, want %s", got, anchor)
 	}
 	if c.Len() != 2 {
@@ -92,17 +92,17 @@ func TestChangeCachePerPeriodIndependence(t *testing.T) {
 
 	v24 := decimal.RequireFromString("90")
 	v7 := decimal.RequireFromString("80")
-	c.SetAnchor(src, ent, cur, prices.Period24h, v24, time.Now())
-	c.SetAnchor(src, ent, cur, prices.Period7d, v7, time.Now())
+	c.SetAnchor(src, ent, "last", cur, prices.Period24h, v24, time.Now())
+	c.SetAnchor(src, ent, "last", cur, prices.Period7d, v7, time.Now())
 
-	if got, _, _ := c.GetAnchor(src, ent, cur, prices.Period24h); !got.Equal(v24) {
+	if got, _, _ := c.GetAnchor(src, ent, "last", cur, prices.Period24h); !got.Equal(v24) {
 		t.Errorf("24h = %s, want %s", got, v24)
 	}
-	if got, _, _ := c.GetAnchor(src, ent, cur, prices.Period7d); !got.Equal(v7) {
+	if got, _, _ := c.GetAnchor(src, ent, "last", cur, prices.Period7d); !got.Equal(v7) {
 		t.Errorf("7d = %s, want %s", got, v7)
 	}
 	// 30d was never set; must miss.
-	if _, _, ok := c.GetAnchor(src, ent, cur, prices.Period30d); ok {
+	if _, _, ok := c.GetAnchor(src, ent, "last", cur, prices.Period30d); ok {
 		t.Error("30d should miss")
 	}
 }
@@ -134,5 +134,24 @@ func TestChangeCacheSetWithZeroTTLNoOp(t *testing.T) {
 		decimal.NewFromInt(1), time.Now(), 0)
 	if c.Len() != 0 {
 		t.Errorf("expected no entry after 0-TTL set, got len=%d", c.Len())
+	}
+}
+
+func TestChangeCache_AuxKeyPartitions(t *testing.T) {
+	c := NewChangeCache()
+	src, ent, cur := prices.SourceEquiteez, "42", "usdt"
+	bid := decimal.RequireFromString("55")
+	ask := decimal.RequireFromString("57")
+	c.SetNow(src, ent, "bid", cur, bid, time.Now())
+	c.SetNow(src, ent, "ask", cur, ask, time.Now())
+
+	if got, _, ok := c.GetNow(src, ent, "bid", cur); !ok || !got.Equal(bid) {
+		t.Errorf("bid slot = %v (ok=%v), want 55", got, ok)
+	}
+	if got, _, ok := c.GetNow(src, ent, "ask", cur); !ok || !got.Equal(ask) {
+		t.Errorf("ask slot = %v (ok=%v), want 57", got, ok)
+	}
+	if _, _, ok := c.GetNow(src, ent, "last", cur); ok {
+		t.Error("last slot must be a miss — sides must not cross-contaminate")
 	}
 }

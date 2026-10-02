@@ -121,3 +121,53 @@ func TestSyncRWALaunches_DisablesDelistedTokens(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1, "an empty allowlist (indexer mid-resync) must not retire the catalog")
 }
+
+func TestSyncRWALaunches_PreservesLaunchMissingFromPartialResponse(t *testing.T) {
+	db := openGorm(t)
+	truncateLaunches(t, db)
+	repo := repositories.NewLaunchRepository(db)
+	ctx := context.Background()
+	indexer := &fakeLaunchpadIndexer{}
+	srv := httptest.NewServer(indexer)
+	t.Cleanup(srv.Close)
+	cfg := launchSyncTestConfig(srv.URL)
+	allowlist := "[" + allowlistedToken("KT1AAA", "AAA") + "," + allowlistedToken("KT1BBB", "BBB") + "]"
+	fullLaunches := "[" + activeLaunch("KT1AAA", "1000000") + "," + activeLaunch("KT1BBB", "2000000") + "]"
+
+	indexer.set(allowlist, fullLaunches)
+	stored, err := jobs.SyncRWALaunches(ctx, cfg, repo, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, stored)
+
+	// A successful refresh of BBB must not hide AAA when the complete
+	// allowlist still contains it but the launch join temporarily omits it.
+	indexer.set(allowlist, "["+activeLaunch("KT1BBB", "3000000")+"]")
+	stored, err = jobs.SyncRWALaunches(ctx, cfg, repo, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stored)
+	got, found, err := repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "aaa", "usdt")
+	require.NoError(t, err)
+	require.True(t, found, "a missing launch join must preserve the allowlisted token")
+	require.True(t, got.Price.Equal(decimal.NewFromInt(1)))
+	list, err := repo.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+
+	// An explicit unusable price has different semantics: retire AAA while
+	// BBB confirms the response can refresh the catalog, then recover AAA.
+	indexer.set(allowlist, "["+activeLaunch("KT1AAA", "0")+","+activeLaunch("KT1BBB", "3000000")+"]")
+	stored, err = jobs.SyncRWALaunches(ctx, cfg, repo, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stored)
+	_, found, err = repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "aaa", "usdt")
+	require.NoError(t, err)
+	require.False(t, found, "an explicitly unusable launch must stop serving its old price")
+
+	indexer.set(allowlist, fullLaunches)
+	stored, err = jobs.SyncRWALaunches(ctx, cfg, repo, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, stored)
+	_, found, err = repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "aaa", "usdt")
+	require.NoError(t, err)
+	require.True(t, found, "a later usable launch must undo the sync disable")
+}

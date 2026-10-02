@@ -1,11 +1,11 @@
 # =========================
 # Builder stage
 # =========================
-# refactoring_v2 §8.1: pin base images by digest in production deployments.
-# Recommended setup: enable Renovate or Dependabot to auto-update the digest;
-# the simplest manual refresh is `docker pull golang:1.25-alpine && docker inspect`
-# then replace the tag with `golang:1.25-alpine@sha256:<digest>`.
-FROM golang:1.25-alpine AS builder
+# Base images are digest-pinned (multi-arch index digests) so a build always
+# resolves the exact reviewed content; Renovate refreshes them
+# (helpers:pinGitHubActionDigests / docker pinDigests in .github/renovate.json).
+# Manual refresh: docker buildx imagetools inspect <tag> → replace the digest.
+FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS builder
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # =========================
 # Migration stage
 # =========================
-FROM alpine:3.22 AS migration
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS migration
 
 WORKDIR /app
 
@@ -48,7 +48,7 @@ CMD ["./run-migrations.sh"]
 # =========================
 # Production stage
 # =========================
-FROM alpine:3.22 AS production
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS production
 
 RUN apk --no-cache add ca-certificates tzdata dumb-init && \
     addgroup -g 1001 -S app && \

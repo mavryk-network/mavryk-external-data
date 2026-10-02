@@ -11,12 +11,10 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// RateLimit is an inbound HTTP throttle. Returns 429 with a small JSON body when
-// the per-IP (or global) bucket runs out of tokens. Disabled when cfg.RPS <= 0.
-//
-// Per-IP buckets are kept in an in-memory map; idle entries are evicted by a
-// background goroutine. No external dependency (Redis) required for the simplest
-// case of "bound a single ingress instance".
+// RateLimit is an inbound HTTP throttle returning 429 when the per-IP (or
+// global) bucket runs out of tokens; disabled when cfg.RPS <= 0. /healthz and
+// /readyz are exempt — a kubelet probe starved of tokens restarts the pod.
+// Per-IP buckets live in an in-memory map, evicted once idle.
 func RateLimit(cfg config.ServerRateLimitConfig) gin.HandlerFunc {
 	if cfg.RPS <= 0 {
 		return func(c *gin.Context) { c.Next() }
@@ -32,6 +30,10 @@ func RateLimit(cfg config.ServerRateLimitConfig) gin.HandlerFunc {
 	if !cfg.PerIP {
 		l := rate.NewLimiter(rate.Limit(cfg.RPS), burst)
 		return func(c *gin.Context) {
+			if isHealthRoute(c) {
+				c.Next()
+				return
+			}
 			if !l.Allow() {
 				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 					"code":    "RATE_LIMITED",
@@ -46,6 +48,10 @@ func RateLimit(cfg config.ServerRateLimitConfig) gin.HandlerFunc {
 	store := newIPLimiterStore(rate.Limit(cfg.RPS), burst)
 	go store.evictLoop(15 * time.Minute)
 	return func(c *gin.Context) {
+		if isHealthRoute(c) {
+			c.Next()
+			return
+		}
 		l := store.limiter(c.ClientIP())
 		if !l.Allow() {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
@@ -56,6 +62,11 @@ func RateLimit(cfg config.ServerRateLimitConfig) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func isHealthRoute(c *gin.Context) bool {
+	p := c.Request.URL.Path
+	return p == "/healthz" || p == "/readyz"
 }
 
 type ipBucket struct {
@@ -94,8 +105,8 @@ func (s *ipLimiterStore) limiter(ip string) *rate.Limiter {
 	return b.limiter
 }
 
-// evictLoop drops buckets that haven't been used for `idle` to bound memory.
-// Runs forever; intentionally not stoppable — store lives for the process lifetime.
+// evictLoop drops buckets unused for `idle` to bound memory. Intentionally not
+// stoppable — the store lives for the process lifetime.
 func (s *ipLimiterStore) evictLoop(idle time.Duration) {
 	t := time.NewTicker(idle)
 	defer t.Stop()

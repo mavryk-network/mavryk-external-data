@@ -259,11 +259,17 @@ func TestConverter_HistoricalAtOrBefore(t *testing.T) {
 		askAt    time.Time
 		wantRate decimal.Decimal
 		wantTS   time.Time
+		wantErr  error
 	}{
-		{"at t1 exactly", t1, decimal.NewFromFloat(1.0001), t1},
-		{"between t1 and t2", t1.Add(7 * 24 * time.Hour), decimal.NewFromFloat(1.0001), t1},
-		{"at t2", t2, decimal.NewFromFloat(1.0005), t2},
-		{"after t3", t3.Add(time.Hour), decimal.NewFromFloat(0.9999), t3},
+		{"at t1 exactly", t1, decimal.NewFromFloat(1.0001), t1, nil},
+		// Within the hard staleness cap the at-or-before rate is served
+		// (flagged Stale past the soft budget).
+		{"shortly after t1", t1.Add(20 * time.Hour), decimal.NewFromFloat(1.0001), t1, nil},
+		// Past the hard cap a rate is a dead feed, not a coarse one — refuse
+		// instead of converting a week-old rate as if current.
+		{"mid-gap past hard cap", t1.Add(7 * 24 * time.Hour), decimal.Decimal{}, time.Time{}, ErrNoFXRate},
+		{"at t2", t2, decimal.NewFromFloat(1.0005), t2, nil},
+		{"after t3", t3.Add(time.Hour), decimal.NewFromFloat(0.9999), t3, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -274,6 +280,12 @@ func TestConverter_HistoricalAtOrBefore(t *testing.T) {
 				decimal.NewFromInt(100),
 				c.askAt,
 			)
+			if c.wantErr != nil {
+				if !errors.Is(err, c.wantErr) {
+					t.Fatalf("convert err = %v, want %v", err, c.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("convert: %v", err)
 			}
@@ -349,5 +361,56 @@ func TestConverter_ConcurrentSafe(t *testing.T) {
 	// hit, but it must be much less than 50*20 = 1000.
 	if got := atomic.LoadInt32(&source.queries); got > 50 {
 		t.Errorf("upstream queries = %d under heavy concurrency, expected ~1-3", got)
+	}
+}
+
+// TestConverter_StaleReachableUpToHardCap pins the relationship config
+// validation enforces: between the soft budget and the fixed hard cap a rate is
+// SERVED and flagged stale; only past the cap is the conversion refused (and
+// the currency dropped from the wire). A budget that swallowed the whole range
+// would make fx.stale unobservable.
+func TestConverter_StaleReachableUpToHardCap(t *testing.T) {
+	registerFXTokens(t)
+	// The widest budget config validation permits.
+	budget := FXHardStalenessCap - time.Second
+
+	cases := []struct {
+		name      string
+		age       time.Duration
+		wantStale bool
+		wantErr   bool
+	}{
+		{name: "inside the budget", age: budget - time.Hour, wantStale: false},
+		{name: "between budget and hard cap", age: budget + 100*time.Millisecond, wantStale: true},
+		{name: "past the hard cap", age: FXHardStalenessCap + time.Minute, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Now().UTC()
+			source := &fakeFXSource{points: []prices.PricePoint{{
+				Source:    prices.SourceCoinGecko,
+				EntityKey: "usdt",
+				Timestamp: at.Add(-tc.age),
+				Metric:    "usd",
+				Price:     decimal.NewFromInt(2),
+			}}}
+			conv := NewTokenFXConverter(source, budget, prices.SourceCoinGecko)
+
+			res, err := conv.Convert(context.Background(), prices.Token("usdt"),
+				prices.Currency("usd"), decimal.NewFromInt(1), at)
+			if tc.wantErr {
+				if !errors.Is(err, ErrNoFXRate) {
+					t.Fatalf("err = %v, want ErrNoFXRate", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("convert: %v", err)
+			}
+			if res.Stale != tc.wantStale {
+				t.Errorf("Stale = %v, want %v for a rate %s old (budget %s, hard cap %s)",
+					res.Stale, tc.wantStale, tc.age, budget, FXHardStalenessCap)
+			}
+		})
 	}
 }
