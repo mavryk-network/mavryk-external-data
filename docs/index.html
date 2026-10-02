@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!--
-    CSP: only same-origin content plus the two pinned unpkg assets below.
+    CSP is sent in the SwaggerUI HTTP response header so frame-ancestors is
+    enforced. It allows only same-origin content plus the pinned unpkg assets.
     unsafe-inline covers the bootstrap <script>/<style> in this file; script
     integrity is still enforced via the SRI attribute.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" />
   <title>Mavryk External Data API</title>
   <!--
     Swagger UI 5.x — supports OpenAPI 3.0.x. Loaded from unpkg with SRI

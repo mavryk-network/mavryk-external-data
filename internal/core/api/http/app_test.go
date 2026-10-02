@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,38 @@ func TestApp_PublicEngine_OpenRoutesNeedNoToken(t *testing.T) {
 		}
 		if w.Body.Len() == 0 {
 			t.Errorf("GET %s: empty body", path)
+		}
+	}
+}
+
+func TestApp_DocsContentSecurityPolicy(t *testing.T) {
+	env := newAppTestEnv(t, func(cfg *config.Config) {
+		cfg.Server.InternalPort = appTestIntPort
+	})
+	const wantPolicy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+	metaPolicy := regexp.MustCompile(`(?i)<meta\b[^>]*\bhttp-equiv\s*=\s*["']?content-security-policy\b`)
+	for _, listener := range []struct {
+		name    string
+		handler http.Handler
+	}{
+		{name: "public", handler: env.public},
+		{name: "internal", handler: env.internal},
+	} {
+		for _, path := range []string{"/docs", "/docs/"} {
+			t.Run(listener.name+path, func(t *testing.T) {
+				w := appTestGet(t, listener.handler, path, "")
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200", w.Code)
+				}
+				// frame-ancestors is ignored in a meta policy, so the full
+				// policy must reach the browser in the response header.
+				if got := w.Header().Get("Content-Security-Policy"); got != wantPolicy {
+					t.Errorf("Content-Security-Policy = %q, want %q", got, wantPolicy)
+				}
+				if metaPolicy.Match(w.Body.Bytes()) {
+					t.Error("Swagger UI still includes a meta Content-Security-Policy")
+				}
+			})
 		}
 	}
 }
