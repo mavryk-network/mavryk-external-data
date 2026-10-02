@@ -60,7 +60,9 @@ func setDefaults(config *Config) {
 	if config.Database.User == "" {
 		config.Database.User = "postgres"
 	}
-	if config.Database.Password == "" {
+	// Production must supply its own password; never silently substitute the
+	// development credential when POSTGRES_PASSWORD is missing.
+	if config.Database.Password == "" && config.Server.EffectiveGinMode() != "release" {
 		config.Database.Password = "postgres"
 	}
 	if config.Database.Name == "" {
@@ -70,6 +72,9 @@ func setDefaults(config *Config) {
 		// "prefer" negotiates TLS when offered and falls back to plaintext for a
 		// local Postgres without it. POSTGRES_SSL=require to enforce.
 		config.Database.SSLMode = "prefer"
+	}
+	if config.Database.StatementTimeout == 0 {
+		config.Database.StatementTimeout = DurationYAML(DefaultStatementTimeout)
 	}
 
 	if config.Job.IntervalSeconds == 0 {

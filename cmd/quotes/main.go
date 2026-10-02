@@ -9,7 +9,6 @@ import (
 	stdhttp "net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -217,10 +216,8 @@ func run() int {
 	return 0
 }
 
-// warnDevDefaults logs warnings when production-looking config (effective
-// release mode) still leans on dev defaults that wouldn't survive an audit.
-// Validate only checks config SHAPE — nothing refuses to start over these, so
-// these warnings are the only signal.
+// warnDevDefaults flags optional hardening settings in effective release mode.
+// Config validation already refuses disabled auth and missing/default passwords.
 func warnDevDefaults(cfg *config.Config, logger *zerolog.Logger) {
 	if cfg.Server.EffectiveGinMode() != "release" {
 		return
@@ -228,22 +225,6 @@ func warnDevDefaults(cfg *config.Config, logger *zerolog.Logger) {
 	if cfg.Server.RateLimit.RPS <= 0 {
 		logger.Warn().Msg("inbound_rate_limit_disabled_in_release_mode")
 	}
-	if wellKnownDBPasswords[strings.ToLower(strings.TrimSpace(cfg.Database.Password))] {
-		// Never log the value itself.
-		logger.Warn().Msg("database_password_is_a_well_known_default")
-	}
-	if !cfg.Auth.JWTVerificationEnabled() {
-		logger.Warn().Msg("auth_disabled_in_release_mode_rwa_routes_open_on_public_listener")
-	}
-}
-
-// wellKnownDBPasswords are the defaults shipped by this repo and its tooling.
-var wellKnownDBPasswords = map[string]bool{
-	"postgres": true,
-	"admin":    true,
-	"password": true,
-	"changeme": true,
-	"qwerty":   true,
 }
 
 // tokenRepoAdapter and rwaRepoAdapter let the concrete repos satisfy

@@ -6,9 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -668,45 +665,4 @@ func scannedRows(node map[string]any) int {
 		}
 	}
 	return total
-}
-
-// The runners re-apply every migration on each deploy, so the edited 0003 must
-// swap the old latest index (pre-source_code key) for the aligned one in place.
-func TestTokenPricesLatestIndexSwappedOnReplay(t *testing.T) {
-	db := openGorm(t)
-	dir, err := findMigrationsDir()
-	require.NoError(t, err)
-
-	indexExists := func(name string) bool {
-		var n int64
-		require.NoError(t, db.Raw(
-			`SELECT count(*) FROM pg_class WHERE relkind = 'i' AND relname = ?`, name).Scan(&n).Error)
-		return n > 0
-	}
-
-	// Recreate the pre-swap shape: the superseded index present, the new one gone.
-	require.NoError(t, db.Exec(`DROP INDEX IF EXISTS idx_token_prices_latest_source`).Error)
-	require.NoError(t, db.Exec(
-		`CREATE INDEX IF NOT EXISTS idx_token_prices_latest
-		   ON token_prices (token_symbol, quote_currency, ts DESC)`).Error)
-	t.Cleanup(func() {
-		_ = db.Exec(`DROP INDEX IF EXISTS idx_token_prices_latest`).Error
-		_ = db.Exec(
-			`CREATE INDEX IF NOT EXISTS idx_token_prices_latest_source
-			   ON token_prices (token_symbol, source_code, quote_currency, ts DESC)`).Error
-	})
-
-	// The swap must hold through a full directory re-apply, not just 0003.
-	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
-	require.NoError(t, err)
-	require.NotEmpty(t, files)
-	sort.Strings(files)
-	for _, path := range files {
-		body, readErr := os.ReadFile(path)
-		require.NoError(t, readErr)
-		require.NoErrorf(t, db.Exec(string(body)).Error, "applying %s", filepath.Base(path))
-	}
-
-	require.True(t, indexExists("idx_token_prices_latest_source"), "replay must build the aligned index")
-	require.False(t, indexExists("idx_token_prices_latest"), "replay must drop the superseded index")
 }

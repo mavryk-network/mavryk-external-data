@@ -111,7 +111,11 @@ contract — request/response shapes live in the spec.
 🔒 — on the public listener these routes require an MBIO-issued RS256 Bearer
 JWT (`Authorization: Bearer <token>`; 401/403 on failure). The intra-cluster
 internal listener (`server.internal_port`) serves them without auth. Local
-dev: `AUTH_ENABLED=false` or `make jwt` to mint a token.
+dev: use `SERVER_GIN_MODE=debug` with `AUTH_ENABLED=false` or `make jwt` to mint
+a token. Effective release mode (also derived from a non-local bind host when
+`SERVER_GIN_MODE` is unset) refuses disabled auth, missing/default database
+passwords, and `AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY`; configure the MBIO JWKS host
+and a production database password before deploying.
 
 ### Common query parameters
 
@@ -220,6 +224,7 @@ database:
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: "30m"
+  statement_timeout: "10s"        # server-side bound on each SQL statement
   batch_size: 500                 # Save() chunk size
 
 coingecko:
@@ -238,6 +243,13 @@ rwa:
   enabled: false
   interval_seconds: 60
 ```
+
+`POSTGRES_STATEMENT_TIMEOUT` overrides `database.statement_timeout` on every
+application DB connection, including background jobs. It defaults to 10s;
+zero uses that default, and negative or sub-millisecond values are rejected.
+This bounds SQL execution for wide legacy `/quotes` scans without changing
+their time-window or paging contract. Migration connections are separate and
+do not inherit this application timeout.
 
 Token registry lives in the `tokens` table (loaded at startup;
 [ADR-0010](docs/adr/0010-runtime-token-registry.md)). Per-token live/backfill

@@ -31,6 +31,7 @@ func (c *Config) Validate() error {
 		c.validateRWA,
 		c.validateTickers,
 		c.validateAuth,
+		c.validateProductionSafety,
 	} {
 		if err := fn(); err != nil {
 			return err
@@ -115,6 +116,9 @@ func (c *Config) validateServer() error {
 }
 
 func (c *Config) validateDatabase() error {
+	if _, err := c.Database.StatementTimeoutMilliseconds(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Database.Host) == "" {
 		return fmt.Errorf("database.host is required")
 	}
@@ -330,7 +334,7 @@ func (c *Config) validateRWA() error {
 }
 
 // validateAuth checks the MBIO JWT settings when verification is enabled (the
-// default; `auth.enabled: false` disables all checks). Audience is optional:
+// default; `auth.enabled: false` skips these checks outside release). Audience is optional:
 // MBIO mints tokens with only iss/sub/exp/iat, so enforcing aud would reject
 // every real token.
 func (c *Config) validateAuth() error {
@@ -346,7 +350,11 @@ func (c *Config) validateAuth() error {
 	}
 	if a.LocalJWTVerifyConfigured() {
 		// Local-key mode swaps the MBIO JWKS trust anchor for whatever key the
-		// env carries; the middleware logs a Warn when it is in use.
+		// env carries. A leaked dev/CI variable must not change production trust.
+		if c.Server.EffectiveGinMode() == "release" {
+			return fmt.Errorf("auth.jwt_local_verify_public_key (AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY) is set while the effective gin mode is release; " +
+				"local-key verification bypasses the MBIO JWKS trust anchor and is dev/CI-only")
+		}
 		pemBytes, err := a.LocalJWTVerifyPublicKeyPEMBytes()
 		if err != nil {
 			return err
@@ -367,6 +375,28 @@ func (c *Config) validateAuth() error {
 	}
 	if err := requireSecureJWKSBase(base); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateProductionSafety refuses dev-only settings on the public production
+// listener, including when release mode is derived from the bind host.
+func (c *Config) validateProductionSafety() error {
+	if c.Server.EffectiveGinMode() != "release" {
+		return nil
+	}
+	if !c.Auth.JWTVerificationEnabled() {
+		return fmt.Errorf("auth is disabled (auth.enabled=false / AUTH_ENABLED=false) while the effective gin mode is release; " +
+			"RWA routes would be served unauthenticated on the public listener; enable auth or use SERVER_GIN_MODE=debug for dev/CI")
+	}
+	password := strings.ToLower(strings.TrimSpace(c.Database.Password))
+	if password == "" {
+		return fmt.Errorf("database.password (POSTGRES_PASSWORD) is required in release mode")
+	}
+	switch password {
+	case "postgres", "admin", "password", "changeme", "qwerty":
+		// Never include credentials in errors: config load errors are logged.
+		return fmt.Errorf("database.password is a well-known default; refusing to start in release mode")
 	}
 	return nil
 }

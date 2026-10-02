@@ -59,9 +59,10 @@ fi
 #
 # -v ON_ERROR_STOP=1: without it psql runs past a failed statement and still
 # exits 0, so a half-applied migration would be reported as success. We do NOT
-# add --single-transaction: the CAGG/policy files (0006-0010) call
-# add_continuous_aggregate_policy / add_*_policy, which cannot run inside a
-# transaction block. ON_ERROR_STOP still aborts the whole run on any error.
+# add --single-transaction: CAGG/policy files (0006-0010) and the
+# transaction_per_chunk index build (0023) need statements outside a
+# transaction block. ON_ERROR_STOP still aborts the whole run on any error,
+# retaining the legacy index if its replacement did not finish building.
 MIGRATION_LOCK_KEY="${MIGRATION_LOCK_KEY:-792015843}"
 # The key is interpolated into SQL below — refuse anything but a plain integer.
 if ! printf '%s' "$MIGRATION_LOCK_KEY" | grep -Eq '^-?[0-9]{1,18}$'; then

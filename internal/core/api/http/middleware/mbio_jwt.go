@@ -22,7 +22,7 @@ import (
 
 // MBIOJWT verifies RS256 Bearer JWTs issued by the MBIO Identity Provider,
 // against cached JWKS by default or, when a local RSA public key is configured,
-// against that key instead (intended for dev/CI, accepted in any gin mode).
+// against that key instead (dev/CI-only; config validation refuses release mode).
 //
 // It checks iss, exp/nbf and sub. Audience is enforced only when
 // cfg.MBIOJWTAudience is set, since MBIO currently mints tokens without `aud`;

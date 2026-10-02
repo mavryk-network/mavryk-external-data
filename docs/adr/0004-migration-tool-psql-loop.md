@@ -59,8 +59,17 @@ when one of the trigger conditions below fires.
 
 ## Notes
 
-- Migrations live in `migrations/0001_*.sql` … `0009_seed.sql`.
+- Migrations live in `migrations/` and run in filename order.
 - Run via `make migrate-up`. The dockerfile's migration stage uses
   `scripts/run-migrations.sh`.
+- Run without a surrounding transaction. In particular, `0023` uses
+  TimescaleDB's `transaction_per_chunk` index build: only the chunk currently
+  being indexed blocks writes, while other chunks remain writable.
+- The latest-price index upgrade spans `0022`–`0024`: remove an invalid
+  replacement left by an interrupted build, build the replacement, then check
+  validity before dropping the legacy index. A failed build retains the legacy
+  index; rerun the complete migration sequence to repair and retry it. `0023`
+  must remain a single SQL statement so the Go integration runner also executes
+  it outside an implicit transaction. See the [TimescaleDB index documentation](https://www.tigerdata.com/docs/reference/timescaledb/hypertables/create_index).
 - This decision is the open follow-up to
   `upgrade-plan.md` §6.3 (historical; not in this repo).

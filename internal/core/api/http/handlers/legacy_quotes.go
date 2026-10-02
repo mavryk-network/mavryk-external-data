@@ -57,8 +57,9 @@ type legacyQuoteOut struct {
 //   - to    RFC3339, default now
 //   - limit positive int, capped by server.max_query_limit and defaulted to it
 //
-// The window is unbounded, matching v0.1.0: an over-wide window is answered with
-// the capped row set, never rejected.
+// The window is unbounded, matching v0.1.0: there is no span validation.
+// LIMIT bounds the response; database.statement_timeout bounds SQL execution
+// even when a wide historical window requires scanning more rows.
 func (d LegacyQuotesDeps) LegacyQuotes() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		fromStr := c.Query("from")

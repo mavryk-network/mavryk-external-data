@@ -89,6 +89,7 @@ func overrideWithEnv(config *Config) error {
 		{"SERVER_IDLE_TIMEOUT", &config.Server.IdleTimeout},
 		{"SERVER_HANDLER_TIMEOUT", &config.Server.HandlerTimeout},
 		{"SERVER_TICKER_STALE_AFTER", &config.Server.TickerStaleAfter},
+		{"POSTGRES_STATEMENT_TIMEOUT", &config.Database.StatementTimeout},
 	} {
 		if v := os.Getenv(e.env); v != "" {
 			d, err := time.ParseDuration(v)

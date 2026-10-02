@@ -22,11 +22,9 @@ func testLocalVerifyPublicKeyBase64(t *testing.T) string {
 	return testutil.EncodePublicKeyBase64(publicPEM)
 }
 
-// Config load must never refuse a dev-shaped setup: auth off, a well-known DB
-// password and a local JWT verify key are all accepted in every gin mode,
-// including release. Operational safety is the deploy's responsibility, not a
-// startup gate.
-func TestValidate_NoProductionSafetyRefusals(t *testing.T) {
+// Exercise the full validation chain so safety checks cannot silently become
+// disconnected from startup. Derived modes must enforce the same policy.
+func TestValidate_ProductionSafety(t *testing.T) {
 	localPub := testLocalVerifyPublicKeyBase64(t)
 	tests := []struct {
 		name       string
@@ -35,13 +33,29 @@ func TestValidate_NoProductionSafetyRefusals(t *testing.T) {
 		authEnable *bool
 		dbPassword string
 		localKey   string
+		wantError  string
 	}{
-		{name: "release + auth disabled", ginMode: "release", authEnable: boolPtr(false), dbPassword: "s3cret-strong"},
-		{name: "release + default db password", ginMode: "release", authEnable: boolPtr(true), dbPassword: "postgres"},
-		{name: "release + makefile db password", ginMode: "release", authEnable: boolPtr(true), dbPassword: "qwerty"},
-		{name: "release + local verify key", ginMode: "release", authEnable: boolPtr(true), dbPassword: "postgres", localKey: localPub},
-		{name: "derived release (0.0.0.0) + auth disabled", host: "0.0.0.0", authEnable: boolPtr(false), dbPassword: "postgres"},
+		{name: "release + auth disabled", ginMode: "release", authEnable: boolPtr(false), dbPassword: "s3cret-strong", wantError: "auth is disabled"},
+		{name: "release + default db password", ginMode: "release", dbPassword: "postgres", wantError: "well-known default"},
+		{name: "release + admin db password", ginMode: "release", dbPassword: "admin", wantError: "well-known default"},
+		{name: "release + password db password", ginMode: "release", dbPassword: "password", wantError: "well-known default"},
+		{name: "release + changeme db password", ginMode: "release", dbPassword: "changeme", wantError: "well-known default"},
+		{name: "release + makefile db password", ginMode: "release", dbPassword: "qwerty", wantError: "well-known default"},
+		{name: "release + normalized default db password", ginMode: " ReLeAsE ", dbPassword: " PoStGrEs ", wantError: "well-known default"},
+		{name: "release + missing password", ginMode: "release", wantError: "POSTGRES_PASSWORD"},
+		{name: "release + blank password", ginMode: "release", dbPassword: " \t", wantError: "POSTGRES_PASSWORD"},
+		{name: "release + local verify key", ginMode: "release", dbPassword: "s3cret-strong", localKey: localPub, wantError: "dev/CI-only"},
+		{name: "derived release + auth disabled", host: "0.0.0.0", authEnable: boolPtr(false), dbPassword: "s3cret-strong", wantError: "auth is disabled"},
+		{name: "derived release + default password", host: "0.0.0.0", dbPassword: "postgres", wantError: "well-known default"},
+		{name: "derived release + local key", host: "0.0.0.0", dbPassword: "s3cret-strong", localKey: localPub, wantError: "dev/CI-only"},
+		{name: "release + valid JWKS config", ginMode: "release", dbPassword: "s3cret-strong"},
+		{name: "derived release + valid JWKS config", host: "0.0.0.0", dbPassword: "s3cret-strong"},
+		{name: "debug + auth disabled", ginMode: "debug", authEnable: boolPtr(false), dbPassword: "postgres"},
+		{name: "test + auth disabled", ginMode: "test", authEnable: boolPtr(false), dbPassword: "postgres"},
+		{name: "debug + local verify key", ginMode: "debug", dbPassword: "postgres", localKey: localPub},
+		{name: "test + local verify key", ginMode: "test", dbPassword: "postgres", localKey: localPub},
 		{name: "derived debug (localhost) + auth disabled", host: "localhost", authEnable: boolPtr(false), dbPassword: "postgres"},
+		{name: "derived debug (127.0.0.1) + local key", host: "127.0.0.1", dbPassword: "postgres", localKey: localPub},
 	}
 
 	for _, tc := range tests {
@@ -55,17 +69,22 @@ func TestValidate_NoProductionSafetyRefusals(t *testing.T) {
 			c.Server.Port = "3010"
 			c.Auth.Enabled = tc.authEnable
 			c.Auth.MBIOJWTIssuer = "https://mbio.test/issuer"
-			// Unrelated to the removed guards: with auth on and no local key,
-			// validateAuth still requires a JWKS base URL.
 			c.Auth.MBIOJWTBaseURL = "https://mbio.test"
 			c.Auth.JWTLocalVerifyPublicKeyBase64 = tc.localKey
 			c.Database.Password = tc.dbPassword
 
-			// The real entry point, not hand-picked validators: a re-added
-			// guard would be a separate entry in the Validate() chain and must
-			// fail this test.
-			if err := c.Validate(); err != nil {
-				t.Fatalf("Validate refused a dev-shaped config: %v", err)
+			err := c.Validate()
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("Validate() = %v, want error containing %q", err, tc.wantError)
+				}
+				if tc.dbPassword != "" && tc.dbPassword != "password" && strings.Contains(err.Error(), tc.dbPassword) {
+					t.Fatalf("validation error exposed database password: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate() = %v, want success", err)
 			}
 		})
 	}
