@@ -11,16 +11,13 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// fxCacheTTL is hardcoded — overrides via config aren't worth the surface
-// area for a feature that only meaningfully interacts with cache when QPS
-// is high. The TTL is short enough that staleness never appears as a
-// surprise; long enough that 100 RPS on the same (token,currency) tuple
-// collapses to ~1 DB hit.
+// fxCacheTTL lets repeated historical lookups of the same instant share a query
+// while allowing newly backfilled FX rows to become visible within a minute.
 const fxCacheTTL = 60 * time.Second
 
 // maxFXCacheEntries bounds the rate cache. Keys partition by (source, token,
-// target, minute-bucket-of-ts), so historical `?in=` ranges would otherwise
-// accumulate one immortal entry per minute-bucket forever (a slow memory leak
+// target, exact timestamp), so historical `?in=` ranges would otherwise
+// accumulate one entry per requested instant forever (a slow memory leak
 // under normal dashboard traffic). Expired entries are swept periodically and
 // whenever the map grows past this cap.
 const maxFXCacheEntries = 50_000
@@ -82,7 +79,7 @@ type fxCacheKey struct {
 	Source     prices.Source
 	Token      prices.Token
 	Target     prices.Currency
-	BucketUnix int64 // ts truncated to 60s; queries within the same minute share a slot
+	AtUnixNano int64 // exact requested instant; rates cannot leak across intra-minute changes
 }
 
 type fxCacheEntry struct {
@@ -141,11 +138,9 @@ func (c *tokenFXConverter) Convert(
 	}, nil
 }
 
-// lookupRate consults the in-process cache then the storage layer using
-// at-or-before semantics (Decision #19). Cache keys collapse minute-buckets
-// of `ts` so 100 RPS within the same minute = 1 upstream query for the
-// same (token, currency) tuple. Historical lookups (ts in the past)
-// partition naturally into their own minute buckets.
+// lookupRate caches the exact requested instant. Sharing an arbitrary minute
+// would return future rates to earlier callers, or hide a later rate behind an
+// earlier negative lookup. Repeated historical requests still share one query.
 func (c *tokenFXConverter) lookupRate(
 	ctx context.Context,
 	token prices.Token,
@@ -156,7 +151,7 @@ func (c *tokenFXConverter) lookupRate(
 		Source:     c.fxSource,
 		Token:      token,
 		Target:     target,
-		BucketUnix: ts.Unix() / 60,
+		AtUnixNano: ts.UnixNano(),
 	}
 
 	c.mu.RLock()
@@ -176,7 +171,7 @@ func (c *tokenFXConverter) lookupRate(
 	// Treat missing OR non-positive rates as "no rate". A zero/negative stored
 	// price (a known CoinGecko glitch class) would otherwise become an FX rate of
 	// 0 and silently zero out every ?in= conversion. Negative-cache the miss so a
-	// range that predates the FX backfill costs one query per minute-bucket per
+	// range that predates the FX backfill costs one query per requested instant per
 	// TTL instead of a full ~10k-query scan on every request.
 	if !found || !point.Price.IsPositive() {
 		c.store(key, fxCacheEntry{expires: time.Now().Add(fxCacheTTL), found: false})
@@ -193,7 +188,7 @@ func (c *tokenFXConverter) lookupRate(
 }
 
 // store writes an entry under the write lock and opportunistically evicts expired
-// entries so the minute-bucketed key space cannot grow without bound.
+// entries so the historical key space cannot grow without bound.
 func (c *tokenFXConverter) store(key fxCacheKey, entry fxCacheEntry) {
 	c.mu.Lock()
 	c.cache[key] = entry
@@ -203,6 +198,16 @@ func (c *tokenFXConverter) store(key fxCacheKey, entry fxCacheEntry) {
 		for k, e := range c.cache {
 			if !now.Before(e.expires) {
 				delete(c.cache, k)
+			}
+		}
+		// Exact historical instants can all be live simultaneously. Expiry
+		// sweeping alone cannot enforce the advertised memory bound.
+		if len(c.cache) > maxFXCacheEntries {
+			for k := range c.cache {
+				delete(c.cache, k)
+				if len(c.cache) <= maxFXCacheEntries-fxCacheSweepEvery {
+					break
+				}
 			}
 		}
 	}
