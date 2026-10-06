@@ -22,6 +22,7 @@ import (
 	apitickers "quotes/internal/core/application/tickers"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/httpclient"
+	primaryhistory "quotes/internal/core/infrastructure/interactions/primary"
 	"quotes/internal/core/infrastructure/jobs"
 	"quotes/internal/core/infrastructure/storage"
 	"quotes/internal/core/infrastructure/storage/repositories"
@@ -116,6 +117,11 @@ func run() int {
 		prices.SourceCoinGecko,
 	)
 
+	var primaryValuator *apiprices.PrimaryValuator
+	if cfg.Primary.Enabled {
+		primaryValuator = &apiprices.PrimaryValuator{History: primaryhistory.NewHistory(cfg.Primary, &cfg.API), Converter: fxConverter}
+	}
+
 	httpApp, err := httpapp.NewApp(httpapp.AppDeps{
 		Config:          cfg,
 		DB:              db.DB,
@@ -127,6 +133,7 @@ func run() int {
 		TokenChangeRepo: tokenChangeRepo,
 		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
+		Primary:         primaryValuator,
 		Lookup:          lookup,
 		LaunchRepo:      launchRepo,
 		TickerQuery:     tickerAppRepo,

@@ -10,6 +10,9 @@ import (
 
 //nolint:gocyclo // Many independent env key bindings; one place keeps wiring obvious.
 func overrideWithEnv(config *Config) error {
+	if err := overridePrimary(config); err != nil {
+		return err
+	}
 	if port := os.Getenv("SERVER_PORT"); port != "" {
 		config.Server.Port = port
 	}
