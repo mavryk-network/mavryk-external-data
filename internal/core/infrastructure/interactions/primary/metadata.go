@@ -43,10 +43,10 @@ type metadataTerms struct {
 func (m metadataHistory) at(req app.PrimaryRequest) (metadataTerms, error) {
 	index := -1
 	for i, v := range m {
-		if v.Level < req.Level {
+		if v.Level < req.Level || req.Mode == app.PrimaryHoldings && v.Level == req.Level {
 			index = i
 		}
-		if v.Level == req.Level {
+		if v.Level == req.Level && req.Mode != app.PrimaryHoldings {
 			return metadataTerms{}, app.PrimaryMissing("same_block_change")
 		}
 	}

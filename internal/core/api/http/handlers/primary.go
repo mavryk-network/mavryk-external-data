@@ -41,7 +41,7 @@ func (d PrimaryDeps) Evaluate() gin.HandlerFunc {
 		}
 		for _, item := range req.Requests {
 			id, err := strconv.ParseUint(item.TokenID, 10, 64)
-			if err != nil || strconv.FormatUint(id, 10) != item.TokenID || item.Network == "" || len(item.Contract) != 36 || !strings.HasPrefix(item.Contract, "KT1") || strings.ContainsAny(item.Contract, "/:? \t\n") || item.At.IsZero() || item.At.After(time.Now().Add(time.Minute)) || item.Level <= 0 {
+			if err != nil || strconv.FormatUint(id, 10) != item.TokenID || item.Network == "" || len(item.Contract) != 36 || !strings.HasPrefix(item.Contract, "KT1") || strings.ContainsAny(item.Contract, "/:? \t\n") || item.At.IsZero() || item.At.After(time.Now().Add(time.Minute)) || item.Level <= 0 || !app.ValidPrimaryMode(item.Mode) {
 				return req, errors.InvalidArgument("each item requires network, exact token identity, at and level")
 			}
 		}

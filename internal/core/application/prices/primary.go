@@ -12,13 +12,24 @@ import (
 
 const PrimaryBatchLimit = 256
 
-// PrimaryRequest identifies the actual transfer block, not an hourly candle.
+const (
+	PrimaryTransfer = "transfer"
+	PrimaryHoldings = "holdings"
+)
+
+func ValidPrimaryMode(mode string) bool {
+	return mode == "" || mode == PrimaryTransfer || mode == PrimaryHoldings
+}
+
+// PrimaryRequest identifies a block and valuation instant. Empty mode preserves
+// pre-block transfer semantics; holdings mode uses the block's final state.
 type PrimaryRequest struct {
 	Network  string    `json:"network"`
 	Contract string    `json:"contract"`
 	TokenID  string    `json:"token_id"`
 	At       time.Time `json:"at"`
 	Level    int64     `json:"level"`
+	Mode     string    `json:"mode,omitempty"`
 }
 
 type PrimaryTerms struct {
@@ -67,6 +78,10 @@ func (s *PrimaryValuator) Evaluate(ctx context.Context, requests []PrimaryReques
 	out := make([]PrimaryResult, len(requests))
 	for i, req := range requests {
 		out[i].PrimaryRequest = req
+		if !ValidPrimaryMode(req.Mode) {
+			out[i].Reason = "mode_unsupported"
+			continue
+		}
 		if s == nil || s.History == nil {
 			out[i].Reason = "history_unavailable"
 			continue

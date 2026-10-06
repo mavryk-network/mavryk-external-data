@@ -1011,12 +1011,15 @@ paths:
     post:
       tags: [RWA]
       operationId: evaluatePrimaryTransfers
-      summary: Historical Starter list-price valuations for primary transfers
+      summary: Historical Starter list-price valuations for primary transfers and holdings
       description: |
-        Evaluates 1-256 exact token identities at their transfer block and time.
+        Evaluates 1-256 exact token identities at a block and valuation time.
+        Omitted mode or transfer uses conditions before the transfer block and
+        rejects same-block changes. Holdings uses the final conditions and
+        payment metadata at the end of the selected block. Results echo mode.
         Supports one Starter option with one configured USDT payment per launch.
         USD and native prices are exact decimal strings. Unconfirmed history,
-        same-block condition changes, unknown metadata, and missing/stale FX
+        ambiguous transfer conditions, unknown metadata, and missing/stale FX
         yield usd=null and a reason, never a spot-price or zero fallback.
         Public listener requires RWA bearer authentication; internal listener
         follows the existing trusted-pod posture. Maximum JSON body is 1 MiB.
@@ -1051,7 +1054,7 @@ paths:
                     items:
                       $ref: '#/components/schemas/PrimaryValuationResult'
         '400':
-          description: Invalid identity, time, level, JSON, or batch size
+          description: Invalid identity, time, level, mode, JSON, or batch size
         '401':
           description: Missing or invalid RWA bearer token on the public listener
 
@@ -1290,6 +1293,11 @@ components:
         token_id: { type: string, pattern: '^(0|[1-9][0-9]*)$', example: '0' }
         at: { type: string, format: date-time, example: '2026-10-05T13:31:42Z' }
         level: { type: integer, format: int64, minimum: 1, example: 6635052 }
+        mode:
+          type: string
+          enum: [transfer, holdings]
+          default: transfer
+          description: Transfer uses pre-block conditions; holdings uses the confirmed end-block state. Omission preserves transfer semantics.
     PrimaryValuationResult:
       allOf:
         - $ref: '#/components/schemas/PrimaryValuationRequest'
@@ -1311,7 +1319,7 @@ components:
         sale_option: { type: string, enum: [Starter] }
         payment_contract: { type: string }
         payment_token_id: { type: string }
-        payment_decimals: { type: integer, minimum: 0, maximum: 40, description: Explicit operator-verified scale for the exact payment identity }
+        payment_decimals: { type: integer, minimum: 0, maximum: 40, description: Historical on-chain scale for the exact payment identity and requested mode }
         price: { type: string, description: Historical unit price in the configured USDT payment denomination }
         valid_from: { type: string, format: date-time }
         valid_from_level: { type: integer, format: int64 }

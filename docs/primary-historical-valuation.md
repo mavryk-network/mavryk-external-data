@@ -3,6 +3,7 @@
 The first release supports one `Starter` option and one `USDT` payment per
 launch. It values wallet transfers under that launch's historical list-price
 policy. This is separate from the actual purchase payment and cost basis.
+It also values holdings at a selected block's final state for window PnL anchors.
 
 ## Source and coverage
 
@@ -17,6 +18,10 @@ price, payment identity, status, pause flags, and sale dates remain. Terms that
 change in the transfer's block return `same_block_change`, since block/time alone
 does not establish operation order. Multiple launches, options, or currencies,
 inactive sales, missing history, and unknown payment scales remain unavailable.
+`mode: holdings` selects the last launch and payment-metadata versions at or below
+the requested level, including all changes within that block. The effective
+version may begin at that same level. It still requires complete pinned history,
+supported active Starter conditions, and metadata effective at the requested time.
 
 History reads have a 30-second overall deadline, at most 128 keys per launchpad,
 512 rows per page, and 8192 total updates. Saturating the key/update budget is
@@ -69,6 +74,8 @@ The configured `server.fx_max_staleness_seconds` applies at the transfer's time;
 missing or stale FX never yields a confirmed USD value. FX cache entries use
 the exact instant, including negative lookups, and have a bounded lifetime and
 size. They cannot share rates between different moments in one minute.
+For holdings the same checks apply at the opening anchor's valuation instant;
+a later FX observation never prices an earlier anchor.
 
 ## API
 
@@ -86,6 +93,13 @@ price, effective interval, launch identity, and chain coverage. An unavailable
 result has `usd: null` and a bounded `reason`; failure of one evaluation does
 not turn another result into zero. HTTP 400 denotes invalid requests; HTTP 200
 can contain unavailable results when source data cannot be confirmed.
+
+The optional request field `mode` accepts `transfer` or `holdings`. Omission keeps
+existing transfer semantics. A holdings consumer must verify that the response
+echoes `mode: holdings`, and accept `valid_from_level == level` only in that mode.
+Unsupported modes return HTTP 400. Identity, time, level, mode, historical terms
+and FX are verified independently of current prices. No additional feature flag,
+launchpad list, payment list, or network setting is introduced.
 
 Monitor `primary_valuations_total{reason}`. Reasons distinguish history,
 identity/metadata, unsupported conditions, ambiguity, and FX failures.
@@ -107,4 +121,5 @@ or deployment.
 
 After deployment, check the control wallet's `pnl_24h`, percentage, and reasons
 for remaining unavailable windows. Existing anchors and complete flow coverage
-are still required; primary-aware anchor reconstruction is a separate stage.
+are still required. The backend's primary-aware window reconstruction consumes
+the holdings mode; deploy this API extension before that backend version.

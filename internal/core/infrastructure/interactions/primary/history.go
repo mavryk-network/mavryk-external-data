@@ -103,6 +103,9 @@ type payment struct {
 }
 
 func (h *History) Terms(ctx context.Context, req app.PrimaryRequest) (app.PrimaryTerms, error) {
+	if !app.ValidPrimaryMode(req.Mode) {
+		return app.PrimaryTerms{}, app.PrimaryMissing("mode_unsupported")
+	}
 	if req.Network != basenet {
 		return app.PrimaryTerms{}, app.PrimaryMissing("network_mismatch")
 	}
@@ -149,7 +152,7 @@ func signature(r *launchRecord) string { b, _ := json.Marshal(r); return string(
 func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head) (app.PrimaryTerms, bool, error) {
 	index := -1
 	for i, u := range history.updates {
-		if u.Level < req.Level {
+		if u.Level < req.Level || req.Mode == app.PrimaryHoldings && u.Level == req.Level {
 			index = i
 		}
 	}
@@ -169,9 +172,11 @@ func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head
 		return app.PrimaryTerms{}, true, app.PrimaryMissing("block_time_mismatch")
 	}
 	sig := signature(r)
-	for _, u := range history.updates {
-		if u.Level == req.Level && (signature(u.Value) != sig || !u.Timestamp.Equal(req.At)) {
-			return app.PrimaryTerms{}, true, app.PrimaryMissing("same_block_change")
+	if req.Mode != app.PrimaryHoldings {
+		for _, u := range history.updates {
+			if u.Level == req.Level && (signature(u.Value) != sig || !u.Timestamp.Equal(req.At)) {
+				return app.PrimaryTerms{}, true, app.PrimaryMissing("same_block_change")
+			}
 		}
 	}
 	if r.Status != "ACTIVE" || r.IsPaused || r.SaleClosed != nil || !inside(req.At, r.SaleStart, r.SaleEnd) {

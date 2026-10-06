@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	app "quotes/internal/core/application/prices"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestPrimaryHandler_UnknownIsExplicitAndInputIsBounded(t *testing.T) {
@@ -17,12 +18,16 @@ func TestPrimaryHandler_UnknownIsExplicitAndInputIsBounded(t *testing.T) {
 	router := gin.New()
 	router.POST("/primary", (PrimaryDeps{}).Evaluate())
 	item := app.PrimaryRequest{Network: "basenet", Contract: "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP", TokenID: "0", At: time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC), Level: 123}
+	holdings, invalidMode := item, item
+	holdings.Mode, invalidMode.Mode = app.PrimaryHoldings, "latest"
 	for _, tc := range []struct {
 		name    string
 		payload any
 		status  int
 	}{
 		{"unknown", primaryBatchRequest{Requests: []app.PrimaryRequest{item}}, http.StatusOK},
+		{"holdings", primaryBatchRequest{Requests: []app.PrimaryRequest{holdings}}, http.StatusOK},
+		{"invalid_mode", primaryBatchRequest{Requests: []app.PrimaryRequest{invalidMode}}, http.StatusBadRequest},
 		{"empty", primaryBatchRequest{}, http.StatusBadRequest},
 		{"oversized", primaryBatchRequest{Requests: make([]app.PrimaryRequest, 257)}, http.StatusBadRequest},
 		{"missing_identity", primaryBatchRequest{Requests: []app.PrimaryRequest{{At: item.At, Level: 123}}}, http.StatusBadRequest},
