@@ -9,7 +9,7 @@ type Config struct {
 	CoinGecko CoinGeckoConfig        `yaml:"coingecko"`
 	Equiteez  EquiteezConfig         `yaml:"equiteez"`
 	Backfill  BackfillConfig         `yaml:"backfill"`
-	Primary   PrimaryConfig          `yaml:"primary"`
+	MvKT      MvKTConfig             `yaml:"mvkt"`
 	RWA       RWAConfig              `yaml:"rwa"`
 	Tickers   TickersConfig          `yaml:"tickers"`
 	Auth      AuthConfig             `yaml:"auth"`

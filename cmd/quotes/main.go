@@ -117,10 +117,7 @@ func run() int {
 		prices.SourceCoinGecko,
 	)
 
-	var primaryValuator *apiprices.PrimaryValuator
-	if cfg.Primary.Enabled {
-		primaryValuator = &apiprices.PrimaryValuator{History: primaryhistory.NewHistory(cfg.Primary, &cfg.API), Converter: fxConverter}
-	}
+	primaryValuator := &apiprices.PrimaryValuator{History: primaryhistory.NewHistory(cfg.MvKT, &cfg.API), Converter: fxConverter}
 
 	httpApp, err := httpapp.NewApp(httpapp.AppDeps{
 		Config:          cfg,

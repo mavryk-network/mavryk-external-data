@@ -39,7 +39,8 @@ func TestHistoricalStarter_PriceAndPaymentIntervals(t *testing.T) {
 		{ID: 2, Level: 20, Timestamp: base.Add(10 * time.Second), Action: "update_key", Value: record("100000000", oldPayment)},
 		{ID: 3, Level: 30, Timestamp: base.Add(20 * time.Second), Action: "update_key", Value: newPrice},
 	}}
-	h := &History{cfg: config.PrimaryConfig{PaymentTokens: []config.PrimaryPaymentToken{{Contract: oldPayment, TokenID: "0", Decimals: primaryScale(6)}, {Contract: testPayment, TokenID: "0", Decimals: primaryScale(6)}}}}
+	history.payments = knownPayments(oldPayment, testPayment)
+	h := &History{}
 	covered := head{Level: 100, Timestamp: base.Add(time.Hour)}
 	for _, tc := range []struct {
 		level          int64
@@ -74,11 +75,11 @@ func TestHistoricalStarter_RefusesUnconfirmedInputs(t *testing.T) {
 	for _, name := range []string{"unknown_payment", "multiple_options", "paused", "wrong_id", "closed", "invalid_price"} {
 		t.Run(name, func(t *testing.T) {
 			r := record("100000000", testPayment)
-			cfg := config.PrimaryConfig{PaymentTokens: []config.PrimaryPaymentToken{{Contract: testPayment, TokenID: "0", Decimals: primaryScale(6)}}}
+			payments := knownPayments(testPayment)
 			req := app.PrimaryRequest{Contract: testAssetContract, TokenID: "0", Level: 20, At: base.Add(time.Minute)}
 			switch name {
 			case "unknown_payment":
-				cfg.PaymentTokens = nil
+				payments = nil
 			case "multiple_options":
 				r.Options["Pinnacle"] = r.Options["Starter"]
 			case "paused":
@@ -93,8 +94,8 @@ func TestHistoricalStarter_RefusesUnconfirmedInputs(t *testing.T) {
 				payment.Price = "-1"
 				p.Payments["USDT"] = payment
 			}
-			history := launchHistory{updates: []update{{ID: 1, Level: 10, Timestamp: base, Value: r}}}
-			_, matches, err := (&History{cfg: cfg}).at(history, req, head{Level: 100, Timestamp: base.Add(time.Hour)})
+			history := launchHistory{payments: payments, updates: []update{{ID: 1, Level: 10, Timestamp: base, Value: r}}}
+			_, matches, err := (&History{}).at(history, req, head{Level: 100, Timestamp: base.Add(time.Hour)})
 			if name == "wrong_id" {
 				if matches {
 					t.Fatal("another token ID inherited price")
@@ -114,6 +115,10 @@ func TestHistory_LoadPaginatesAndCoalescesCompleteEvidence(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		var payload any
+		if discovery, found := discoveryFixture(r, base); found {
+			_ = json.NewEncoder(w).Encode(discovery)
+			return
+		}
 		switch {
 		case r.URL.Path == "/head":
 			payload = head{Chain: "basenet", Level: 1002}
@@ -145,15 +150,14 @@ func TestHistory_LoadPaginatesAndCoalescesCompleteEvidence(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(payload)
 	}))
 	defer server.Close()
-	cfg := config.PrimaryConfig{Network: "basenet", IndexerURL: server.URL, Launchpads: []string{"launchpad"}, PaymentTokens: []config.PrimaryPaymentToken{{Contract: testPayment, TokenID: "0", Decimals: primaryScale(6)}}}
-	h := NewHistory(cfg, &config.APIConfig{OutboundHTTPCircuitBreakerDisabled: true})
+	h := newTestHistory(server.URL)
 	for i := 0; i < 2; i++ {
 		got, err := h.Terms(context.Background(), app.PrimaryRequest{Network: "basenet", Contract: testAssetContract, TokenID: "0", Level: 650, At: base.Add(650 * time.Second)})
 		if err != nil || got.Price != "725" || got.CoverageLevel != 1000 {
 			t.Fatalf("got %+v err=%v", got, err)
 		}
 	}
-	if calls.Load() != 7 {
+	if calls.Load() != 11 {
 		t.Fatalf("expected one shared complete load, got %d HTTP calls", calls.Load())
 	}
 }
@@ -170,7 +174,8 @@ func TestHistoricalStarter_ObservedANTHTransfers(t *testing.T) {
 		t.Fatal(err)
 	}
 	history := launchHistory{launchpad: "KT1U6KXwy8vduoq86HBjGp9m2Czc8rZM85MN", key: "ANTH-issuance-v1", updates: updates}
-	h := &History{cfg: config.PrimaryConfig{PaymentTokens: []config.PrimaryPaymentToken{{Contract: testPayment, TokenID: "0", Decimals: primaryScale(6)}}}}
+	history.payments = knownPayments(testPayment)
+	h := &History{}
 	coveredAt, _ := time.Parse(time.RFC3339, "2026-10-06T10:00:00Z")
 	for _, tc := range []struct {
 		at    string
@@ -190,6 +195,34 @@ func TestHistoricalStarter_ObservedANTHTransfers(t *testing.T) {
 
 func primaryScale(n int) *int { return &n }
 
+func knownPayments(contracts ...string) map[paymentIdentity]metadataHistory {
+	out := map[paymentIdentity]metadataHistory{}
+	for _, contract := range contracts {
+		out[paymentIdentity{Contract: contract, TokenID: "0"}] = metadataHistory{{Level: 1, Timestamp: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), Scale: primaryScale(6)}}
+	}
+	return out
+}
+
+func newTestHistory(baseURL string) *History {
+	h := NewHistory(config.MvKTConfig{IndexerURL: baseURL}, &config.APIConfig{OutboundHTTPCircuitBreakerDisabled: true, OutboundHTTPRetryMaxAttempts: 1})
+	h.allowlistURL = baseURL + "/allowlist"
+	return h
+}
+
+func discoveryFixture(r *http.Request, base time.Time) (any, bool) {
+	switch r.URL.Path {
+	case "/allowlist":
+		return map[string]any{"schema_version": 1, "launchpads": []string{"KT1U6KXwy8vduoq86HBjGp9m2Czc8rZM85MN"}}, true
+	case "/contracts/" + testPayment + "/storage":
+		return map[string]int{"token_metadata": 13}, true
+	case "/bigmaps/13/keys":
+		return []map[string]string{{"hash": "exprMetadata", "key": "0"}}, true
+	case "/bigmaps/13/keys/exprMetadata/updates":
+		return []metadataUpdate{{ID: 1, Level: 1, Timestamp: base.Add(-time.Second), Action: "add_key", Value: &tokenMetadata{TokenID: "0", Info: map[string]string{"decimals": "36"}}}}, true
+	}
+	return nil, false
+}
+
 func TestHistory_OutageIsCoalescedAndRetriedAfterExpiry(t *testing.T) {
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -197,7 +230,7 @@ func TestHistory_OutageIsCoalescedAndRetriedAfterExpiry(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	h := NewHistory(config.PrimaryConfig{Network: "basenet", IndexerURL: server.URL}, &config.APIConfig{OutboundHTTPCircuitBreakerDisabled: true, OutboundHTTPRetryMaxAttempts: 1})
+	h := NewHistory(config.MvKTConfig{IndexerURL: server.URL}, &config.APIConfig{OutboundHTTPCircuitBreakerDisabled: true, OutboundHTTPRetryMaxAttempts: 1})
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
@@ -230,6 +263,10 @@ func TestHistory_RemovalDoesNotKeepThePreviousPrice(t *testing.T) {
 	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload any
+		if discovery, found := discoveryFixture(r, base); found {
+			_ = json.NewEncoder(w).Encode(discovery)
+			return
+		}
 		switch {
 		case r.URL.Path == "/head":
 			payload = head{Chain: "basenet", Level: 102}
@@ -251,7 +288,7 @@ func TestHistory_RemovalDoesNotKeepThePreviousPrice(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(payload)
 	}))
 	defer server.Close()
-	h := NewHistory(config.PrimaryConfig{Network: "basenet", IndexerURL: server.URL, Launchpads: []string{"launchpad"}, PaymentTokens: []config.PrimaryPaymentToken{{Contract: testPayment, TokenID: "0", Decimals: primaryScale(6)}}}, &config.APIConfig{OutboundHTTPCircuitBreakerDisabled: true})
+	h := newTestHistory(server.URL)
 	req := app.PrimaryRequest{Network: "basenet", Contract: testAssetContract, TokenID: "0", Level: 15, At: base.Add(30 * time.Second)}
 	if got, err := h.Terms(context.Background(), req); err != nil || got.Price != "725" {
 		t.Fatalf("valid history before removal: got %+v err=%v", got, err)

@@ -26,23 +26,43 @@ three seconds so an outage does not trigger a full retry per batch row. Coverage
 the pinned block, not the cache refresh time. A newly mined transfer may wait
 for the next refresh before its block becomes covered.
 
-## Configuration
+## Automatic discovery and the shared connection
 
-The feature is disabled by default. Basenet V3 example:
+Historical primary valuation is always wired on service startup. Basenet is the
+service's network; there is no separate enablement flag, network setting,
+launchpad list, or payment-token JSON to maintain.
 
-```dotenv
-PRIMARY_VALUATION_ENABLED=true
-PRIMARY_VALUATION_NETWORK=basenet
-PRIMARY_VALUATION_INDEXER_URL=https://basenet.api.mavryk.network/v1
-PRIMARY_VALUATION_LAUNCHPADS=KT1U6KXwy8vduoq86HBjGp9m2Czc8rZM85MN
-PRIMARY_VALUATION_PAYMENT_TOKENS=[{"contract":"KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v","token_id":"0","decimals":6}]
+Launchpad contracts are discovered from the `launchpads` field of the
+[Basenet contract allowlist](https://eqtz-admin.equiteez.com/equiteez-contract-allowlist-basenet.json).
+Discovery refreshes with the history snapshot, so an allowlist change is picked
+up without a redeploy. Missing/invalid discovery returns `allowlist_unavailable`;
+it never silently keeps a removed launchpad.
+
+Each historical launch version supplies its payment contract and token ID.
+Decimals are read from that exact FA2 token's on-chain `token_metadata` key
+history. MvKT exposes `token_info.decimals` as hex bytes: `36` decodes to `6`.
+The reader verifies the initial `add_key`, loads all metadata-update pages under
+the same pinned block, and uses the scale effective before the transfer block.
+Explicit zero decimals are valid. Missing, malformed, deleted, future-only, or
+ambiguous metadata remains unavailable; there is no six-decimal fallback.
+Metadata changes also constrain the native price's effective interval.
+
+Past payment generations are discovered from the launch history, including
+contracts absent from today's `quote_tokens` allowlist. A missing old generation
+does not hide another generation with confirmed metadata. At most 32 payment
+identities are loaded, and metadata rows share the 8192-update budget.
+The response records `mvkt_launch_ledger:onchain_token_metadata` provenance.
+
+MvKT has one shared connection, with a usable Basenet default:
+
+```yaml
+mvkt:
+  indexer_url: https://basenet.api.mavryk.network/v1
 ```
 
-`payment_tokens` is explicit operator-verified metadata for exact USDT payment
-identities, including network context. There is no six-decimal fallback. Add
-older payment generations only after confirming their identity, unit scale,
-and USDT denomination. The response's source records this configured metadata
-provenance. Missing generations return `payment_metadata_missing`.
+`MVKT_INDEXER_URL` optionally overrides this URL for a local or alternative
+MvKT endpoint. Equiteez GraphQL keeps its own existing connection. Normal
+Basenet deployment needs no new environment variables or activation step.
 
 Historical USDT/USD rates reuse `token_prices` and `LatestRateAtOrBefore`.
 The configured `server.fx_max_staleness_seconds` applies at the transfer's time;
@@ -65,22 +85,25 @@ A confirmed result includes `usd` as an exact decimal string, `terms`,
 price, effective interval, launch identity, and chain coverage. An unavailable
 result has `usd: null` and a bounded `reason`; failure of one evaluation does
 not turn another result into zero. HTTP 400 denotes invalid requests; HTTP 200
-can contain unavailable results, including when the feature is disabled.
+can contain unavailable results when source data cannot be confirmed.
 
 Monitor `primary_valuations_total{reason}`. Reasons distinguish history,
 identity/metadata, unsupported conditions, ambiguity, and FX failures.
 
 ## Deployment and verification
 
-Deploy external-data and configure the verified launchpad/payment identities
-before deploying the backend consumer. Existing latest-price and chart APIs
-retain their contract. Turning the feature off makes new valuations unavailable.
+Deploy external-data before deploying the backend consumer. Discovery and
+metadata resolution run automatically on demand. Existing latest-price and chart APIs
+retain their contract. Source failures make affected valuations unavailable.
 
 CI uses controlled MvKT/FX fixtures. The public ANTH ledger fixture, captured
 2026-10-06, confirms a native Starter price of 725 USDT for the three diagnostic
 transfers at levels 6635052, 6642015, and 6645755, with payment contract
 `KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v`, token ID 0. It also preserves the earlier
-payment-generation changes. It does not assert a live USD rate or deployment.
+payment-generation changes. The companion USDT metadata fixture confirms
+six decimals for all three generations through their on-chain records. Tests
+exercise the automatic reader end to end. They do not assert a live USD rate
+or deployment.
 
 After deployment, check the control wallet's `pnl_24h`, percentage, and reasons
 for remaining unavailable windows. Existing anchors and complete flow coverage

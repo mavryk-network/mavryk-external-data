@@ -1319,7 +1319,7 @@ components:
         valid_until_level: { type: integer, format: int64 }
         coverage_level: { type: integer, format: int64 }
         coverage_at: { type: string, format: date-time }
-        source: { type: string, enum: ['mvkt_launch_ledger:configured_payment_metadata'] }
+        source: { type: string, enum: ['mvkt_launch_ledger:onchain_token_metadata'] }
     TokenPricePoint:
       type: object
       required: [timestamp, currency, price]

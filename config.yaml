@@ -169,11 +169,6 @@ tokens:
       start_from: "2025-12-18T00:00:00Z"
       chunk_minutes: 360
 
-# Historical primary flows. Enable only with verified network/launchpad/payment
-# identities; these settings are separate from the current launch catalog.
-primary:
-  enabled: false
-  network: basenet
+# Shared MvKT connection; historical primary valuation works on Basenet by default.
+mvkt:
   indexer_url: https://basenet.api.mavryk.network/v1
-  launchpads: []
-  payment_tokens: []

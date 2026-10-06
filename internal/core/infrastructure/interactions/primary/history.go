@@ -5,9 +5,7 @@ package primary
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
+	"errors"
 	"net/url"
 	"sort"
 	"strconv"
@@ -17,7 +15,7 @@ import (
 
 	"quotes/internal/config"
 	app "quotes/internal/core/application/prices"
-	"quotes/internal/core/infrastructure/httpclient"
+	"quotes/internal/core/infrastructure/interactions/mvkt"
 
 	"golang.org/x/sync/singleflight"
 )
@@ -30,19 +28,21 @@ const (
 	historyFailureTTL = 3 * time.Second
 )
 
+const basenet = "basenet"
+const basenetAllowlistURL = "https://eqtz-admin.equiteez.com/equiteez-contract-allowlist-basenet.json"
+
 type History struct {
-	cfg      config.PrimaryConfig
-	client   *http.Client
-	mu       sync.Mutex
-	snapshot *snapshot
-	loadErr  error
-	expires  time.Time
-	flight   singleflight.Group
+	client       *mvkt.Client
+	allowlistURL string
+	mu           sync.Mutex
+	snapshot     *snapshot
+	loadErr      error
+	expires      time.Time
+	flight       singleflight.Group
 }
 
-func NewHistory(cfg config.PrimaryConfig, api *config.APIConfig) *History {
-	transport := httpclient.WrapResilientTransport(httpclient.SharedTransport(), api.OutboundResilience("primary_history"))
-	return &History{cfg: cfg, client: &http.Client{Transport: transport, Timeout: 15 * time.Second}}
+func NewHistory(cfg config.MvKTConfig, api *config.APIConfig) *History {
+	return &History{client: mvkt.NewClient(cfg, api), allowlistURL: basenetAllowlistURL}
 }
 
 type head struct {
@@ -61,6 +61,7 @@ type launchHistory struct {
 	launchpad string
 	key       string
 	updates   []update
+	payments  map[paymentIdentity]metadataHistory
 }
 
 type update struct {
@@ -102,7 +103,7 @@ type payment struct {
 }
 
 func (h *History) Terms(ctx context.Context, req app.PrimaryRequest) (app.PrimaryTerms, error) {
-	if req.Network != h.cfg.Network {
+	if req.Network != basenet {
 		return app.PrimaryTerms{}, app.PrimaryMissing("network_mismatch")
 	}
 	s, err := h.readSnapshot(ctx)
@@ -187,15 +188,12 @@ func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head
 	if !found || len(option.Payments) != 1 || pay.Currency.FA2 == nil {
 		return app.PrimaryTerms{}, true, app.PrimaryMissing("payment_unsupported")
 	}
-	decimals, known := 0, false
-	for _, token := range h.cfg.PaymentTokens {
-		if token.Contract == pay.Currency.FA2.Contract && token.TokenID == pay.Currency.FA2.TokenID && token.Decimals != nil {
-			decimals, known = *token.Decimals, true
-		}
+	identity := paymentIdentity{Contract: pay.Currency.FA2.Contract, TokenID: pay.Currency.FA2.TokenID}
+	metadata, err := history.payments[identity].at(req)
+	if err != nil {
+		return app.PrimaryTerms{}, true, err
 	}
-	if !known {
-		return app.PrimaryTerms{}, true, app.PrimaryMissing("payment_metadata_missing")
-	}
+	decimals := *metadata.scale
 	price, ok := humanPrice(pay.Price, decimals)
 	if !ok {
 		return app.PrimaryTerms{}, true, app.PrimaryMissing("invalid_price")
@@ -210,7 +208,7 @@ func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head
 		PaymentDecimals: decimals, Price: price,
 		ValidFrom: history.updates[start].Timestamp, ValidFromLevel: history.updates[start].Level,
 		CoverageLevel: covered.Level, CoverageAt: covered.Timestamp,
-		Source: "mvkt_launch_ledger:configured_payment_metadata",
+		Source: "mvkt_launch_ledger:onchain_token_metadata",
 	}
 	for i := index + 1; i < len(history.updates); i++ {
 		u := history.updates[i]
@@ -221,6 +219,13 @@ func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head
 			}
 			break
 		}
+	}
+	// Native price validity also depends on the effective token scale.
+	if metadata.from.Level > terms.ValidFromLevel {
+		terms.ValidFrom, terms.ValidFromLevel = metadata.from.Timestamp, metadata.from.Level
+	}
+	if metadata.until != nil && (terms.ValidUntilLevel == nil || metadata.until.Level < *terms.ValidUntilLevel) {
+		terms.ValidUntil, terms.ValidUntilLevel = &metadata.until.Timestamp, &metadata.until.Level
 	}
 	return terms, true, nil
 }
@@ -278,7 +283,7 @@ func (h *History) load(ctx context.Context) (*snapshot, error) {
 	if err := h.get(ctx, "/head", &current); err != nil {
 		return nil, err
 	}
-	if current.Chain != h.cfg.Network || current.Level <= 2 {
+	if current.Chain != basenet || current.Level <= 2 {
 		return nil, app.PrimaryMissing("network_mismatch")
 	}
 	// Keep the still-changing tip out of the proven interval.
@@ -290,8 +295,12 @@ func (h *History) load(ctx context.Context) (*snapshot, error) {
 		return nil, app.PrimaryMissing("chain_coverage_missing")
 	}
 	s := &snapshot{head: pinned}
+	launchpads, err := h.launchpads(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows := 0
-	for _, launchpad := range h.cfg.Launchpads {
+	for _, launchpad := range launchpads {
 		var storage struct {
 			LaunchLedger int64 `json:"launchLedger"`
 		}
@@ -377,6 +386,13 @@ func (h *History) load(ctx context.Context) (*snapshot, error) {
 			s.histories = append(s.histories, history)
 		}
 	}
+	payments, err := h.loadPayments(ctx, s.histories, pinned.Level, &rows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range s.histories {
+		s.histories[i].payments = payments
+	}
 	var checked head
 	if err := h.get(ctx, "/blocks/"+strconv.FormatInt(pinned.Level, 10), &checked); err != nil {
 		return nil, err
@@ -388,25 +404,38 @@ func (h *History) load(ctx context.Context) (*snapshot, error) {
 }
 
 func (h *History) get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(h.cfg.IndexerURL, "/")+path, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("primary history HTTP %d", resp.StatusCode)
-	}
-	const maxBytes = 8 << 20
-	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
-	if err != nil {
-		return err
-	}
-	if len(b) > maxBytes {
+	err := h.client.Get(ctx, path, out)
+	if errors.Is(err, mvkt.ErrResponseTooLarge) {
 		return app.PrimaryMissing("history_budget_exceeded")
 	}
-	return json.Unmarshal(b, out)
+	return err
+}
+
+func validContract(address string) bool {
+	return len(address) == 36 && strings.HasPrefix(address, "KT1") && !strings.ContainsAny(address, "/:? \t\n")
+}
+
+func (h *History) launchpads(ctx context.Context) ([]string, error) {
+	var allowlist struct {
+		SchemaVersion int      `json:"schema_version"`
+		Launchpads    []string `json:"launchpads"`
+	}
+	if err := h.client.GetURL(ctx, h.allowlistURL, &allowlist); err != nil {
+		return nil, app.PrimaryMissing("allowlist_unavailable")
+	}
+	if allowlist.SchemaVersion != 1 || allowlist.Launchpads == nil || len(allowlist.Launchpads) > 4 {
+		return nil, app.PrimaryMissing("allowlist_unavailable")
+	}
+	seen := map[string]bool{}
+	addresses := []string{}
+	for _, address := range allowlist.Launchpads {
+		if !validContract(address) {
+			return nil, app.PrimaryMissing("allowlist_unavailable")
+		}
+		if !seen[address] {
+			addresses = append(addresses, address)
+			seen[address] = true
+		}
+	}
+	return addresses, nil
 }

@@ -5,6 +5,9 @@ import (
 )
 
 func setDefaults(config *Config) {
+	if config.MvKT.IndexerURL == "" {
+		config.MvKT.IndexerURL = DefaultMvKTIndexerURL
+	}
 	if config.Server.Port == "" {
 		config.Server.Port = "3010"
 	}
