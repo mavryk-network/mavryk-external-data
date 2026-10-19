@@ -117,9 +117,9 @@ func SelectLaunch(rows []LaunchSelectable, now time.Time) (int, bool) {
 		switch {
 		case best < 0:
 			best = i
-		case LaunchActive(r, now) && !LaunchActive(rows[best], now):
+		case LaunchActive(r, now) && !LaunchActive(rows[best], now): //nolint:gosec // best is a prior range index; the first case handles -1
 			best = i // an active launch always beats an inactive one
-		case LaunchActive(r, now) == LaunchActive(rows[best], now) && r.UpdatedAt.After(rows[best].UpdatedAt):
+		case LaunchActive(r, now) == LaunchActive(rows[best], now) && r.UpdatedAt.After(rows[best].UpdatedAt): //nolint:gosec // best is a prior range index; the first case handles -1
 			best = i
 		}
 	}

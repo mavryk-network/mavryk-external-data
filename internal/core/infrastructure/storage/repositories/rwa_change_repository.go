@@ -103,14 +103,14 @@ func buildRWAChangeSQL(q apiprices.ChangeQuery, pid int64, side string) (string,
 	args := make([]any, 0, 4*(1+len(q.Periods)))
 
 	// "now" branch — raw rwa_quote_prices, freshest row for (pair, side).
-	sql.WriteString(fmt.Sprintf(`SELECT '%s'::text AS period, observed_ts, price
+	fmt.Fprintf(&sql, `SELECT '%s'::text AS period, observed_ts, price
 FROM (
     SELECT ts AS observed_ts, price
       FROM rwa_quote_prices
      WHERE pair_id = ? AND side = ?
      ORDER BY ts DESC
      LIMIT 1
-) n`, nowBranchLabel))
+) n`, nowBranchLabel)
 	args = append(args, pid, side)
 
 	for _, period := range q.Periods {

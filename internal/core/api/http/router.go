@@ -9,7 +9,7 @@ import (
 
 // RouterDeps holds the per-domain handler bundles plus DB and the readiness gate.
 //
-// RWAAuth, when non-nil, wraps /v1/rwa/* and /v1/pairs/rwa in the MBIO JWT
+// RWAAuth, when non-nil, wraps /v1/rwa/*, /v1/pairs/rwa, and /v1/valuations/primary in the MBIO JWT
 // middleware. It is non-nil on the public listener and nil on the internal
 // listener — same handler graph, same code path, different exposure surface.
 //
@@ -26,6 +26,7 @@ type RouterDeps struct {
 	TokenCharts   handlers.TokenChartDeps
 	RWAPrice      handlers.RWAPriceDeps
 	RWACharts     handlers.RWAChartDeps
+	Primary       handlers.PrimaryDeps
 	RWAPairs      handlers.RWAPairsDeps
 	RWAOverview   handlers.RWAOverviewDeps
 	Change        handlers.ChangeDeps
@@ -59,6 +60,7 @@ type RouterDeps struct {
 //	/v1/rwa/:symbol/ohlc      — OHLC candles
 //	/v1/rwa/:symbol/ohlcv     — 501 stub until volume ingestion lands
 //	/v1/pairs/rwa             — enabled RWA pair catalog (discovery)
+//	/v1/valuations/primary    — batch historical Starter valuation
 func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 	engine.GET("/healthz", handlers.Liveness())
 	engine.GET("/readyz", handlers.Readiness(deps.DB, deps.ReadinessGate))
@@ -112,6 +114,13 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			rwa.GET("/:symbol/ohlc", deps.RWACharts.OHLC())
 			rwa.GET("/:symbol/ohlcv", handlers.NotImplementedOHLCV())
 		}
+		// Historical primary valuations inherit exactly the RWA auth posture.
+		valuations := v1.Group("/valuations")
+		if deps.RWAAuth != nil {
+			valuations.Use(deps.RWAAuth)
+		}
+		valuations.POST("/primary", deps.Primary.Evaluate())
+
 		// Per-exchange ticker market data (CoinGecko /coins/{id}/tickers).
 		// Open on both listeners — same posture as /v1/prices (FT data, not
 		// tenant-scoped). Mounted only when Ticker.Service is wired.

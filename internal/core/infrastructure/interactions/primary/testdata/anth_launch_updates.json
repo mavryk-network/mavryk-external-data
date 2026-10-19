@@ -1,0 +1,2834 @@
+[
+  {
+    "id": 793572,
+    "level": 6510314,
+    "timestamp": "2026-09-28T08:10:30Z",
+    "action": "add_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "INACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT19bKTs9qsoBrspRNwsHn46YarEWuj3Vjc6"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "0",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "0",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 793573,
+    "level": 6510315,
+    "timestamp": "2026-09-28T08:10:35Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT19bKTs9qsoBrspRNwsHn46YarEWuj3Vjc6"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "0",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "0",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 793710,
+    "level": 6510349,
+    "timestamp": "2026-09-28T08:13:25Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT19bKTs9qsoBrspRNwsHn46YarEWuj3Vjc6"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "10000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "10000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 797182,
+    "level": 6513546,
+    "timestamp": "2026-09-28T12:39:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1J8yjtFGY6fiqjSNLpUjDnX2bj2HsUizAi"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "10000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "10000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 797206,
+    "level": 6513552,
+    "timestamp": "2026-09-28T12:40:20Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1J8yjtFGY6fiqjSNLpUjDnX2bj2HsUizAi"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "11000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "11000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 799434,
+    "level": 6515339,
+    "timestamp": "2026-09-28T15:09:15Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "11000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "11000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829032,
+    "level": 6546448,
+    "timestamp": "2026-09-30T10:23:55Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "91000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "91000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829052,
+    "level": 6546475,
+    "timestamp": "2026-09-30T10:26:10Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "191000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "191000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829084,
+    "level": 6546481,
+    "timestamp": "2026-09-30T10:26:40Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "261000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "261000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829116,
+    "level": 6546487,
+    "timestamp": "2026-09-30T10:27:10Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "341000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "341000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829148,
+    "level": 6546493,
+    "timestamp": "2026-09-30T10:27:40Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "511000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "511000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829180,
+    "level": 6546499,
+    "timestamp": "2026-09-30T10:28:10Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "681000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "681000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829217,
+    "level": 6546505,
+    "timestamp": "2026-09-30T10:28:40Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "811000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "811000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829273,
+    "level": 6546511,
+    "timestamp": "2026-09-30T10:29:10Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "981000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "981000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829305,
+    "level": 6546517,
+    "timestamp": "2026-09-30T10:29:40Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1051000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1051000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 829337,
+    "level": 6546523,
+    "timestamp": "2026-09-30T10:30:10Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1141000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1141000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 830194,
+    "level": 6547152,
+    "timestamp": "2026-09-30T11:22:35Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1211000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1211000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 832509,
+    "level": 6548880,
+    "timestamp": "2026-09-30T13:46:35Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1231000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1231000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 834736,
+    "level": 6550609,
+    "timestamp": "2026-09-30T16:10:40Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1251000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1251000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 836913,
+    "level": 6552336,
+    "timestamp": "2026-09-30T18:34:35Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1451000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1451000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 839057,
+    "level": 6554064,
+    "timestamp": "2026-09-30T20:58:35Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1511000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1511000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 842327,
+    "level": 6559319,
+    "timestamp": "2026-10-01T04:16:30Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1711000",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1711000",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 843580,
+    "level": 6561868,
+    "timestamp": "2026-10-01T07:48:55Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1724793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1724793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 845047,
+    "level": 6564315,
+    "timestamp": "2026-10-01T11:12:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1824793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1824793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 847267,
+    "level": 6566043,
+    "timestamp": "2026-10-01T13:36:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "1854793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "1854793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 849337,
+    "level": 6567771,
+    "timestamp": "2026-10-01T16:00:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2044793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2044793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 851317,
+    "level": 6569499,
+    "timestamp": "2026-10-01T18:24:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2154793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2154793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 853240,
+    "level": 6578083,
+    "timestamp": "2026-10-02T06:22:25Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2264793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2264793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 855338,
+    "level": 6579811,
+    "timestamp": "2026-10-02T08:46:25Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2314793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2314793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 857336,
+    "level": 6581539,
+    "timestamp": "2026-10-02T11:10:25Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2474793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2474793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 859679,
+    "level": 6584957,
+    "timestamp": "2026-10-02T15:55:15Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2534793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2534793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 861820,
+    "level": 6586685,
+    "timestamp": "2026-10-02T18:19:15Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2714793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2714793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 863994,
+    "level": 6588413,
+    "timestamp": "2026-10-02T20:43:15Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "2844793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "2844793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 865273,
+    "level": 6593856,
+    "timestamp": "2026-10-03T04:16:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3034793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3034793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 867304,
+    "level": 6595584,
+    "timestamp": "2026-10-03T06:40:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3064793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3064793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 869517,
+    "level": 6597312,
+    "timestamp": "2026-10-03T09:04:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3204793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3204793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 871655,
+    "level": 6599040,
+    "timestamp": "2026-10-03T11:28:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3244793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3244793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 873744,
+    "level": 6600768,
+    "timestamp": "2026-10-03T13:52:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3404793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3404793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 875984,
+    "level": 6602496,
+    "timestamp": "2026-10-03T16:16:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3564793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3564793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 877938,
+    "level": 6604224,
+    "timestamp": "2026-10-03T18:40:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3724793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3724793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 879952,
+    "level": 6605952,
+    "timestamp": "2026-10-03T21:04:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3814793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3814793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 881922,
+    "level": 6607680,
+    "timestamp": "2026-10-03T23:28:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "3994793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "3994793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 884107,
+    "level": 6609408,
+    "timestamp": "2026-10-04T01:52:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4034793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4034793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 886218,
+    "level": 6611136,
+    "timestamp": "2026-10-04T04:16:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4214793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4214793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 888277,
+    "level": 6612864,
+    "timestamp": "2026-10-04T06:40:50Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4364793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4364793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 890166,
+    "level": 6621227,
+    "timestamp": "2026-10-04T18:17:45Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4424793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4424793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 892640,
+    "level": 6628802,
+    "timestamp": "2026-10-05T04:50:52Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4524793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4524793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 894832,
+    "level": 6630531,
+    "timestamp": "2026-10-05T07:14:57Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4714793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4714793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 896237,
+    "level": 6631664,
+    "timestamp": "2026-10-05T08:49:22Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4814793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4814793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 897143,
+    "level": 6632258,
+    "timestamp": "2026-10-05T09:38:52Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4854793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4854793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 899789,
+    "level": 6635052,
+    "timestamp": "2026-10-05T13:31:42Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4974793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4974793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 901498,
+    "level": 6636868,
+    "timestamp": "2026-10-05T16:03:02Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "4984793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "4984793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 903876,
+    "level": 6638596,
+    "timestamp": "2026-10-05T18:27:02Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "5004793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "5004793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 905724,
+    "level": 6640287,
+    "timestamp": "2026-10-05T20:51:04Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "5034793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "5034793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 907698,
+    "level": 6642015,
+    "timestamp": "2026-10-05T23:15:04Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "5084793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "5084793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 909827,
+    "level": 6643743,
+    "timestamp": "2026-10-06T01:39:04Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "5114793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "5114793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 911260,
+    "level": 6645755,
+    "timestamp": "2026-10-06T04:26:44Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "5284793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "5284793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 913321,
+    "level": 6647483,
+    "timestamp": "2026-10-06T06:50:44Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "5364793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "5364793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  },
+  {
+    "id": 915320,
+    "level": 6649270,
+    "timestamp": "2026-10-06T09:19:39Z",
+    "action": "update_key",
+    "value": {
+      "name": "ANTH-issuance-v1",
+      "status": "ACTIVE",
+      "saleEnd": "2027-09-28T08:09:25Z",
+      "tokenId": "0",
+      "isPaused": false,
+      "enableKyc": true,
+      "saleStart": "2026-09-28T08:09:25Z",
+      "saleClosed": null,
+      "saleOptions": {
+        "Starter": {
+          "saleEnd": null,
+          "isPaused": false,
+          "payments": {
+            "USDT": {
+              "price": "725000000",
+              "currency": {
+                "fa2": {
+                  "tokenId": "0",
+                  "tokenContractAddress": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v"
+                }
+              }
+            }
+          },
+          "saleStart": null,
+          "totalBought": "5484793",
+          "maxAmountCap": null,
+          "allowedMembershipTiers": {
+            "Starter": {
+              "minPurchaseAmount": null,
+              "maxAmountPerWalletTotal": null
+            }
+          }
+        }
+      },
+      "totalBought": "5484793",
+      "maxAmountCap": "100000000000",
+      "tokenIssuanceType": "MINT",
+      "purchaseFeePercent": "100",
+      "tokenContractAddress": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+      "tokenDistributionType": "AUTO"
+    }
+  }
+]

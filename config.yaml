@@ -168,3 +168,7 @@ tokens:
       enabled: true
       start_from: "2025-12-18T00:00:00Z"
       chunk_minutes: 360
+
+# Shared MvKT connection; historical primary valuation works on Basenet by default.
+mvkt:
+  indexer_url: https://basenet.api.mavryk.network/v1

@@ -29,6 +29,7 @@ func (c *Config) Validate() error {
 		c.validateEquiteez,
 		c.validateTokens,
 		c.validateRWA,
+		c.validateMvKT,
 		c.validateTickers,
 		c.validateAuth,
 		c.validateProductionSafety,

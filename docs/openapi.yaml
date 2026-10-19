@@ -1007,6 +1007,57 @@ paths:
                   source: equiteez
         "500": { $ref: "#/components/responses/Internal" }
 
+  /v1/valuations/primary:
+    post:
+      tags: [RWA]
+      operationId: evaluatePrimaryTransfers
+      summary: Historical Starter list-price valuations for primary transfers and holdings
+      description: |
+        Evaluates 1-256 exact token identities at a block and valuation time.
+        Omitted mode or transfer uses conditions before the transfer block and
+        rejects same-block changes. Holdings uses the final conditions and
+        payment metadata at the end of the selected block. Results echo mode.
+        Supports one Starter option with one configured USDT payment per launch.
+        USD and native prices are exact decimal strings. Unconfirmed history,
+        ambiguous transfer conditions, unknown metadata, and missing/stale FX
+        yield usd=null and a reason, never a spot-price or zero fallback.
+        Public listener requires RWA bearer authentication; internal listener
+        follows the existing trusted-pod posture. Maximum JSON body is 1 MiB.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requests]
+              properties:
+                requests:
+                  type: array
+                  minItems: 1
+                  maxItems: 256
+                  items:
+                    $ref: '#/components/schemas/PrimaryValuationRequest'
+      responses:
+        '200':
+          description: Ordered valuations; individual results can be unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PrimaryValuationResult'
+        '400':
+          description: Invalid identity, time, level, mode, JSON, or batch size
+        '401':
+          description: Missing or invalid RWA bearer token on the public listener
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1233,6 +1284,50 @@ components:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   schemas:
+    PrimaryValuationRequest:
+      type: object
+      required: [network, contract, token_id, at, level]
+      properties:
+        network: { type: string, example: basenet }
+        contract: { type: string, minLength: 36, maxLength: 36, example: KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP }
+        token_id: { type: string, pattern: '^(0|[1-9][0-9]*)$', example: '0' }
+        at: { type: string, format: date-time, example: '2026-10-05T13:31:42Z' }
+        level: { type: integer, format: int64, minimum: 1, example: 6635052 }
+        mode:
+          type: string
+          enum: [transfer, holdings]
+          default: transfer
+          description: Transfer uses pre-block conditions; holdings uses the confirmed end-block state. Omission preserves transfer semantics.
+    PrimaryValuationResult:
+      allOf:
+        - $ref: '#/components/schemas/PrimaryValuationRequest'
+        - type: object
+          required: [usd]
+          properties:
+            usd: { type: string, nullable: true, description: Exact confirmed USD unit price; null when unavailable }
+            reason: { type: string, description: Bounded history/identity/ambiguity/FX unavailability reason }
+            fx_rate: { type: string, description: Exact historical USDT to USD rate }
+            fx_at: { type: string, format: date-time }
+            terms:
+              $ref: '#/components/schemas/PrimaryValuationTerms'
+    PrimaryValuationTerms:
+      type: object
+      required: [launchpad, launch, sale_option, payment_contract, payment_token_id, payment_decimals, price, valid_from, valid_from_level, coverage_level, coverage_at, source]
+      properties:
+        launchpad: { type: string }
+        launch: { type: string }
+        sale_option: { type: string, enum: [Starter] }
+        payment_contract: { type: string }
+        payment_token_id: { type: string }
+        payment_decimals: { type: integer, minimum: 0, maximum: 40, description: Historical on-chain scale for the exact payment identity and requested mode }
+        price: { type: string, description: Historical unit price in the configured USDT payment denomination }
+        valid_from: { type: string, format: date-time }
+        valid_from_level: { type: integer, format: int64 }
+        valid_until: { type: string, format: date-time, description: Exclusive bound when a later condition change is covered }
+        valid_until_level: { type: integer, format: int64 }
+        coverage_level: { type: integer, format: int64 }
+        coverage_at: { type: string, format: date-time }
+        source: { type: string, enum: ['mvkt_launch_ledger:onchain_token_metadata'] }
     TokenPricePoint:
       type: object
       required: [timestamp, currency, price]

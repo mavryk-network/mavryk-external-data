@@ -1,6 +1,8 @@
 package http
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -38,5 +40,18 @@ func TestSetupRoutes_RWAOverviewNoConflict(t *testing.T) {
 	}
 	if !hasSymbol {
 		t.Error("GET /v1/rwa/:symbol is not registered (sanity check)")
+	}
+}
+
+func TestSetupRoutes_PrimaryInheritsRWAAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetupRoutes(engine, RouterDeps{RWAAuth: func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusUnauthorized)
+	}})
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/valuations/primary", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("primary route skipped RWA auth: status %d", recorder.Code)
 	}
 }
