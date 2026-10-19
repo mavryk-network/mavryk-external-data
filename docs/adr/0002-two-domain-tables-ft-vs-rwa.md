@@ -68,5 +68,5 @@ domain type. A generic `Wrap[Req,Res]` HTTP adapter and a single
 
 - Domain abstraction is in `internal/core/domain/prices/point.go`.
 - Repositories: `internal/core/infrastructure/storage/repositories/{token_price,rwa_price}_repository.go`.
-- Worked design notes: [docs/notes/rwa_pairs.md](../notes/rwa_pairs.md),
-  [docs/notes/rwa_quotes.md](../notes/rwa_quotes.md).
+- Worked design notes: `docs/notes/rwa_pairs.md` (historical; not in this repo),
+  `docs/notes/rwa_quotes.md` (historical; not in this repo).

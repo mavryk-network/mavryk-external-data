@@ -72,8 +72,8 @@ func (j *RWAPairSyncJob) Start(ctx context.Context) {
 	j.logger.Info().Dur("interval", interval).Msg("rwa_pair_sync_job_starting")
 
 	safeGo(&j.wg, j.logger, "rwa_pair_sync", func() {
-		runTickerLoop(ctx, j.stopCh, interval, 0, j.logger, "rwa_pair_sync", func(c context.Context) {
-			j.syncOnce(c)
+		runTickerLoop(ctx, j.stopCh, interval, defaultJitter(interval), j.logger, "rwa_pair_sync", func(c context.Context) error {
+			return j.syncOnce(c)
 		})
 	})
 }
@@ -85,9 +85,9 @@ func (j *RWAPairSyncJob) Stop() {
 }
 
 // syncOnce runs one discovery pass under its own timeout so a hung indexer
-// cannot stall the ticker. Errors are logged, never fatal: the collector keeps
-// serving whatever rwa_pairs already holds and the next tick retries.
-func (j *RWAPairSyncJob) syncOnce(ctx context.Context) {
+// cannot stall the ticker. A returned error is never fatal — it only withholds
+// the tick's last-success stamp; the collector serves what rwa_pairs holds.
+func (j *RWAPairSyncJob) syncOnce(ctx context.Context) error {
 	timeout := time.Duration(j.cfg.API.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -97,5 +97,7 @@ func (j *RWAPairSyncJob) syncOnce(ctx context.Context) {
 
 	if err := SyncRWACatalog(syncCtx, j.cfg, j.lookup, j.logger); err != nil {
 		j.logger.Warn().Err(err).Msg("equiteez_catalog_sync_deferred")
+		return err
 	}
+	return nil
 }

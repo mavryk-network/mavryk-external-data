@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -1129,5 +1130,64 @@ func TestRWA_PrimaryMarketConversionFailureKeepsNative(t *testing.T) {
 	}
 	if _, present := row["usd"]; present {
 		t.Errorf("failed conversion must omit the key, got %v", row["usd"])
+	}
+}
+
+func TestRWA_LaunchAmbiguityReturnsConflict(t *testing.T) {
+	for _, hasPair := range []bool{false, true} {
+		for _, path := range []string{"/v1/rwa/khbe-usdt", "/v1/rwa/khbe-usdt/latest"} {
+			t.Run(fmt.Sprintf("pair=%t%s", hasPair, path), func(t *testing.T) {
+				res := &stubLaunchResolver{err: fmt.Errorf("launch lookup: %w", &prices.PairAmbiguousError{Base: "khbe", Quote: "usdt", IDs: []int64{6, 7}})}
+				deps := primaryMarketDeps(res)
+				if hasPair {
+					deps.Lookup = &stubLookup{pair: prices.RWAPair{ID: 42, BaseSymbol: "khbe", QuoteSymbol: "usdt"}}
+				}
+				r := newRWAEngine(t, deps)
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+				if w.Code != http.StatusConflict {
+					t.Fatalf("status=%d, body=%s", w.Code, w.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestRWA_StaleFXUsesSharedMetadataKeys(t *testing.T) {
+	prices.RegisterTokens([]prices.TokenInfo{{Symbol: "usdt", Name: "Tether", Decimals: 6, Enabled: true}})
+	for _, stale := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stale=%t", stale), func(t *testing.T) {
+			deps := primaryMarketDeps(&stubLaunchResolver{launch: khbeLaunchFixture(), found: true})
+			deps.Converter = &stubConverter{result: apiprices.ConversionResult{RateTS: time.Date(2026, 7, 27, 7, 0, 0, 0, time.UTC), Stale: stale}}
+			r := newRWAEngine(t, deps)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/khbe-usdt/latest?in=usd", nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d, body=%s", w.Code, w.Body.String())
+			}
+			var body map[string]json.RawMessage
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := body["usd"]; !ok {
+				t.Fatal("flat converted price missing")
+			}
+			if !stale {
+				if _, ok := body["fx"]; ok {
+					t.Fatal("fresh rate must omit FX warning")
+				}
+				return
+			}
+			var fx map[string]map[string]any
+			if err := json.Unmarshal(body["fx"], &fx); err != nil {
+				t.Fatal(err)
+			}
+			if fx["usd"]["ts"] != "2026-07-27T07:00:00Z" || fx["usd"]["stale"] != true {
+				t.Fatalf("fx=%v", fx)
+			}
+			if _, ok := fx["usd"]["rate_ts"]; ok {
+				t.Fatal("legacy metadata key remains")
+			}
+		})
 	}
 }

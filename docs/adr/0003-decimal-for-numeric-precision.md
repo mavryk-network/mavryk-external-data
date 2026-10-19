@@ -1,8 +1,16 @@
 # ADR-0003: `shopspring/decimal` for monetary values
 
-- **Status**: Accepted
+- **Status**: Partially superseded (wire format)
 - **Date**: 2026-04-27
 - **Deciders**: backend team
+
+> **Supersession note (2026-08):** the storage/computation decision stands
+> (decimal end-to-end, `numeric(38,18)` at rest), but the wire-format section
+> is superseded: FT and RWA v1 endpoints serialise prices as **JSON numbers
+> at hybrid wire precision** — 6 decimal places at or above 0.01, 6
+> significant digits below it (see the addendum below and
+> `docs/openapi.yaml`) — not full-precision quoted strings. Ticker prices
+> still serialise as full-precision strings.
 
 ## Context
 
@@ -62,3 +70,26 @@ end-to-end:
 - Schema columns: `migrations/0003_token_prices.sql`,
   `migrations/0004_rwa_quote_prices.sql`.
 - Domain: `internal/core/domain/prices/point.go`.
+
+## Addendum (2026-08): wire precision is hybrid, not fixed 6 dp
+
+A flat 6-decimal wire grid destroyed sub-cent values: MVRK/BTC ≈ 6.8e-7
+rendered as `0.000001` (+46%) or `0`, and a `delta_abs` of `0` then
+contradicted a live `change_pct` on the same response.
+
+FT and RWA prices now round to 6 decimal places at or above 0.01 and to 6
+significant digits below it (`roundForWire`, handlers/rwa_prices.go). The
+threshold is chosen so that every collected currency except btc and eth stays
+byte-identical to the previous output for the configured tokens.
+
+That byte-identity claim covers **prices**, not derived quantities. `delta_abs`
+and `change_pct` have a magnitude of their own, so any move smaller than 0.01%
+crosses the threshold and now renders with more significant digits instead of
+flattening to `0` — deliberately, since a `delta_abs` of `0` beside a non-zero
+`change_pct` was the defect. `change_pct` is also computed at a wider division
+precision than decimal's default 16, which previously zeroed tiny-but-real
+moves before rounding ever ran.
+
+Ticker `change_24h_pct` and `share_pct` keep a flat 6 dp — they are quoted
+strings on a different endpoint family, and their magnitudes never approach the
+threshold.

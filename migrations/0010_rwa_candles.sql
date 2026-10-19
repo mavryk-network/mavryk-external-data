@@ -79,48 +79,62 @@ BEGIN
     -- Compression policies on all three RWA CAs. Same shape as 0008
     -- compresses the underlying hypertable; segmentby keys mirror the CA
     -- group_by so columnar layout is friendly to (pair, side) reads.
-    BEGIN
+    -- Existence check instead of EXCEPTION WHEN others: a broad catch would
+    -- mislabel a real ALTER failure as "already configured" (0008 pattern).
+    IF NOT EXISTS (
+        SELECT 1
+        FROM timescaledb_information.continuous_aggregates ca
+        JOIN timescaledb_information.compression_settings cs
+          ON cs.hypertable_name = ca.materialization_hypertable_name
+        WHERE ca.view_name = 'rwa_quote_prices_1m'
+    ) THEN
         EXECUTE $sql$
             ALTER MATERIALIZED VIEW rwa_quote_prices_1m SET (
                 timescaledb.compress,
                 timescaledb.compress_segmentby = 'pair_id, side'
             )
         $sql$;
-    EXCEPTION WHEN others THEN
-        RAISE NOTICE 'compression already configured on rwa_quote_prices_1m';
-    END;
+    END IF;
     BEGIN
         PERFORM add_compression_policy('rwa_quote_prices_1m', INTERVAL '14 days');
     EXCEPTION WHEN duplicate_object THEN
         RAISE NOTICE 'compression policy on rwa_quote_prices_1m already exists';
     END;
 
-    BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM timescaledb_information.continuous_aggregates ca
+        JOIN timescaledb_information.compression_settings cs
+          ON cs.hypertable_name = ca.materialization_hypertable_name
+        WHERE ca.view_name = 'rwa_quote_prices_1h'
+    ) THEN
         EXECUTE $sql$
             ALTER MATERIALIZED VIEW rwa_quote_prices_1h SET (
                 timescaledb.compress,
                 timescaledb.compress_segmentby = 'pair_id, side'
             )
         $sql$;
-    EXCEPTION WHEN others THEN
-        RAISE NOTICE 'compression already configured on rwa_quote_prices_1h';
-    END;
+    END IF;
     BEGIN
         PERFORM add_compression_policy('rwa_quote_prices_1h', INTERVAL '30 days');
     EXCEPTION WHEN duplicate_object THEN
         RAISE NOTICE 'compression policy on rwa_quote_prices_1h already exists';
     END;
 
-    BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM timescaledb_information.continuous_aggregates ca
+        JOIN timescaledb_information.compression_settings cs
+          ON cs.hypertable_name = ca.materialization_hypertable_name
+        WHERE ca.view_name = 'rwa_quote_prices_1d'
+    ) THEN
         EXECUTE $sql$
             ALTER MATERIALIZED VIEW rwa_quote_prices_1d SET (
                 timescaledb.compress,
                 timescaledb.compress_segmentby = 'pair_id, side'
             )
         $sql$;
-    EXCEPTION WHEN others THEN
-        RAISE NOTICE 'compression already configured on rwa_quote_prices_1d';
-    END;
+    END IF;
     BEGIN
         PERFORM add_compression_policy('rwa_quote_prices_1d', INTERVAL '180 days');
     EXCEPTION WHEN duplicate_object THEN

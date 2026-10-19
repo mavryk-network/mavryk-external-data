@@ -76,7 +76,8 @@ successful sync fixes it.
 ### Caught-up state
 
 When a per-pair fetch returns 0 rows, the pair is marked `disabled=true,
-disabled_reason="caught_up"`. Distinct from `auto_disabled` (errors) and
+disabled_reason="caught_up"`. Distinct from `auto_disabled` (errors, a legacy
+state — repeated errors now park the pair for a cooldown instead) and
 `reached_floor` (CoinGecko hard floor) so dashboards render successful
 completion clearly. Operators clear the flag manually to re-walk after a
 long downtime.
@@ -163,8 +164,9 @@ no completion: new fills keep arriving. Disabling the pair on an empty batch
 any downtime were never ingested, and a pair that had not traded yet was
 disabled on its very first tick. Catching up now sets `next_attempt_at`
 (~5 min) and leaves the pair enabled; `ClearCaughtUp` at job start resumes
-pairs frozen by the old behaviour. `reached_floor` / `auto_disabled` /
-`manual` remain genuinely terminal.
+pairs frozen by the old behaviour. Only `reached_floor` / `manual` remain
+genuinely terminal: repeated errors set a cooldown, and `ClearAutoDisabled`
+resumes rows a previous build parked as `auto_disabled`.
 
 ## References
 

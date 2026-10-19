@@ -18,9 +18,8 @@ import (
 //  6. shortened token contract — never returns the full KT1… in `base_symbol`,
 //     so the column always carries something distinguishable in the UI.
 //
-// Operators can override any time via `UPDATE rwa_pairs SET base_symbol=...`;
-// the next sync preserves the manual value (we only re-write metadata fields,
-// see LookupRepository.UpsertRWAPair).
+// NOTE: a manual `UPDATE rwa_pairs SET base_symbol=...` does NOT survive the
+// sync — UpsertRWAPair re-derives base/quote symbols on every pass.
 func deriveBaseSymbol(tok equiteez.TokenWithOrderbooks) string {
 	for _, raw := range [][]byte{tok.TokenMetadata, tok.Metadata} {
 		if s := metadataField(raw, "symbol"); s != "" {

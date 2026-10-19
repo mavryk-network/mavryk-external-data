@@ -97,4 +97,4 @@ via `npx`).
 - Routes: `/openapi.yaml`, `/docs`, `/docs/` —
   see [router.go](../../internal/core/api/http/router.go).
 - Linting: `make openapi-lint` (Redocly CLI via npx).
-- This decision closes [refactoring_v2 §1.3](../../refactoring_v2.md).
+- This decision closes refactoring_v2 §1.3 (historical; not in this repo).

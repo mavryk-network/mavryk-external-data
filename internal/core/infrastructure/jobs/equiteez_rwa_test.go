@@ -6,6 +6,8 @@ import (
 
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/interactions/equiteez"
+
+	"github.com/shopspring/decimal"
 )
 
 func TestOrderbookToPoints_NormalizesByQuoteDecimals(t *testing.T) {
@@ -36,9 +38,9 @@ func TestOrderbookToPoints_NormalizesByQuoteDecimals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ob := &equiteez.EquiteezOrderbook{
-				HighestBuyPrice:  equiteez.FlexibleFloat(c.raw),
-				LowestSellPrice:  equiteez.FlexibleFloat(c.raw),
-				LastMatchedPrice: equiteez.FlexibleFloat(c.raw),
+				HighestBuyPrice:  equiteez.FlexibleFloatFromDecimal(decimal.NewFromFloat(c.raw)),
+				LowestSellPrice:  equiteez.FlexibleFloatFromDecimal(decimal.NewFromFloat(c.raw)),
+				LastMatchedPrice: equiteez.FlexibleFloatFromDecimal(decimal.NewFromFloat(c.raw)),
 			}
 			pts := orderbookToPoints(pair, ob, c.quoteDecimals, now)
 			if len(pts) != 3 {
@@ -57,9 +59,9 @@ func TestOrderbookToPoints_NormalizesByQuoteDecimals(t *testing.T) {
 func TestOrderbookToPoints_SkipsZeroAndNegative(t *testing.T) {
 	pair := prices.RWAPair{ID: 1, Source: prices.SourceEquiteez, QuoteSymbol: "USDT"}
 	ob := &equiteez.EquiteezOrderbook{
-		HighestBuyPrice:  equiteez.FlexibleFloat(0),  // skip
-		LowestSellPrice:  equiteez.FlexibleFloat(-5), // skip
-		LastMatchedPrice: equiteez.FlexibleFloat(1_000_000),
+		HighestBuyPrice:  equiteez.FlexibleFloatFromDecimal(decimal.Zero),           // skip
+		LowestSellPrice:  equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(-5)), // skip
+		LastMatchedPrice: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(1_000_000)),
 	}
 	pts := orderbookToPoints(pair, ob, 6, time.Now())
 	if len(pts) != 1 {

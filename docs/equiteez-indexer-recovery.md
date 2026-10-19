@@ -92,8 +92,12 @@ resume automatically for eligible pairs after upstream readiness is verified.
   Retries use bounded exponential backoff; `EQUITEEZ_BACKFILL_MAX_ERRORS` no longer
   permanently disables Equiteez history. Invalid quote configuration still stops
   the affected pair explicitly.
-- Candle refresh covers complete UTC days, including all 1m/1h/1d buckets, and must
-  succeed before a history cursor advances. Extension-probe errors also retry;
+- Each history step processes at most one UTC day of fills, then checkpoints
+  only after all 1m/1h/1d candle refreshes succeed. Later fills in the same fetched
+  page are re-read from that checkpoint on the next tick; empty days are skipped.
+  Each refresh statement spans at most one UTC day, keeps `statement_timeout`,
+  and reports the view and requested window on failure. In-progress buckets stay
+  in the real-time union. Extension-probe errors also retry;
   temporary DB errors are never cached as absence of TimescaleDB. A PostgreSQL
   advisory lock serializes new Equiteez workers across replicas. Contending workers
   retry within their operation deadline and release pool connections between

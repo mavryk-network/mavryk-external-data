@@ -7,6 +7,8 @@ import (
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/interactions/equiteez"
 	"quotes/internal/core/infrastructure/storage/repositories"
+
+	"github.com/shopspring/decimal"
 )
 
 func TestOrdersToLastPoints_NormalizesPriceAndTimestamp(t *testing.T) {
@@ -18,9 +20,9 @@ func TestOrdersToLastPoints_NormalizesPriceAndTimestamp(t *testing.T) {
 	}
 	orders := []equiteez.OrderbookOrder{
 		// micro-USDT 56_250_000 → 56.25 USDT (decimals=6).
-		{ID: 1, OrderType: 1, PricePerRWAToken: 56_250_000, FulfilledAmount: 1_000_000, EndedAt: "2025-08-08T14:42:10Z"},
+		{ID: 1, OrderType: 1, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(56_250_000)), FulfilledAmount: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(1_000_000)), EndedAt: "2025-08-08T14:42:10Z"},
 		// 1_000_000 → 1.00 USDT.
-		{ID: 2, OrderType: 0, PricePerRWAToken: 1_000_000, FulfilledAmount: 5_000_000, EndedAt: "2025-08-09T00:00:00Z"},
+		{ID: 2, OrderType: 0, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(1_000_000)), FulfilledAmount: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(5_000_000)), EndedAt: "2025-08-09T00:00:00Z"},
 	}
 	pts := ordersToLastPoints(pair, orders, 6)
 	if len(pts) != 2 {
@@ -50,10 +52,10 @@ func TestOrdersToLastPoints_NormalizesPriceAndTimestamp(t *testing.T) {
 func TestOrdersToLastPoints_SkipsBadRows(t *testing.T) {
 	pair := prices.RWAPair{ID: 1, Source: prices.SourceEquiteez, QuoteSymbol: "USDT"}
 	orders := []equiteez.OrderbookOrder{
-		{ID: 1, PricePerRWAToken: 0, EndedAt: "2025-08-08T00:00:00Z"},  // zero price → skip
-		{ID: 2, PricePerRWAToken: -5, EndedAt: "2025-08-08T00:00:00Z"}, // negative → skip
-		{ID: 3, PricePerRWAToken: 1_000_000, EndedAt: "garbage"},       // bad ts → skip
-		{ID: 4, PricePerRWAToken: 1_000_000, EndedAt: "2025-08-09T00:00:00Z"},
+		{ID: 1, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(0)), EndedAt: "2025-08-08T00:00:00Z"},  // zero price → skip
+		{ID: 2, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(-5)), EndedAt: "2025-08-08T00:00:00Z"}, // negative → skip
+		{ID: 3, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(1_000_000)), EndedAt: "garbage"},       // bad ts → skip
+		{ID: 4, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(1_000_000)), EndedAt: "2025-08-09T00:00:00Z"},
 	}
 	pts := ordersToLastPoints(pair, orders, 6)
 	if len(pts) != 1 {
@@ -69,10 +71,10 @@ func TestOrdersToLastPoints_DedupesEqualTimestamps(t *testing.T) {
 	// Three orders share the same ended_at; orders arrive id-ASC so the later
 	// id (= more recent fill) must win after dedup.
 	orders := []equiteez.OrderbookOrder{
-		{ID: 10, PricePerRWAToken: 50_000_000, EndedAt: "2025-08-08T14:42:10Z"}, // 50.00
-		{ID: 11, PricePerRWAToken: 51_000_000, EndedAt: "2025-08-08T14:42:10Z"}, // 51.00 (collision)
-		{ID: 12, PricePerRWAToken: 60_000_000, EndedAt: "2025-08-09T00:00:00Z"}, // 60.00 (different ts, kept)
-		{ID: 13, PricePerRWAToken: 52_000_000, EndedAt: "2025-08-08T14:42:10Z"}, // 52.00 (last collision wins)
+		{ID: 10, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(50_000_000)), EndedAt: "2025-08-08T14:42:10Z"}, // 50.00
+		{ID: 11, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(51_000_000)), EndedAt: "2025-08-08T14:42:10Z"}, // 51.00 (collision)
+		{ID: 12, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(60_000_000)), EndedAt: "2025-08-09T00:00:00Z"}, // 60.00 (different ts, kept)
+		{ID: 13, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(52_000_000)), EndedAt: "2025-08-08T14:42:10Z"}, // 52.00 (last collision wins)
 	}
 	pts := ordersToLastPoints(pair, orders, 6)
 	if len(pts) != 2 {
@@ -96,7 +98,7 @@ func TestOrdersToLastPoints_DedupesEqualTimestamps(t *testing.T) {
 func TestOrdersToLastPoints_NoNormalizationWhenDecimalsZero(t *testing.T) {
 	pair := prices.RWAPair{ID: 1, Source: prices.SourceEquiteez}
 	orders := []equiteez.OrderbookOrder{
-		{ID: 1, PricePerRWAToken: 100, EndedAt: "2025-01-01T00:00:00Z"},
+		{ID: 1, PricePerRWAToken: equiteez.FlexibleFloatFromDecimal(decimal.NewFromInt(100)), EndedAt: "2025-01-01T00:00:00Z"},
 	}
 	pts := ordersToLastPoints(pair, orders, 0)
 	if len(pts) != 1 {

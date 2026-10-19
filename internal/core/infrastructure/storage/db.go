@@ -14,20 +14,27 @@ type DB struct {
 	*gorm.DB
 }
 
-// NewDB opens the database, configures pool sizing per cfg.Database, and verifies
-// connectivity (Ping). Returns a wrapped *gorm.DB.
+// NewDB opens the database, bounds SQL execution on every pooled connection,
+// configures pool sizing per cfg.Database, and verifies connectivity (Ping).
 func NewDB(cfg *config.Config, log *zerolog.Logger) (*DB, error) {
+	statementTimeoutMS, err := cfg.Database.StatementTimeoutMilliseconds()
+	if err != nil {
+		return nil, err
+	}
 	sslMode := cfg.Database.SSLMode
 	if sslMode == "" {
 		sslMode = "disable"
 	}
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=UTC",
+	// A startup parameter applies to every connection the pool opens, unlike
+	// a one-off SET executed against whichever connection happens to be idle.
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=UTC statement_timeout=%d",
 		cfg.Database.Host,
 		cfg.Database.User,
 		cfg.Database.Password,
 		cfg.Database.Name,
 		cfg.Database.Port,
 		sslMode,
+		statementTimeoutMS,
 	)
 
 	logMode := logger.Silent
@@ -64,6 +71,7 @@ func NewDB(cfg *config.Config, log *zerolog.Logger) (*DB, error) {
 			Int("max_open_conns", cfg.Database.MaxOpenConns).
 			Int("max_idle_conns", cfg.Database.MaxIdleConns).
 			Dur("conn_max_lifetime", cfg.Database.ConnMaxLifetime.D()).
+			Int64("statement_timeout_ms", statementTimeoutMS).
 			Msg("database_connected")
 	}
 	return &DB{DB: db}, nil

@@ -1,0 +1,37 @@
+# VCS
+.git/
+.gitignore
+.github/
+
+# Local secrets/env
+.env
+.env.example
+.env.*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# Build artifacts
+bin/
+*.test
+*.prof
+
+# Tests/docs/notes (kept out of the prod image)
+*.md
+docs.txt
+
+# Local helpers
+Makefile
+docker-compose.yml
+grafana/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Keys / signing material — must never enter a build context
+*.key
+*.pem
+secret.key

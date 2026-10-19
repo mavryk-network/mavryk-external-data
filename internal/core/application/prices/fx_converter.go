@@ -25,18 +25,17 @@ const maxFXCacheEntries = 50_000
 // fxCacheSweepEvery triggers an opportunistic expired-entry sweep every N writes.
 const fxCacheSweepEvery = 512
 
-// HistoricalFXSource returns the freshest FX rate row for
-// (source, token, currency) whose timestamp is at or before `at`.
-// Replaces the previous "always-latest" contract (Decision #19 in the
-// price-change design doc / `fix_todo.md`). For latest-mode callers
-// this is semantically equivalent — passing `time.Now()` as `at` still
-// returns the freshest row. Historical callers (chart `?in=`,
-// historical change conversions) get the at-or-before row their
-// timestamp asks for, fixing the long-standing chart bug.
-//
-// Returns ok=false when no row exists at-or-before `at` (typical:
-// asking for a date before backfill window). ErrNoFXRate is the
-// converter-level mapping; the source itself reports ok=false.
+// FXHardStalenessCap is the age past which a rate reads as a dead feed and the
+// conversion is refused outright (ErrNoFXRate) rather than served as fresh.
+// Above 24h because deep CoinGecko history is daily-granularity. Deliberately a
+// constant, not config: validation keeps fx_max_staleness_seconds below it, so
+// the soft budget can never widen the dead-feed guard.
+const FXHardStalenessCap = 26 * time.Hour
+
+// HistoricalFXSource returns the freshest rate at or before `at`, so a
+// historical chart converts at the rate current then rather than today's.
+// ok=false when nothing exists at-or-before `at` (e.g. a date before the
+// backfill window); the converter maps that to ErrNoFXRate.
 type HistoricalFXSource interface {
 	LatestRateAtOrBefore(
 		ctx context.Context,
@@ -97,7 +96,6 @@ func (c *tokenFXConverter) Convert(
 	sourceAmount decimal.Decimal,
 	ts time.Time,
 ) (ConversionResult, error) {
-	// Identity short-circuit — no upstream query.
 	if strings.EqualFold(string(sourceToken), string(target)) {
 		return ConversionResult{
 			Amount:   sourceAmount,
@@ -108,8 +106,7 @@ func (c *tokenFXConverter) Convert(
 		}, nil
 	}
 
-	// Source must be in the runtime token registry: the ft-side jobs only
-	// write FX into token_prices for tokens that exist there.
+	// FX only exists in token_prices for registered tokens.
 	if _, ok := prices.LookupToken(sourceToken); !ok {
 		return ConversionResult{}, ErrSourceTokenNotRegistered
 	}
@@ -122,12 +119,13 @@ func (c *tokenFXConverter) Convert(
 		return ConversionResult{}, err
 	}
 
-	// Staleness is measured against `ts` — the timestamp the caller asked
-	// to convert against. For latest-mode (ts ≈ time.Now()) this is the
-	// same as the old "now - rateTS" measurement. For historical lookups
-	// (ts in the past) it's "how stale was the FX feed at the moment we're
-	// asking about", which is the honest question.
-	stale := ts.Sub(rateTS) > c.maxStaleness
+	// Staleness is measured against `ts`, so a historical lookup asks how
+	// stale the feed was at that moment, not today.
+	age := ts.Sub(rateTS)
+	if age > FXHardStalenessCap {
+		return ConversionResult{}, ErrNoFXRate
+	}
+	stale := age > c.maxStaleness
 
 	return ConversionResult{
 		Amount: sourceAmount.Mul(rate),

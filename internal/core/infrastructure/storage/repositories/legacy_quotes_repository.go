@@ -34,14 +34,20 @@ type LegacyQuoteRow struct {
 	GBP       float64   `gorm:"column:gbp"`
 }
 
+// defaultLegacyRowCap backstops an unbounded pivot on this public route. Only
+// ever a fallback for limit <= 0 — never applied downward, or it would silently
+// override an operator who raised server.max_query_limit.
+const defaultLegacyRowCap = 10000
+
 // QueryWide returns wide-format rows for (token, source) within [from, to],
-// sorted ascending by ts, capped at limit. limit <= 0 means no cap (relies on
-// the caller having already validated against server.max_query_limit).
+// ts ASC, capped at limit (<= 0 falls back to defaultLegacyRowCap).
 //
-// The PK index (token_symbol, source_code, quote_currency, ts) combined with
-// TimescaleDB chunk exclusion on ts keeps this O(window). FILTER aggregation
-// collapses the 8 long rows per ts into one wide row inside Postgres — no
-// pivot work in Go.
+// Truncation drops the NEWEST rows, matching v0.1.0 and the v1 window query.
+// Load-bearing: legacy clients page forward by re-issuing with `from` just past
+// the last ts seen, which only advances while truncation keeps the old end.
+//
+// FILTER aggregation collapses the 8 long rows per ts into one wide row in
+// Postgres — no pivot work in Go.
 func (r *LegacyQuoteRepository) QueryWide(
 	ctx context.Context,
 	tokenSymbol string,
@@ -67,12 +73,11 @@ WHERE token_symbol = ? AND source_code = ?
 GROUP BY ts
 ORDER BY ts ASC
 `
-	query := sql
-	args := []any{tokenSymbol, sourceCode, from.UTC(), to.UTC()}
-	if limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, limit)
+	if limit <= 0 {
+		limit = defaultLegacyRowCap
 	}
+	query := sql + " LIMIT ?"
+	args := []any{tokenSymbol, sourceCode, from.UTC(), to.UTC(), limit}
 
 	var rows []LegacyQuoteRow
 	if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {

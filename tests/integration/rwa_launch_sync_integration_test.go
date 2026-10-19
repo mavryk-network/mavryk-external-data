@@ -31,6 +31,7 @@ var recoveryLaunchpad = "KT1" + strings.Repeat("E", 33)
 type recoveryIndexer struct {
 	statusRequests, liveRequests        int
 	flipOnLive                          bool
+	launchMissing                       bool
 	mu                                  sync.Mutex
 	generation                          string
 	status                              string
@@ -90,7 +91,7 @@ func (f *recoveryIndexer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result = map[string]any{"token": tokens}
 	case strings.Contains(request.Query, "GetLaunchesByTokens"):
 		launches := []any{}
-		if !f.partial {
+		if !f.partial && !f.launchMissing {
 			var launch any
 			body := fmt.Sprintf(`{"id":1,"name":"issuance","status":%d,"max_amount_cap":"1000","total_bought":"10","sale_start":"2026-01-01T00:00:00Z","sale_end":"2099-01-01T00:00:00Z","updated_at":"2026-09-30T00:00:00Z","token":{"address":%q,"token_id":0},"launchpad":{"address":%q},"sale_options":[{"name":"Starter","payments":[{"name":"USDT","price":"138000000","token":{"address":%q,"token_id":0}}]}]}`, prices.LaunchStatusActive, recoveryLaunchToken, recoveryLaunchpad, recoveryQuote)
 			_ = json.Unmarshal([]byte(body), &launch)
@@ -325,4 +326,35 @@ func TestEquiteezCatalogUsesCacheWhenCRMStalls(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 77, *pair.EquiteezOrderbookID)
 	require.Equal(t, "2026-10-19T00:00:00Z", pair.IndexerGeneration)
+}
+
+func TestSyncRWACatalog_PreservesLaunchMissingFromPartialResponse(t *testing.T) {
+	db := openGorm(t)
+	truncateRWA(t, db)
+	truncateLaunches(t, db)
+	repo := repositories.NewLaunchRepository(db)
+	lookup := repositories.NewLookupRepository(db)
+	ctx := context.Background()
+	upstream := &recoveryIndexer{generation: "2026-01-01T00:00:00Z", status: "realtime", bookID: 7}
+	srv := httptest.NewServer(upstream)
+	t.Cleanup(srv.Close)
+	cfg := launchSyncTestConfig(srv.URL)
+	require.NoError(t, jobs.SyncRWACatalog(ctx, cfg, lookup, nil))
+
+	// A pair refresh succeeds while the still-allowlisted launch join is absent.
+	upstream.change(func() { upstream.launchMissing = true; upstream.bookID = 77 })
+	require.NoError(t, jobs.SyncRWACatalog(ctx, cfg, lookup, nil))
+	got, found, err := repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "primary", "usdt")
+	require.NoError(t, err)
+	require.True(t, found, "a missing launch join must preserve the allowlisted token")
+	require.True(t, got.Price.Equal(decimal.NewFromInt(138)))
+	pair, err := lookup.LookupRWAPairBySymbol(ctx, "rec", "usdt")
+	require.NoError(t, err)
+	require.EqualValues(t, 77, *pair.EquiteezOrderbookID)
+
+	upstream.change(func() { upstream.delisted = true })
+	require.NoError(t, jobs.SyncRWACatalog(ctx, cfg, lookup, nil))
+	_, found, err = repo.LaunchBySymbol(ctx, prices.SourceEquiteez, "primary", "usdt")
+	require.NoError(t, err)
+	require.False(t, found, "CRM removal is authoritative even if the launch join is absent")
 }

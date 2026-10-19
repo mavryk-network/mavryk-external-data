@@ -20,11 +20,7 @@ func truncatePairs(t *testing.T, db *gorm.DB) {
 	require.NoError(t, db.Exec("TRUNCATE TABLE rwa_pairs RESTART IDENTITY CASCADE").Error)
 }
 
-// TestLookupRepository_QuoteAddrRoundTrip exercises migration 0017 against a
-// real database: the quote_addr column must survive the upsert round-trip, and
-// a later sync that lost the currency rows (degraded indexer payload) must NOT
-// wipe a previously-good address — same preservation contract as
-// equiteez_orderbook_id.
+// Migration 0017: a degraded indexer payload must not wipe a good quote_addr.
 func TestLookupRepository_QuoteAddrRoundTrip(t *testing.T) {
 	db := openGorm(t)
 	truncatePairs(t, db)
@@ -59,7 +55,6 @@ func TestLookupRepository_QuoteAddrRoundTrip(t *testing.T) {
 	require.Equal(t, "KT1UsdtQuote", got.QuoteAddr,
 		"an empty quote_addr in a later sync must not wipe the stored one")
 
-	// A changed address (quote token migrated) does propagate.
 	moved := pair
 	moved.QuoteAddr = "KT1UsdtV2"
 	_, err = repo.UpsertRWAPair(ctx, moved, now.Add(2*time.Minute))
@@ -69,7 +64,7 @@ func TestLookupRepository_QuoteAddrRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "KT1UsdtV2", got.QuoteAddr)
 
-	// And the catalog lister carries it too — that is what /v1/pairs/rwa serves.
+	// The catalog lister is what /v1/pairs/rwa serves.
 	list, err := repo.EnabledRWAPairs(ctx)
 	require.NoError(t, err)
 	require.Len(t, list, 1)

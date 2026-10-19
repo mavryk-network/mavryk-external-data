@@ -12,11 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TokenChartDeps wires the FA chart handlers (Series, OHLC).
-//
-// /ohlcv is intentionally not on this struct — until volume ingestion
-// ships (see ADR-0015) the route is bound to NotImplementedOHLCV at the
-// router.
+// TokenChartDeps wires the FA chart handlers (Series, OHLC). /ohlcv is bound to
+// NotImplementedOHLCV at the router until volume ingestion ships (ADR-0015).
 type TokenChartDeps struct {
 	Charts        *apiprices.ChartService
 	DefaultSource prices.Source
@@ -24,10 +21,8 @@ type TokenChartDeps struct {
 	DefaultLimit  int
 }
 
-// chartTokenRequest is the shared parsed-payload for FA chart handlers.
-// `Symbol` is the original token id, `Currency` the resolved quote-currency
-// — both stamped into the response envelope so dashboards don't re-derive
-// them from the URL.
+// chartTokenRequest is the shared parsed payload for FA chart handlers. Symbol
+// and Currency are stamped into the response envelope for the client.
 type chartTokenRequest struct {
 	Symbol   string
 	Currency string
@@ -36,8 +31,7 @@ type chartTokenRequest struct {
 
 // Series — GET /v1/prices/:token/series
 //
-// Returns one (timestamp, close) point per bucket. Empty range ⇒ latest
-// mode (the underlying CA SELECT runs ORDER BY bucket ASC + LIMIT N).
+// One (timestamp, close) point per bucket; an empty range means latest mode.
 func (d TokenChartDeps) Series() gin.HandlerFunc {
 	bind := d.bindChart()
 	action := func(ctx context.Context, req chartTokenRequest) (SeriesDTO, error) {
@@ -68,8 +62,7 @@ func (d TokenChartDeps) Series() gin.HandlerFunc {
 
 // OHLC — GET /v1/prices/:token/ohlc
 //
-// Returns one candle per bucket. Volume fields (vb/vq) are not on the
-// wire — that's the OHLCV contract, parked at 501 (see ADR-0015).
+// One candle per bucket; volume fields belong to OHLCV, parked at 501 (ADR-0015).
 func (d TokenChartDeps) OHLC() gin.HandlerFunc {
 	bind := d.bindChart()
 	action := func(ctx context.Context, req chartTokenRequest) (OHLCDTO, error) {
@@ -118,8 +111,7 @@ func (d TokenChartDeps) bindChart() common.Bind[chartTokenRequest] {
 		if err != nil {
 			return chartTokenRequest{}, err
 		}
-		// Line + OHLC ship for FA — interval=raw is reserved for a
-		// future stage that wires the existing PointRepository.Query path.
+		// interval=raw is reserved for a future stage.
 		if interval == apiprices.IntervalRaw {
 			return chartTokenRequest{}, coreerrors.InvalidArgument(
 				"Interval 'raw' is not yet supported for FA charts; use 1m/5m/15m/1h/4h/1d")
@@ -139,8 +131,7 @@ func (d TokenChartDeps) bindChart() common.Bind[chartTokenRequest] {
 		pq, err := common.BindPriceQuery(c, common.QueryOptions{
 			MaxLimit:           d.MaxLimit,
 			DefaultLatestLimit: d.DefaultLimit,
-			// MetricParam: "" — chart endpoints use ?currency= directly,
-			// not the legacy comma-separated metric filter.
+			// MetricParam: "" — chart endpoints use ?currency= directly.
 		})
 		if err != nil {
 			return chartTokenRequest{}, err

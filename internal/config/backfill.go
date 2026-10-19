@@ -1,25 +1,14 @@
 package config
 
 // BackfillConfig controls the reverse-backfill job for FT prices (CoinGecko).
+// The job walks oldest_ts backwards from the live cursor towards StartFrom, one
+// ChunkMinutes-wide step per token per tick.
 //
-// The job walks oldest_ts backwards from the live cursor towards start_from
-// (clamped by min_start_from). One step per token per tick.
-//
-// Knobs:
-//   - TickSeconds:          cadence of the backfill ticker; total outbound RPS is bounded
-//     by (step requests) / TickSeconds, independent of the live job.
-//   - JitterMs:             random ±jitter added to the first tick to avoid replicas
-//     hammering the upstream in lockstep.
-//   - ChunkMinutes:         width of a single step window.
-//   - MinStartFrom:         hard floor that overrides any per-token start_from — once the
-//     cursor reaches this value, the token is marked disabled with
-//     reason=reached_floor (sticky).
-//   - BackfillMaxErrors:    after this many consecutive errors the token is auto-disabled.
-//   - BackoffInitialMs /
-//     BackoffMaxMs:         exponential backoff per-token on transient errors.
-//   - MaxBackoffMs:         hard cap on the computed backoff (default 24h). Keeps a
-//     failing token's "next attempt" within an operationally sane
-//     bound even if BackoffMaxMs is mistakenly set very high.
+// MinStartFrom is a hard floor overriding any per-token start_from: reaching it
+// disables the token with reason=reached_floor (sticky). After
+// BackfillMaxErrors consecutive errors a token is parked for a cooldown, never
+// permanently disabled. MaxBackoffMs hard-caps the computed backoff (24h) even
+// if BackoffMaxMs is set absurdly high.
 type BackfillConfig struct {
 	Enabled           bool   `yaml:"enabled"`
 	StartFrom         string `yaml:"start_from"`

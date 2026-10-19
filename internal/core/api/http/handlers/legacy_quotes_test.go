@@ -177,3 +177,42 @@ func TestLegacyQuotes_RepoError_500WithLegacyEnvelope(t *testing.T) {
 		t.Errorf("legacy 500 envelope missing 'error' key: %v", body)
 	}
 }
+
+// TestLegacyQuotes_NoLimitFallsBackToServerCap pins the DoS fix: an absent
+// ?limit must reach the repository as the server cap, never as 0 (which the
+// repository would render as "no LIMIT" over the token's whole history).
+func TestLegacyQuotes_NoLimitFallsBackToServerCap(t *testing.T) {
+	repo := &stubLegacyRepo{}
+	r := newLegacyEngine(repo)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/quotes", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if repo.gotLm != 10000 {
+		t.Errorf("limit = %d, want 10000 (server cap)", repo.gotLm)
+	}
+}
+
+// TestLegacyQuotes_WideWindowServedNotRejected pins the frozen v0.1.0 contract:
+// a multi-year window is answered, bounded by the server row cap, exactly as
+// /v1/prices/{token} answers one. A 400 here would break clients that have
+// always fetched full history in a single call.
+func TestLegacyQuotes_WideWindowServedNotRejected(t *testing.T) {
+	repo := &stubLegacyRepo{}
+	r := newLegacyEngine(repo)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/quotes?from=1970-01-01T00:00:00Z&to=2026-01-01T00:00:00Z", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	if repo.gotLm != 10000 {
+		t.Errorf("limit = %d, want 10000 (server cap bounds the wide window)", repo.gotLm)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !repo.gotFr.Equal(want) {
+		t.Errorf("from = %v, want %v (window passed through untouched)", repo.gotFr, want)
+	}
+}

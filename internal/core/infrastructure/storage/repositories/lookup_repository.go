@@ -127,12 +127,14 @@ func (r *LookupRepository) LookupRWAPairBySymbol(ctx context.Context, base, quot
 	}
 }
 
-// UpsertRWAPair finds-or-creates by `(source_code, orderbook_addr)` and
-// updates metadata + `last_synced_at`. Returns the persisted ID.
-//
-// Operator overrides survive sync: `enabled` is **only set on INSERT** (to
-// true). Existing pairs keep whatever the operator chose. To reset a manual
-// override, edit the row in DB.
+// RWAPairDisabledReasonSyncMissing marks rows the sync disabled because the
+// pair left the upstream allowlist — the only reason auto-re-enabled later.
+// NULL/other reasons are operator decisions and survive every sync.
+const RWAPairDisabledReasonSyncMissing = "sync_missing"
+
+// UpsertRWAPair finds-or-creates by `(source_code, orderbook_addr)` and updates
+// metadata + `last_synced_at`. Returns the persisted ID. `enabled` is set on
+// INSERT and re-set only for rows the sync itself disabled.
 func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, syncedAt time.Time) (int64, error) {
 	if p.Source == "" || p.OrderbookAddr == "" {
 		return 0, fmt.Errorf("upsert rwa_pair: source and orderbook_addr are required")
@@ -168,23 +170,32 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 	case res.Error != nil:
 		return 0, fmt.Errorf("lookup rwa_pair: %w", res.Error)
 	default:
-		// Update metadata only — leave `enabled` for the operator to control.
-		// equiteez_orderbook_id and quote_addr are updated only when the caller
-		// supplies a value; preserves a previously-good value if a degraded sync
-		// response omitted it (currency rows are a nested, independently-nullable
-		// part of the indexer payload).
+		// Update metadata only — leave `enabled` for the operator to control,
+		// except rows the sync itself disabled: the pair is present upstream
+		// again, so undo the sync's own soft-disable.
+		// equiteez_orderbook_id, quote_addr and token_addr are updated only
+		// when the caller supplies a value, so a degraded sync response can't
+		// wipe a previously-good one (a NULLed token_addr would silently drop
+		// the pair from collection).
 		updates := map[string]any{
 			"base_symbol":    p.BaseSymbol,
 			"quote_symbol":   p.QuoteSymbol,
-			"token_addr":     tokenAddr,
 			"last_synced_at": syncedAt,
 			"in_allowlist":   p.InAllowlist, "indexer_generation": p.IndexerGeneration,
+		}
+		if !existing.Enabled && existing.DisabledReason != nil &&
+			*existing.DisabledReason == RWAPairDisabledReasonSyncMissing {
+			updates["enabled"] = true
+			updates["disabled_reason"] = nil
 		}
 		if equiteezID != nil {
 			updates["equiteez_orderbook_id"] = equiteezID
 		}
 		if quoteAddr != nil {
 			updates["quote_addr"] = quoteAddr
+		}
+		if tokenAddr != nil {
+			updates["token_addr"] = tokenAddr
 		}
 		err := tx.Model(&entities.RWAPairEntity{}).
 			Where("id = ?", existing.ID).
