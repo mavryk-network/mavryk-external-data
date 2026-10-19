@@ -19,13 +19,13 @@ import (
 )
 
 // EquiteezRWAJob polls Equiteez for the currently-known RWA pairs (loaded from
-// the rwa_pairs table at startup) and writes one PricePoint per (pair, side)
+// the rwa_pairs table each tick) and writes one PricePoint per (pair, side)
 // per tick into rwa_quote_prices.
 //
-// `rwa_pairs` is populated by the discovery sync (`SyncRWAPairs`); this
+// `rwa_pairs` is populated by the discovery sync (`SyncRWACatalog`); this
 // collector only reads it. Operators who disable a pair (`enabled=false`) opt
 // it out of polling; pairs whose orderbook is removed from Equiteez allowlist
-// get auto-disabled by the next sync.
+// stop collection when CRM membership is reconciled.
 type EquiteezRWAJob struct {
 	cfg    *config.Config
 	repo   apiprices.Repository
@@ -38,8 +38,7 @@ type EquiteezRWAJob struct {
 	wg       sync.WaitGroup
 }
 
-// NewEquiteezRWAJob wires the collector. Lookups are read once at Start; if you
-// add new pairs while the service is running, restart the service to pick them up.
+// NewEquiteezRWAJob wires the collector. Lookups are refreshed each tick.
 func NewEquiteezRWAJob(
 	cfg *config.Config,
 	repo apiprices.Repository,
@@ -99,6 +98,13 @@ func (j *EquiteezRWAJob) Start(ctx context.Context) {
 // lifetime, so both required a restart. The reload is one indexed SELECT per
 // tick, negligible next to the outbound GraphQL round-trip that follows.
 func (j *EquiteezRWAJob) collectTick(ctx context.Context) {
+	ctx, cancel := equiteezOperationContext(ctx, j.cfg.API.TimeoutSeconds)
+	defer cancel()
+	if err := j.lookup.WithEquiteezLock(ctx, func() error { j.collectLocked(ctx); return nil }); err != nil {
+		j.logger.Warn().Err(err).Msg("equiteez_live_lock_failed")
+	}
+}
+func (j *EquiteezRWAJob) collectLocked(ctx context.Context) {
 	pairs, err := j.lookup.RWAPairs(ctx)
 	if err != nil {
 		j.logger.Error().Err(err).Msg("rwa_load_pairs_failed")
@@ -132,6 +138,22 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 			Observe(time.Since(start).Seconds())
 	}()
 
+	generation, err := j.client.ReadyGeneration(ctx, j.cfg.Equiteez)
+	if err != nil {
+		j.logger.Warn().Err(err).Msg("equiteez_live_waiting_for_indexer")
+		return
+	}
+	current := make([]prices.RWAPair, 0, len(pairs))
+	for _, p := range pairs {
+		if p.IndexerGeneration == generation {
+			current = append(current, p)
+		}
+	}
+	pairs = current
+	if len(pairs) == 0 {
+		j.logger.Debug().Msg("equiteez_live_waiting_for_catalog")
+		return
+	}
 	// Group pairs by token address so one GraphQL request covers all pairs of
 	// the same token; resolve the right orderbook on the response side.
 	byTokenAddr, tokenAddresses := groupPairsByToken(pairs)
@@ -160,6 +182,10 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 		return
 	}
 
+	if err = j.client.CheckGeneration(ctx, j.cfg.Equiteez, generation); err != nil {
+		j.logger.Warn().Err(err).Msg("equiteez_live_discarded_changed_snapshot")
+		return
+	}
 	now := time.Now().UTC()
 	points := buildPointsFromOrderbooks(tokens, byTokenAddr, pairDecimals, now)
 	if len(points) == 0 {
@@ -279,7 +305,7 @@ func matchPairForOrderbook(pairs []prices.RWAPair, orderbookAddr string) (prices
 func filterEnabledPairs(in []prices.RWAPair, source prices.Source) []prices.RWAPair {
 	out := make([]prices.RWAPair, 0, len(in))
 	for _, p := range in {
-		if p.Enabled && p.Source == source {
+		if p.Enabled && p.InAllowlist && p.Source == source {
 			out = append(out, p)
 		}
 	}

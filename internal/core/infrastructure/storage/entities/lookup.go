@@ -32,9 +32,11 @@ func (TokenEntity) TableName() string { return "tokens" }
 //
 // EquiteezOrderbookID caches the indexer's internal integer ID for the
 // orderbook (`orderbook.id` in Hasura). Required by the backfill job to query
-// `orderbook_order` events; populated by SyncRWAPairs and may be NULL until
+// `orderbook_order` events; populated by SyncRWACatalog and may be NULL until
 // the next sync runs.
 type RWAPairEntity struct {
+	InAllowlist         bool       `gorm:"column:in_allowlist"`
+	IndexerGeneration   string     `gorm:"column:indexer_generation"`
 	ID                  int64      `gorm:"primaryKey;column:id"`
 	BaseSymbol          string     `gorm:"column:base_symbol;not null"`
 	QuoteSymbol         string     `gorm:"column:quote_symbol;not null"`

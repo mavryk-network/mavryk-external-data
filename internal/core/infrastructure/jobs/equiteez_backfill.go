@@ -107,16 +107,6 @@ func (j *EquiteezBackfillJob) Start(ctx context.Context) {
 		return
 	}
 
-	// Self-heal: earlier builds permanently disabled a pair on catch-up
-	// (disabled_reason=caught_up), so any pair frozen by that behaviour would
-	// stay dead across deploys. Resume them from their persisted cursor.
-	// Operator/terminal disables (manual, auto_disabled, reached_floor) survive.
-	if resumed, err := j.state.ClearCaughtUp(ctx, prices.SourceEquiteez); err != nil {
-		j.logger.Warn().Err(err).Msg("equiteez_backfill_clear_caught_up_failed")
-	} else if resumed > 0 {
-		j.logger.Info().Int64("pairs", resumed).Msg("equiteez_backfill_resumed_caught_up_pairs")
-	}
-
 	tick := time.Duration(j.cfg.Equiteez.Backfill.TickSeconds) * time.Second
 	if tick <= 0 {
 		tick = 30 * time.Second
@@ -160,7 +150,19 @@ func (j *EquiteezBackfillJob) tickAllPairs(ctx context.Context) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if err := j.stepPair(ctx, p); err != nil {
+		pairCtx, cancel := equiteezOperationContext(ctx, j.cfg.API.TimeoutSeconds)
+		err := j.lookup.WithEquiteezLock(pairCtx, func() error {
+			current, err := j.lookup.LookupRWAPair(pairCtx, p.ID)
+			if err != nil {
+				return err
+			}
+			if !current.Enabled || !current.InAllowlist {
+				return nil
+			}
+			return j.stepPair(pairCtx, current)
+		})
+		cancel()
+		if err != nil {
 			j.logger.Warn().Err(err).Int64("pair_id", p.ID).Msg("equiteez_backfill_step_error")
 		}
 	}
@@ -180,7 +182,7 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 
 	if pair.EquiteezOrderbookID == nil {
 		// Sync hasn't populated the indexer ID yet. Skip silently — a successful
-		// SyncRWAPairs run will fix it on the next tick.
+		// SyncRWACatalog run will fix it on the next tick.
 		logger.Debug().Msg("equiteez_backfill_skipping_no_orderbook_id")
 		return nil
 	}
@@ -192,11 +194,30 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 	if st == nil {
 		st = &repositories.BackfillState{Source: source, EntityKey: entityKey}
 	}
-	if st.Disabled {
+	if st.Disabled && st.DisabledReason != repositories.BackfillDisabledReasonAutoDisabled && st.DisabledReason != repositories.BackfillDisabledReasonCaughtUp {
 		logger.Debug().Str("reason", st.DisabledReason).Msg("equiteez_backfill_skipped_disabled")
 		return nil
 	}
 
+	// Discovery refreshes the pair generation independently. While it still
+	// matches the checkpoint, a paused pair needs no upstream readiness poll.
+	if !st.Disabled && pair.IndexerGeneration != "" && st.IndexerGeneration == pair.IndexerGeneration &&
+		st.NextAttemptAt != nil && st.NextAttemptAt.After(time.Now()) {
+		return nil
+	}
+
+	generation, err := j.client.ReadyGeneration(ctx, j.cfg.Equiteez)
+	if err != nil {
+		return fmt.Errorf("backfill waiting for indexer: %w", err)
+	}
+	if err = j.lookup.CatalogGeneration(ctx, pair.ID, generation); err != nil {
+		return err
+	}
+	if prepareEquiteezBackfill(st, generation) {
+		if err = j.state.Upsert(ctx, st); err != nil {
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	if st.NextAttemptAt != nil && st.NextAttemptAt.After(now) {
 		logger.Debug().Time("retry_at", *st.NextAttemptAt).Msg("equiteez_backfill_skipped_backoff")
@@ -247,6 +268,9 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 	if err != nil {
 		return j.recordError(ctx, &logger, st, err)
 	}
+	if err = j.client.CheckGeneration(ctx, j.cfg.Equiteez, generation); err != nil {
+		return err
+	}
 	if len(orders) == 0 {
 		// Caught up with the indexer — but a forward walk has NO terminal state:
 		// new fills keep arriving. Pause until the next re-check instead of
@@ -279,11 +303,10 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		// Materialize the batch's time span into the rwa_quote_prices_* continuous
 		// aggregates so backfilled RWA history shows on charts / ATH. Bound the
 		// refresh by the points' own min/max ts (a batch spans whatever fill
-		// window it covers). Best-effort — a refresh failure must not fail or
-		// retry the step.
+		// window it covers). Refresh must succeed before advancing the cursor.
 		if lo, hi := pointsTimeSpan(points); !lo.IsZero() {
 			if rErr := j.lookup.RefreshRWACandleAggregates(ctx, lo, hi.Add(time.Second)); rErr != nil {
-				logger.Debug().Err(rErr).Msg("equiteez_backfill_cagg_refresh_failed")
+				return j.recordError(ctx, &logger, st, fmt.Errorf("refresh candles: %w", rErr))
 			}
 		}
 	} else {
@@ -298,7 +321,7 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		// Every row in the batch had an unparseable ended_at, so there is no safe
 		// keyset position to move to. Advancing blindly would skip the batch;
 		// staying put would re-fetch it forever. Record it as an error so backoff
-		// applies and the auto-disable threshold eventually surfaces it.
+		// applies without advancing past unreadable data.
 		return j.recordError(ctx, &logger, st,
 			fmt.Errorf("batch of %d orders has no parseable ended_at; cannot advance cursor", len(orders)))
 	}
@@ -339,34 +362,19 @@ func advanceOrderCursor(orders []equiteez.OrderbookOrder) (equiteez.OrderCursor,
 }
 
 // recordError increments the error counter, computes backoff, persists state,
-// and (if threshold crossed) auto-disables. Always returns the original error.
-//
-// Mirrors CoinGeckoBackfillJob.recordError for behavioural symmetry.
+// and schedules another attempt. Equiteez outages never permanently disable a
+// pair. Always returns the original error.
 func (j *EquiteezBackfillJob) recordError(
 	ctx context.Context,
 	logger *zerolog.Logger,
 	st *repositories.BackfillState,
 	fetchErr error,
 ) error {
-	st.ErrorCount++
+	if st.ErrorCount < 1000 {
+		st.ErrorCount++
+	}
 	st.LastError = truncateError(fetchErr)
 
-	threshold := j.cfg.Equiteez.Backfill.BackfillMaxErrors
-	if threshold > 0 && st.ErrorCount >= threshold {
-		st.Disabled = true
-		st.DisabledReason = repositories.BackfillDisabledReasonAutoDisabled
-		st.NextAttemptAt = nil
-		if perr := j.state.Upsert(ctx, st); perr != nil {
-			logger.Error().Err(perr).Msg("equiteez_backfill_persist_failed_after_auto_disable")
-		}
-		metrics.BackfillAutoDisabledTotal.WithLabelValues(string(st.Source), st.EntityKey, "errors_threshold").Inc()
-		logger.Error().
-			Err(fetchErr).
-			Int("error_count", st.ErrorCount).
-			Int("threshold", threshold).
-			Msg("equiteez_backfill_auto_disabled")
-		return fetchErr
-	}
 	metrics.JobErrorsTotal.WithLabelValues("backfill", string(st.Source), st.EntityKey, "transient").Inc()
 
 	backoff := computeBackoff(
@@ -410,7 +418,7 @@ func (j *EquiteezBackfillJob) markDisabled(
 func filterBackfillablePairs(in []prices.RWAPair) []prices.RWAPair {
 	out := make([]prices.RWAPair, 0, len(in))
 	for _, p := range in {
-		if !p.Enabled || p.Source != prices.SourceEquiteez {
+		if !p.Enabled || !p.InAllowlist || p.Source != prices.SourceEquiteez {
 			continue
 		}
 		out = append(out, p)
@@ -482,4 +490,31 @@ func pointsTimeSpan(points []prices.PricePoint) (min, max time.Time) {
 		}
 	}
 	return min, max
+}
+
+// prepareEquiteezBackfill schedules one replay per generation, including the
+// first deploy of this migration. Manual stops are never changed.
+func prepareEquiteezBackfill(st *repositories.BackfillState, generation string) bool {
+	if st.Disabled && st.DisabledReason != repositories.BackfillDisabledReasonAutoDisabled && st.DisabledReason != repositories.BackfillDisabledReasonCaughtUp {
+		return false
+	}
+	changed := false
+	if st.IndexerGeneration != generation {
+		st.IndexerGeneration = generation
+		st.CursorTs = nil
+		st.CursorID = nil
+		st.NextAttemptAt = nil
+		st.ErrorCount = 0
+		st.LastError = ""
+		changed = true
+	}
+	if st.Disabled && (st.DisabledReason == repositories.BackfillDisabledReasonAutoDisabled || st.DisabledReason == repositories.BackfillDisabledReasonCaughtUp) {
+		st.Disabled = false
+		st.DisabledReason = ""
+		st.ErrorCount = 0
+		st.LastError = ""
+		st.NextAttemptAt = nil
+		changed = true
+	}
+	return changed
 }

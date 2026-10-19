@@ -14,7 +14,7 @@ import (
 
 // LookupRepository serves the lookup tables (sources, tokens, rwa_pairs).
 // Reads are unrestricted; writes are limited to the controlled mutations the
-// RWA sync job needs (`UpsertRWAPair`, `DisableMissingRWAPairs`). Bulk loads
+// RWA sync job needs (`UpsertRWAPair`, `ApplyAllowlist`). Bulk loads
 // of `tokens`/`sources` continue to be migration-driven.
 type LookupRepository struct {
 	db *gorm.DB
@@ -67,7 +67,7 @@ func (r *LookupRepository) RWAPairs(ctx context.Context) ([]prices.RWAPair, erro
 func (r *LookupRepository) EnabledRWAPairs(ctx context.Context) ([]prices.RWAPair, error) {
 	var rows []entities.RWAPairEntity
 	err := r.db.WithContext(ctx).
-		Where("enabled = ?", true).
+		Where("enabled AND in_allowlist").
 		Order("source_code, base_symbol, quote_symbol").
 		Find(&rows).Error
 	if err != nil {
@@ -106,7 +106,7 @@ func (r *LookupRepository) LookupRWAPairBySymbol(ctx context.Context, base, quot
 	err := r.db.WithContext(ctx).
 		Where("LOWER(base_symbol) = ?", base).
 		Where("LOWER(quote_symbol) = ?", quote).
-		Where("enabled = ?", true).
+		Where("enabled AND in_allowlist").
 		Order("id").
 		Limit(2). // LIMIT 2 = enough to detect a collision.
 		Find(&rows).Error
@@ -158,7 +158,8 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 			OrderbookAddr:       orderbookAddr,
 			EquiteezOrderbookID: equiteezID,
 			Enabled:             true,
-			LastSyncedAt:        &syncedAt,
+			InAllowlist:         p.InAllowlist, IndexerGeneration: p.IndexerGeneration,
+			LastSyncedAt: &syncedAt,
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return 0, fmt.Errorf("insert rwa_pair: %w", err)
@@ -177,6 +178,7 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 			"quote_symbol":   p.QuoteSymbol,
 			"token_addr":     tokenAddr,
 			"last_synced_at": syncedAt,
+			"in_allowlist":   p.InAllowlist, "indexer_generation": p.IndexerGeneration,
 		}
 		if equiteezID != nil {
 			updates["equiteez_orderbook_id"] = equiteezID
@@ -194,25 +196,6 @@ func (r *LookupRepository) UpsertRWAPair(ctx context.Context, p prices.RWAPair, 
 	}
 }
 
-// DisableMissingRWAPairs marks every pair for `source` whose ID is NOT in
-// `keepIDs` as `enabled=false`. Used by the sync to handle pairs that fell
-// out of the upstream allowlist.
-//
-// Pairs already disabled stay disabled. Pairs in `keepIDs` are not touched
-// (operator overrides are preserved).
-func (r *LookupRepository) DisableMissingRWAPairs(ctx context.Context, source prices.Source, keepIDs []int64) (int64, error) {
-	tx := r.db.WithContext(ctx).Model(&entities.RWAPairEntity{}).
-		Where("source_code = ? AND enabled = ?", string(source), true)
-	if len(keepIDs) > 0 {
-		tx = tx.Where("id NOT IN ?", keepIDs)
-	}
-	res := tx.Update("enabled", false)
-	if res.Error != nil {
-		return 0, fmt.Errorf("disable missing rwa_pairs: %w", res.Error)
-	}
-	return res.RowsAffected, nil
-}
-
 func entityToRWAPair(e entities.RWAPairEntity) prices.RWAPair {
 	pair := prices.RWAPair{
 		ID:                  e.ID,
@@ -221,7 +204,8 @@ func entityToRWAPair(e entities.RWAPairEntity) prices.RWAPair {
 		Source:              prices.Source(e.SourceCode),
 		EquiteezOrderbookID: e.EquiteezOrderbookID,
 		Enabled:             e.Enabled,
-		LastSyncedAt:        e.LastSyncedAt,
+		InAllowlist:         e.InAllowlist, IndexerGeneration: e.IndexerGeneration,
+		LastSyncedAt: e.LastSyncedAt,
 	}
 	if e.TokenAddr != nil {
 		pair.TokenAddr = *e.TokenAddr

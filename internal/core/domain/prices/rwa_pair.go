@@ -21,13 +21,15 @@ import (
 //   - OrderbookAddr:         Tezos orderbook contract — what the collector polls.
 //   - EquiteezOrderbookID:   indexer's internal integer ID for the orderbook
 //     (Hasura `orderbook.id`). Required by the Equiteez backfill job to query
-//     `orderbook_order` events efficiently; nil until SyncRWAPairs runs.
+//     `orderbook_order` events efficiently; nil until SyncRWACatalog runs.
 //   - BaseSymbol:           human label for the base asset (token).
 //   - QuoteSymbol:          human label for the quote currency (e.g. "USDT").
 //   - Enabled:              local override; the sync respects this flag (won't
 //     re-enable an operator-disabled pair).
 //   - LastSyncedAt:         audit trail.
 type RWAPair struct {
+	InAllowlist         bool
+	IndexerGeneration   string
 	ID                  int64
 	Source              Source
 	TokenAddr           string

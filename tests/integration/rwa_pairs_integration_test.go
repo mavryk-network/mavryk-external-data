@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"quotes/internal/core/domain/prices"
+	"quotes/internal/core/infrastructure/interactions/equiteez"
 	"quotes/internal/core/infrastructure/storage/repositories"
 
 	"github.com/stretchr/testify/require"
@@ -31,7 +32,7 @@ func TestLookupRepository_QuoteAddrRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	pair := prices.RWAPair{
+	pair := prices.RWAPair{InAllowlist: true, //nolint:gosec // G101: synthetic public contract addresses, not credentials.
 		Source:        prices.SourceEquiteez,
 		BaseSymbol:    "ntbm",
 		QuoteSymbol:   "usdt",
@@ -80,4 +81,52 @@ func TestLookupRepository_QuoteAddrRoundTrip(t *testing.T) {
 	got, err = repo.LookupRWAPair(ctx, id)
 	require.NoError(t, err)
 	require.Empty(t, got.QuoteAddr, "NULL quote_addr must map to empty string, not error")
+}
+
+func TestCRMAllowlistPreservesLegacyUnknownRelationships(t *testing.T) {
+	db := openGorm(t)
+	truncateRWA(t, db)
+	truncateLaunches(t, db)
+	lookup := repositories.NewLookupRepository(db)
+	launches := repositories.NewLaunchRepository(db)
+	ctx := context.Background()
+	_, err := lookup.UpsertRWAPair(ctx, prices.RWAPair{
+		Source: prices.SourceEquiteez, TokenAddr: recoveryBase, OrderbookAddr: recoveryBook,
+		BaseSymbol: "legacy", QuoteSymbol: "usdt", InAllowlist: true,
+	}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, launches.Upsert(ctx, prices.RWALaunch{
+		Source: prices.SourceEquiteez, TokenAddr: recoveryLaunchToken, BaseSymbol: "primary", QuoteSymbol: "usdt", InAllowlist: true,
+	}, time.Now()))
+	a := equiteez.ContractAllowlist{SchemaVersion: 1, BaseTokens: []string{recoveryBase, recoveryLaunchToken},
+		QuoteTokens: []string{recoveryQuote}, Orderbooks: []string{recoveryBook}, Launchpads: []string{recoveryLaunchpad}}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	pairs, err := lookup.EnabledRWAPairs(ctx)
+	require.NoError(t, err)
+	require.Len(t, pairs, 1, "legacy NULL quote_addr must not hide saved history during reindexing")
+	rows, err := launches.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	// An explicitly empty relationship list is authoritative even when its
+	// exact address has not yet been discovered for legacy rows.
+	a.QuoteTokens = []string{}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	pairs, err = lookup.EnabledRWAPairs(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pairs)
+	rows, err = launches.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	// A later unknown relationship must not resurrect a previously delisted row.
+	a.QuoteTokens = []string{recoveryQuote}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	pairs, err = lookup.EnabledRWAPairs(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pairs)
+	require.NoError(t, db.Exec("UPDATE rwa_launches SET in_allowlist=TRUE").Error)
+	a.Launchpads = []string{}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	rows, err = launches.EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Empty(t, rows)
 }

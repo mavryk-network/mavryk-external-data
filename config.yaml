@@ -79,6 +79,13 @@ coingecko:
     burst: 16
 
 equiteez:
+  # Same network-specific CRM document as the indexer; set CONTRACT_ALLOWLIST_URL.
+  allowlist_url: ""
+  head_max_age_seconds: 300
+  required_indexes: [token_index, orderbook_index, quote_token_index, super_admin_index, kyc_index, launchpad_index]
+  # Explicit one-time recovery only; leave empty for normal operation.
+  recover_orderbooks: []
+  recover_launch_tokens: []
   # Indexer via the public worker (injects the Hasura admin-secret and gates by
   # origin/domain). Keep the *_password empty in deployed envs; set it locally/in
   # CI so the client passes ?bypass=<secret> to the worker (see .env.example).
@@ -109,7 +116,7 @@ rwa:
   # How often the Equiteez allowlist is re-read into rwa_pairs. Bounds how long
   # a newly listed asset stays invisible; the collector re-reads rwa_pairs every
   # tick, so no restart is involved. 0 = in-code default (3600).
-  pair_sync_interval_seconds: 3600
+  pair_sync_interval_seconds: 60
 
 # Per-exchange ticker collector. Polls CoinGecko /coins/{id}/tickers on a fixed
 # cadence and serves /v1/tickers/:token/latest + /distribution.

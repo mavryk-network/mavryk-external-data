@@ -19,9 +19,10 @@ import (
 const serviceName = "equiteez"
 
 type Client struct {
-	indexerURL string
-	httpClient *http.Client
-	logger     *zerolog.Logger
+	indexerURL    string
+	httpClient    *http.Client
+	allowlistHTTP *http.Client
+	logger        *zerolog.Logger
 }
 
 // NewClient builds an Equiteez GraphQL/Hasura HTTP client (rate limit + retry/CB
@@ -50,7 +51,8 @@ func NewClient(eq config.EquiteezConfig, api *config.APIConfig, timeout time.Dur
 	}
 	rt = httpclient.WrapRateLimited(rt, rl)
 	return &Client{
-		indexerURL: indexerRequestURL(eq.IndexerURL, eq.IndexerPassword),
+		indexerURL:    indexerRequestURL(eq.IndexerURL, eq.IndexerPassword),
+		allowlistHTTP: &http.Client{Timeout: timeout, Transport: httpclient.WrapResilientTransport(httpclient.SharedTransport(), api.OutboundResilience("equiteez_allowlist"))},
 		httpClient: &http.Client{
 			Timeout:   timeout,
 			Transport: rt,
@@ -83,21 +85,19 @@ func indexerRequestURL(rawURL, password string) string {
 	return u.String()
 }
 
-// GetAllowlistedTokensAndOrderbooks discovers active RWA pairs from the indexer:
-// returns every token where `in_allowlist=true` together with its orderbooks
-// where `in_allowlist=true`. The sync job (jobs/equiteez_rwa_sync.go) calls
-// this at startup and upserts the result into `rwa_pairs`.
-func (c *Client) GetAllowlistedTokensAndOrderbooks(ctx context.Context) ([]TokenWithOrderbooks, error) {
+// GetCatalogTokens discovers CRM-listed contracts without depending on the
+// indexer's asynchronously refreshed in_allowlist flags.
+func (c *Client) GetCatalogTokens(ctx context.Context, addresses []string) ([]TokenWithOrderbooks, error) {
 	query := `
-		query allowlistedTokensWithOrderbooks {
-			token(where: { in_allowlist: { _eq: true } }) {
+		query catalogTokensWithOrderbooks($addresses: [String!]) {
+			token(where: { address: { _in: $addresses } }) {
 				address
 				token_id
 				in_allowlist
 				token_metadata
 				token_standard
 				metadata
-				orderbooks(where: { in_allowlist: { _eq: true } }) {
+				orderbooks {
 					id
 					address
 					in_allowlist
@@ -114,7 +114,7 @@ func (c *Client) GetAllowlistedTokensAndOrderbooks(ctx context.Context) ([]Token
 			}
 		}
 	`
-	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, nil, nil)
+	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, map[string]any{"addresses": addresses}, nil)
 	if err != nil {
 		return nil, err
 	}

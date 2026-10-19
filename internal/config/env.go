@@ -182,6 +182,33 @@ func overrideWithEnv(config *Config) error {
 		config.CoinGecko.RateLimit.Burst = val
 	}
 
+	if v := os.Getenv("CONTRACT_ALLOWLIST_URL"); v != "" {
+		config.Equiteez.AllowlistURL = v
+	}
+	for _, binding := range []struct {
+		name   string
+		target *[]string
+	}{
+		{"EQUITEEZ_REQUIRED_INDEXES", &config.Equiteez.RequiredIndexes},
+		{"EQUITEEZ_RECOVER_ORDERBOOKS", &config.Equiteez.RecoverOrderbooks},
+		{"EQUITEEZ_RECOVER_LAUNCH_TOKENS", &config.Equiteez.RecoverLaunchTokens},
+	} {
+		if v := os.Getenv(binding.name); v != "" {
+			*binding.target = nil
+			for _, item := range strings.Split(v, ",") {
+				if item = strings.TrimSpace(item); item != "" {
+					*binding.target = append(*binding.target, item)
+				}
+			}
+		}
+	}
+	if v := os.Getenv("EQUITEEZ_HEAD_MAX_AGE_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("EQUITEEZ_HEAD_MAX_AGE_SECONDS: %w", err)
+		}
+		config.Equiteez.HeadMaxAgeSeconds = n
+	}
 	if v := os.Getenv("EQUITEEZ_INDEXER_URL"); v != "" {
 		config.Equiteez.IndexerURL = v
 	}

@@ -1,18 +1,12 @@
 package jobs
 
 import (
-	"context"
-	"fmt"
 	"strings"
 	"time"
 
-	"quotes/internal/config"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/interactions/equiteez"
-	"quotes/internal/core/infrastructure/storage/repositories"
-	"quotes/internal/logging"
 
-	"github.com/rs/zerolog"
 	"github.com/shopspring/decimal"
 )
 
@@ -22,108 +16,6 @@ import (
 // unregistered quote side — a wrong guess only mis-scales a display price, and
 // the alternative (dropping the asset) hides it from the catalog entirely.
 const defaultLaunchQuoteDecimals = 6
-
-// SyncRWALaunches mirrors the Equiteez launchpad into `rwa_launches`: for every
-// allowlisted token it picks the surfaced launch and stores its base-tier price
-// and sale progress.
-//
-// This is what makes a primary-issuance asset visible to GET /v1/rwa. Such a
-// token has no orderbook — XAUG / MCDX / KHBE are allowlisted with an active
-// launch and zero orderbooks — so SyncRWAPairs produces no row for it and the
-// collector never sees it.
-//
-// Launches of tokens that left the allowlist are disabled, as in SyncRWAPairs.
-//
-// Returns the number of launches stored. Per-token failures are logged and
-// skipped so one bad launch cannot abort the catalog.
-func SyncRWALaunches(
-	ctx context.Context,
-	cfg *config.Config,
-	launches *repositories.LaunchRepository,
-	logger *zerolog.Logger,
-) (int, error) {
-	if logger == nil {
-		nop := zerolog.Nop()
-		logger = &nop
-	}
-	log := logging.WithComponent(logger, "rwa_launch_sync")
-
-	if !cfg.RWA.Enabled {
-		log.Info().Msg("rwa_launch_sync_skipped_disabled")
-		return 0, nil
-	}
-	if strings.TrimSpace(cfg.Equiteez.IndexerURL) == "" {
-		log.Warn().Msg("rwa_launch_sync_skipped_no_indexer_url")
-		return 0, nil
-	}
-	if launches == nil {
-		return 0, fmt.Errorf("launch repository is required")
-	}
-
-	timeout := time.Duration(cfg.API.TimeoutSeconds) * time.Second
-	client := equiteez.NewClient(cfg.Equiteez, &cfg.API, timeout, logger)
-
-	tokens, err := client.GetAllowlistedTokensAndOrderbooks(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("fetch allowlisted tokens: %w", err)
-	}
-
-	// Base symbol per address, so the stored launch is addressable as
-	// `{base}-{quote}` exactly like an orderbook pair.
-	baseSymbols := make(map[string]string, len(tokens))
-	addresses := make([]string, 0, len(tokens))
-	for _, tok := range tokens {
-		addr := strings.TrimSpace(tok.Address)
-		if addr == "" || !tok.InAllowlist {
-			continue
-		}
-		baseSymbols[addr] = deriveBaseSymbol(tok)
-		addresses = append(addresses, addr)
-	}
-	if len(addresses) == 0 {
-		log.Debug().Msg("rwa_launch_sync_no_allowlisted_tokens")
-		return 0, nil
-	}
-
-	rows, err := client.GetLaunchesByTokens(ctx, addresses)
-	if err != nil {
-		return 0, fmt.Errorf("fetch launchpad launches: %w", err)
-	}
-
-	now := time.Now().UTC()
-	byToken := groupLaunchesByToken(rows)
-	stored, skipped := 0, 0
-	for addr, tokenRows := range byToken {
-		launch, ok := buildLaunch(tokenRows, baseSymbols[addr], now)
-		if !ok {
-			skipped++
-			log.Debug().Str("token_addr", addr).Msg("rwa_launch_sync_skipped_no_usable_launch")
-			continue
-		}
-		if err := launches.Upsert(ctx, launch, now); err != nil {
-			skipped++
-			log.Error().Err(err).Str("token_addr", addr).Msg("rwa_launch_sync_upsert_failed")
-			continue
-		}
-		stored++
-	}
-
-	// Keyed by the allowlist, not the stored rows: a skipped upsert is transient,
-	// a disable is permanent. The empty-allowlist return above guards a resync.
-	disabled, err := launches.DisableMissing(ctx, prices.SourceEquiteez, addresses)
-	if err != nil {
-		return 0, fmt.Errorf("disable delisted launches: %w", err)
-	}
-
-	log.Info().
-		Int("tokens", len(addresses)).
-		Int("launches", len(rows)).
-		Int("stored", stored).
-		Int("skipped", skipped).
-		Int64("disabled_delisted", disabled).
-		Msg("rwa_launch_sync_completed")
-	return stored, nil
-}
 
 // groupLaunchesByToken buckets rows by token address, dropping rows with no
 // token reference (the join is nullable in the indexer schema).
