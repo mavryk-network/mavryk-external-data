@@ -128,7 +128,7 @@ func (d ChangeDeps) ChangeRWA() gin.HandlerFunc {
 
 		// Optional ?in= conversion of `now`; failures drop silently.
 		var converted map[string]num6
-		var fxMeta map[string]fxMetaDTO
+		var fxMeta map[string]FXMeta
 		if len(req.InTargets) > 0 && d.Converter != nil {
 			cur, hasCur := res.Currencies[nativeQuote]
 			if hasCur && cur.NowFound {
@@ -187,9 +187,9 @@ func convertNowFlat(
 	targets []prices.Currency,
 	nativePrice decimal.Decimal,
 	nativeTS time.Time,
-) (map[string]num6, map[string]fxMetaDTO) {
+) (map[string]num6, map[string]FXMeta) {
 	out := make(map[string]num6, len(targets))
-	var fx map[string]fxMetaDTO
+	var fx map[string]FXMeta
 	for _, target := range targets {
 		res, err := timedConvert(ctx, conv, quoteToken, target, nativePrice, nativeTS)
 		if err != nil {
@@ -199,9 +199,9 @@ func convertNowFlat(
 		if res.Stale {
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
 			if fx == nil {
-				fx = make(map[string]fxMetaDTO, 1)
+				fx = make(map[string]FXMeta, 1)
 			}
-			fx[string(target)] = fxMetaDTO{RateTS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
+			fx[string(target)] = FXMeta{TS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
 		}
 	}
 	if len(out) == 0 {
@@ -358,7 +358,7 @@ type rwaChangeDTO struct {
 	// ?in= target — same convention as /v1/rwa/:symbol/latest.
 	Converted map[string]num6 `json:"-"`
 	// FX carries stale-rate flags per converted currency; omitted when fresh.
-	FX map[string]fxMetaDTO `json:"-"`
+	FX map[string]FXMeta `json:"-"`
 }
 
 // MarshalJSON flattens Converted onto the top-level object so a client reads
@@ -409,7 +409,7 @@ func renderFTChange(token string, periods []prices.Period, currencies []string, 
 	return out
 }
 
-func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, converted map[string]num6, fx map[string]fxMetaDTO, res apiprices.ChangeResult) rwaChangeDTO {
+func renderRWAChange(symbol, nativeQuote string, periods []prices.Period, converted map[string]num6, fx map[string]FXMeta, res apiprices.ChangeResult) rwaChangeDTO {
 	cur, ok := res.Currencies[nativeQuote]
 	if !ok {
 		// Defensive — service always emits the requested currency entry.

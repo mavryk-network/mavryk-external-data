@@ -391,7 +391,7 @@ type rwaOverviewAsset struct {
 	Series       seriesMiniDTO
 	Converted    map[string]num6 // ?in= per-target latest price; nil when absent
 	// FX carries stale-rate flags per converted currency; omitted when fresh.
-	FX map[string]fxMetaDTO
+	FX map[string]FXMeta
 }
 
 func (a rwaOverviewAsset) MarshalJSON() ([]byte, error) {

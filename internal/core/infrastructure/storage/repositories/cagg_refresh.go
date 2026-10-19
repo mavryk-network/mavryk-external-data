@@ -53,7 +53,6 @@ func refreshContinuousAggregates(ctx context.Context, db *gorm.DB, views []strin
 	if !available {
 		return nil
 	}
-	var firstErr error
 	for _, v := range views {
 		// TimescaleDB refreshes only buckets FULLY enclosed by the window
 		// ("refresh window too small" otherwise) — widen to bucket boundaries
@@ -77,11 +76,22 @@ func refreshContinuousAggregates(ctx context.Context, db *gorm.DB, views []strin
 		// are polymorphic, and an uncast bound parameter fails inference with
 		// SQLSTATE 42P18.
 		stmt := fmt.Sprintf("CALL refresh_continuous_aggregate('%s', ?::timestamptz, ?::timestamptz)", v)
-		if err := db.WithContext(ctx).Exec(stmt, wf, wt).Error; err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("refresh %s: %w", v, err)
+		// Each statement keeps the application's statement_timeout and covers
+		// at most one UTC day. A sparse historical batch must never request a
+		// months-long refresh across every entity in the hypertable.
+		for wf.Before(wt) {
+			end := wf.Truncate(24 * time.Hour).Add(24 * time.Hour)
+			if end.After(wt) {
+				end = wt
+			}
+			if err := db.WithContext(ctx).Exec(stmt, wf, end).Error; err != nil {
+				return fmt.Errorf("refresh %s [%s, %s): %w", v,
+					wf.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), err)
+			}
+			wf = end
 		}
 	}
-	return firstErr
+	return nil
 }
 
 // Probe the current database on each batch. A failed or canceled probe must not

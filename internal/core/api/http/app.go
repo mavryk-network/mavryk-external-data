@@ -72,9 +72,9 @@ func NewApp(deps AppDeps) (*App, error) {
 	gate := handlers.NewReadinessGate()
 	routerDepsBase := buildRouterDeps(deps, cfg, gate)
 
-	// Built once, public engine only. auth.enabled=false is meant for dev/CI but
-	// is not refused at startup in any gin mode: it leaves the RWA routes
-	// unwrapped on the public listener, and the warn below is the only signal.
+	// Built once, public engine only. Config validation refuses auth.enabled=false
+	// in effective release mode. Dev/test may disable it; the warning makes the
+	// resulting unauthenticated public RWA routes explicit.
 	var rwaAuth gin.HandlerFunc
 	if cfg.Auth.JWTVerificationEnabled() {
 		mid, err := httpmw.MBIOJWT(&cfg.Auth, appLogger)

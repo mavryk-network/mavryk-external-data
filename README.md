@@ -111,11 +111,15 @@ contract — request/response shapes live in the spec.
 🔒 — on the public listener these routes require an MBIO-issued RS256 Bearer
 JWT (`Authorization: Bearer <token>`; 401/403 on failure). The intra-cluster
 internal listener (`server.internal_port`) serves them without auth. Local
-dev: use `SERVER_GIN_MODE=debug` with `AUTH_ENABLED=false` or `make jwt` to mint
-a token. Effective release mode (also derived from a non-local bind host when
+dev: use `SERVER_GIN_MODE=debug` with `AUTH_ENABLED=false`. Effective release
+mode (also derived from a non-local bind host when
 `SERVER_GIN_MODE` is unset) refuses disabled auth, missing/default database
 passwords, and `AUTH_JWT_LOCAL_VERIFY_PUBLIC_KEY`; configure the MBIO JWKS host
 and a production database password before deploying.
+
+The local Compose stack enables the internal listener on `127.0.0.1:3011`
+by default; `SERVER_INTERNAL_PORT` changes both the listener and published port.
+Outside Compose, leaving `server.internal_port` unset keeps the single listener.
 
 ### Common query parameters
 
@@ -162,7 +166,7 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:3010/v1/rwa/mars1-usdt/
 #   "eur": 92.11
 # }
 # Failed conversions drop their key (still 200); a conversion served with a
-# stale FX rate adds "fx": {"eur": {"rate_ts": "...", "stale": true}}.
+# stale FX rate adds "fx": {"eur": {"ts": "...", "stale": true}}.
 ```
 
 ### Response shapes

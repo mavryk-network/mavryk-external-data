@@ -75,17 +75,15 @@ services:
     ports:
       - "${SERVER_PORT:-3010}:${SERVER_PORT:-3010}"
       # Internal routes bypass JWT auth, so publish them on loopback only.
-      # This mapping is idle while SERVER_INTERNAL_PORT is unset (no listener).
+      # Compose enables the listener on 3011 by default to match this mapping.
       - "127.0.0.1:${SERVER_INTERNAL_PORT:-3011}:${SERVER_INTERNAL_PORT:-3011}"
     environment:
       # Server Configuration
       SERVER_PORT: ${SERVER_PORT:-3010}
-      SERVER_INTERNAL_PORT: ${SERVER_INTERNAL_PORT:-}
+      SERVER_INTERNAL_PORT: ${SERVER_INTERNAL_PORT:-3011}
       SERVER_HOST: ${SERVER_HOST:-0.0.0.0}
-      # Local-dev stack runs gin debug mode explicitly: with no
-      # SERVER_INTERNAL_PORT set, debug is what keeps /metrics mounted on the
-      # public listener (a single-port release deploy serves none) and enables
-      # gin's verbose route logging. Never set debug in a production deploy.
+      # Local-dev stack runs gin debug mode explicitly, allowing auth-off
+      # development and verbose route logging. Never use debug in production.
       SERVER_GIN_MODE: ${SERVER_GIN_MODE:-debug}
 
       # Auth: the image ships auth ON by default. This is a local-dev stack, so

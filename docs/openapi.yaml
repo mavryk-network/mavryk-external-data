@@ -528,13 +528,10 @@ paths:
                           description: >
                             Present only when at least one `?in=` conversion
                             was served with a stale FX rate — same shape as
-                            `RWAPrice.fx` (one `{rate_ts, stale}` object per
+                            `RWAPrice.fx` (one `{ts, stale}` object per
                             stale target).
                           additionalProperties:
-                            type: object
-                            properties:
-                              rate_ts: { type: string, format: date-time }
-                              stale: { type: boolean }
+                            $ref: "#/components/schemas/FXMeta"
                         primary_issuance:
                           type: object
                           description: >
@@ -1559,16 +1556,7 @@ components:
             an FX rate older than the freshness budget
             (`server.fx_max_staleness_seconds`). One key per stale target.
           additionalProperties:
-            type: object
-            required: [rate_ts, stale]
-            properties:
-              rate_ts:
-                type: string
-                format: date-time
-                description: Timestamp of the FX rate actually used.
-              stale:
-                type: boolean
-                enum: [true]
+            $ref: "#/components/schemas/FXMeta"
         ath:
           $ref: "#/components/schemas/RWAAllTimeHigh"
         price_one_year_ago:
@@ -2000,16 +1988,7 @@ components:
             (`server.fx_max_staleness_seconds`). One key per stale target —
             same shape as `RWAPrice.fx`. Absent when every rate was fresh.
           additionalProperties:
-            type: object
-            required: [rate_ts, stale]
-            properties:
-              rate_ts:
-                type: string
-                format: date-time
-                description: Timestamp of the FX rate that was used.
-              stale:
-                type: boolean
-                example: true
+            $ref: "#/components/schemas/FXMeta"
       additionalProperties:
         type: number
         description: |
@@ -2148,14 +2127,15 @@ components:
             omitted the base volume.
           example: "104938.27"
         fx:
-          $ref: "#/components/schemas/TickerFXMeta"
+          $ref: "#/components/schemas/FXMeta"
 
-    TickerFXMeta:
+    FXMeta:
       type: object
       description: |
-        FX metadata for one conversion. On success, `rate`/`source`/`ts`
-        are populated and `error` is empty. On failure, `error` carries
-        the reason and the numeric fields are absent.
+        Shared FX metadata keys for ticker and RWA conversions. Tickers
+        populate `rate`/`source`/`ts` on success, or `error` on failure.
+        Flat RWA responses emit only `ts` and `stale: true` for stale rates;
+        fresh rates omit this metadata block. False `stale` is omitted.
       properties:
         rate:
           type: string
@@ -2272,7 +2252,7 @@ components:
             (FX(token → currency) × volume_24h_base).
           example: "199382.50"
         fx:
-          $ref: "#/components/schemas/TickerFXMeta"
+          $ref: "#/components/schemas/FXMeta"
 
     ErrorResponse:
       type: object

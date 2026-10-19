@@ -296,6 +296,11 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		return nil
 	}
 
+	// Checkpoint one fill day per step. Thin books can return months of fills
+	// in one page; retrying that whole page under a tick deadline would repeat
+	// already-refreshed days forever. Later fills are fetched again from this
+	// day's cursor, without refreshing the empty days between them.
+	orders = firstFillDay(orders)
 	points := ordersToLastPoints(pair, orders, quoteDecimals)
 	if len(points) > 0 {
 		n, sErr := j.repo.Save(ctx, points)
@@ -314,7 +319,7 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		// refresh by the points' own min/max ts (a batch spans whatever fill
 		// window it covers). Refresh must succeed before advancing the cursor.
 		if lo, hi := pointsTimeSpan(points); !lo.IsZero() {
-			if rErr := j.lookup.RefreshRWACandleAggregates(ctx, lo, hi.Add(time.Second)); rErr != nil {
+			if rErr := j.lookup.RefreshRWACandleAggregates(ctx, lo, hi.Add(time.Microsecond)); rErr != nil {
 				return j.recordError(ctx, &logger, st, fmt.Errorf("refresh candles: %w", rErr))
 			}
 		}
@@ -347,6 +352,30 @@ func (j *EquiteezBackfillJob) stepPair(ctx context.Context, pair prices.RWAPair)
 		return fmt.Errorf("persist state: %w", err)
 	}
 	return nil
+}
+
+// firstFillDay keeps the earliest UTC day's fills without relying on upstream
+// ordering. Malformed timestamps stay in the batch for the existing drop/error
+// handling; they can never advance the cursor past a valid fill.
+func firstFillDay(orders []equiteez.OrderbookOrder) []equiteez.OrderbookOrder {
+	var first time.Time
+	for _, order := range orders {
+		if ts, err := time.Parse(time.RFC3339, order.EndedAt); err == nil && (first.IsZero() || ts.Before(first)) {
+			first = ts
+		}
+	}
+	if first.IsZero() {
+		return orders
+	}
+	end := first.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	batch := make([]equiteez.OrderbookOrder, 0, len(orders))
+	for _, order := range orders {
+		ts, err := time.Parse(time.RFC3339, order.EndedAt)
+		if err != nil || ts.Before(end) {
+			batch = append(batch, order)
+		}
+	}
+	return batch
 }
 
 // advanceOrderCursor returns the greatest (ended_at, id) in the batch — the

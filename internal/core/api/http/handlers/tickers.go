@@ -210,7 +210,8 @@ type ConvertedTickerBlock struct {
 	FX        FXMeta  `json:"fx"`
 }
 
-// FXMeta is per-conversion metadata; RWA flat shapes use the smaller fxMetaDTO.
+// FXMeta names per-conversion metadata consistently across ticker and RWA
+// responses. Flat RWA shapes emit only ts/stale when a stale rate is used.
 type FXMeta struct {
 	Rate   string `json:"rate,omitempty"`
 	Source string `json:"source,omitempty"`

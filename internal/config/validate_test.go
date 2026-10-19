@@ -41,7 +41,7 @@ func TestValidate_ProductionSafety(t *testing.T) {
 		{name: "release + password db password", ginMode: "release", dbPassword: "password", wantError: "well-known default"},
 		{name: "release + changeme db password", ginMode: "release", dbPassword: "changeme", wantError: "well-known default"},
 		{name: "release + makefile db password", ginMode: "release", dbPassword: "qwerty", wantError: "well-known default"},
-		{name: "release + normalized default db password", ginMode: " ReLeAsE ", dbPassword: " PoStGrEs ", wantError: "well-known default"},
+		{name: "release + normalized default db password", ginMode: " ReLeAsE ", dbPassword: " PoStGrEs ", wantError: "well-known default"}, //nolint:gosec // Intentionally rejected default-password fixture.
 		{name: "release + missing password", ginMode: "release", wantError: "POSTGRES_PASSWORD"},
 		{name: "release + blank password", ginMode: "release", dbPassword: " \t", wantError: "POSTGRES_PASSWORD"},
 		{name: "release + local verify key", ginMode: "release", dbPassword: "s3cret-strong", localKey: localPub, wantError: "dev/CI-only"},

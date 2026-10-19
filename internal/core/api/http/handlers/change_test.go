@@ -466,7 +466,7 @@ func TestChangeRWA_InConversion_StaleRateFlagged(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `"fx":{"usd":{"rate_ts":"2026-05-08T10:00:00Z","stale":true}}`) {
+	if !strings.Contains(body, `"fx":{"usd":{"ts":"2026-05-08T10:00:00Z","stale":true}}`) {
 		t.Errorf("expected stale fx block in response, got: %s", body)
 	}
 }

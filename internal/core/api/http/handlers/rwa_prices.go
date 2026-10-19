@@ -70,7 +70,8 @@ type rwaTarget struct {
 // resolveTargetFromPath resolves `:symbol` against BOTH catalogs, since a traded
 // asset can still be in issuance. Only a genuine "no such pair" miss lets a
 // launch answer, so a malformed symbol keeps its 400 and an ambiguous pair its
-// 409; a launch-catalog failure degrades to "no issuance facet".
+// 409. Launch ambiguity also returns 409; other launch-catalog failures degrade
+// to "no issuance facet".
 func (d RWAPriceDeps) resolveTargetFromPath(c *gin.Context) (rwaTarget, error) {
 	pair, pairErr := d.resolvePairFromPath(c)
 	if pairErr != nil && !stderrors.Is(pairErr, prices.ErrPairNotFound) {
@@ -80,7 +81,12 @@ func (d RWAPriceDeps) resolveTargetFromPath(c *gin.Context) (rwaTarget, error) {
 
 	if d.Launches != nil {
 		if base, quote, ok := parseRWASymbol(c.Param("symbol")); ok {
-			if l, found, err := d.Launches.LaunchBySymbol(c.Request.Context(), d.DefaultSource, base, quote); err == nil && found {
+			l, found, err := d.Launches.LaunchBySymbol(c.Request.Context(), d.DefaultSource, base, quote)
+			var ambiguous *prices.PairAmbiguousError
+			if stderrors.As(err, &ambiguous) {
+				return rwaTarget{}, err
+			}
+			if err == nil && found {
 				target.Launch = &l
 			}
 		}
@@ -313,7 +319,7 @@ type rwaPriceDTO struct {
 	Issuance  *primaryIssuanceDTO
 	Converted map[string]num6 // optional; one key per `?in=` target that succeeded
 	// FX carries stale-rate flags per converted currency; omitted when fresh.
-	FX map[string]fxMetaDTO
+	FX map[string]FXMeta
 	// /latest only. Nested objects, not flat currency keys, so they cannot
 	// collide with the converted-price keys.
 	ATH             *athDTO
@@ -377,12 +383,6 @@ func (p priceAtDTO) MarshalJSON() ([]byte, error) {
 		out[cur] = v
 	}
 	return json.Marshal(out)
-}
-
-// fxMetaDTO flags a conversion served with a stale rate, under an `fx` key.
-type fxMetaDTO struct {
-	RateTS string `json:"rate_ts"`
-	Stale  bool   `json:"stale"`
 }
 
 // Wire number precision. A fixed 6-decimal grid destroys sub-cent values (a
@@ -530,7 +530,7 @@ func (d RWAPriceDeps) convertFlat(
 	targets []prices.Currency,
 	native decimal.Decimal,
 	ts time.Time,
-) (map[string]num6, map[string]fxMetaDTO) {
+) (map[string]num6, map[string]FXMeta) {
 	if !quoteResolved {
 		// Meter the registry miss; the wire response just omits the keys.
 		for _, t := range targets {
@@ -539,7 +539,7 @@ func (d RWAPriceDeps) convertFlat(
 		return nil, nil
 	}
 	out := make(map[string]num6, len(targets))
-	var fx map[string]fxMetaDTO
+	var fx map[string]FXMeta
 	for _, target := range targets {
 		res, err := timedConvert(ctx, d.Converter, quoteToken, target, native, ts)
 		if err != nil {
@@ -549,9 +549,9 @@ func (d RWAPriceDeps) convertFlat(
 		if res.Stale {
 			metrics.FXStaleResponsesTotal.WithLabelValues(string(target)).Inc()
 			if fx == nil {
-				fx = make(map[string]fxMetaDTO, 1)
+				fx = make(map[string]FXMeta, 1)
 			}
-			fx[string(target)] = fxMetaDTO{RateTS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
+			fx[string(target)] = FXMeta{TS: res.RateTS.UTC().Format(time.RFC3339), Stale: true}
 		}
 	}
 	if len(out) == 0 {
