@@ -13,9 +13,12 @@ import (
 // NUMERIC(38,18); all three map to decimal.Decimal so supply-scale values never
 // round-trip through float64.
 type RWALaunchEntity struct {
-	SourceCode string `gorm:"primaryKey;column:source_code;not null"`
-	TokenAddr  string `gorm:"primaryKey;column:token_addr;not null"`
-	TokenID    int    `gorm:"column:token_id;not null;default:0"`
+	LaunchpadAddr     string `gorm:"column:launchpad_addr"`
+	InAllowlist       bool   `gorm:"column:in_allowlist"`
+	IndexerGeneration string `gorm:"column:indexer_generation"`
+	SourceCode        string `gorm:"primaryKey;column:source_code;not null"`
+	TokenAddr         string `gorm:"primaryKey;column:token_addr;not null"`
+	TokenID           int    `gorm:"column:token_id;not null;default:0"`
 
 	LaunchID int    `gorm:"column:launch_id;not null"`
 	Name     string `gorm:"column:name;not null;default:''"`

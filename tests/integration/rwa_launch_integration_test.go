@@ -32,7 +32,7 @@ func TestLaunchRepository_RoundTrip(t *testing.T) {
 	now := time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC)
 
 	saleStart := now.Add(-24 * time.Hour)
-	launch := prices.RWALaunch{
+	launch := prices.RWALaunch{InAllowlist: true,
 		Source: prices.SourceEquiteez, TokenAddr: "KT1KHBE", TokenID: 0,
 		LaunchID: 6, Name: "KHBE-issuance-v2", Status: "active", Active: true,
 		BaseSymbol: "khbe", QuoteSymbol: "usdt",
@@ -82,7 +82,7 @@ func TestLaunchRepository_SupplyScaleAmounts(t *testing.T) {
 
 	const hugeCap = "1000000000000000000000000" // 1e24 — far beyond int64
 	const bought = "500000000000000000000000"   // exactly half
-	require.NoError(t, repo.Upsert(ctx, prices.RWALaunch{
+	require.NoError(t, repo.Upsert(ctx, prices.RWALaunch{InAllowlist: true,
 		Source: prices.SourceEquiteez, TokenAddr: "KT1BIG", LaunchID: 1,
 		BaseSymbol: "big", QuoteSymbol: "usdt", Status: "active",
 		Price:           decimal.RequireFromString("1.234567"),
@@ -107,7 +107,7 @@ func TestLaunchRepository_UpsertPreservesOperatorDisable(t *testing.T) {
 	repo := repositories.NewLaunchRepository(db)
 	ctx := context.Background()
 
-	base := prices.RWALaunch{
+	base := prices.RWALaunch{InAllowlist: true,
 		Source: prices.SourceEquiteez, TokenAddr: "KT1OPS", LaunchID: 2,
 		BaseSymbol: "ops", QuoteSymbol: "usdt", Status: "active",
 		Price:        decimal.RequireFromString("10"),
@@ -156,7 +156,7 @@ func TestLaunchRepository_QuoteAddrRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	l := prices.RWALaunch{
+	l := prices.RWALaunch{InAllowlist: true,
 		Source: prices.SourceEquiteez, TokenAddr: "KT1QA", LaunchID: 1,
 		BaseSymbol: "qa", QuoteSymbol: "usdt", Status: "active",
 		QuoteAddr:    "KT19bKTsUsdtPay",
@@ -202,7 +202,7 @@ func TestLaunchRepository_EnabledLaunchesOrdered(t *testing.T) {
 	now := time.Now().UTC()
 
 	for _, sym := range []string{"zeta", "alpha", "mid"} {
-		require.NoError(t, repo.Upsert(ctx, prices.RWALaunch{
+		require.NoError(t, repo.Upsert(ctx, prices.RWALaunch{InAllowlist: true,
 			Source: prices.SourceEquiteez, TokenAddr: "KT1" + sym, LaunchID: 1,
 			BaseSymbol: sym, QuoteSymbol: "usdt", Status: "active",
 			Price: decimal.RequireFromString("1"), TotalBought: decimal.Zero,
@@ -214,34 +214,6 @@ func TestLaunchRepository_EnabledLaunchesOrdered(t *testing.T) {
 	require.Len(t, list, 3)
 	require.Equal(t, []string{"alpha", "mid", "zeta"},
 		[]string{list[0].BaseSymbol, list[1].BaseSymbol, list[2].BaseSymbol})
-}
-
-func TestLaunchRepository_DisableMissing(t *testing.T) {
-	db := openGorm(t)
-	truncateLaunches(t, db)
-	repo := repositories.NewLaunchRepository(db)
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	for _, addr := range []string{"KT1KEEP", "KT1GONE", "KT1HIDDEN"} {
-		require.NoError(t, repo.Upsert(ctx, prices.RWALaunch{
-			Source: prices.SourceEquiteez, TokenAddr: addr, LaunchID: 1,
-			BaseSymbol: addr, QuoteSymbol: "usdt", Status: "active",
-			Price: decimal.RequireFromString("1"), TotalBought: decimal.Zero,
-			MaxAmountCap: decimal.RequireFromString("1"),
-		}, now))
-	}
-	require.NoError(t, db.Exec(
-		"UPDATE rwa_launches SET enabled = FALSE WHERE token_addr = ?", "KT1HIDDEN").Error)
-
-	n, err := repo.DisableMissing(ctx, prices.SourceEquiteez, []string{"KT1KEEP"})
-	require.NoError(t, err)
-	require.EqualValues(t, 1, n, "only the enabled delisted row changes")
-
-	list, err := repo.EnabledLaunches(ctx, prices.SourceEquiteez)
-	require.NoError(t, err)
-	require.Len(t, list, 1)
-	require.Equal(t, "KT1KEEP", list[0].TokenAddr)
 }
 
 // TestBackfillState_CursorTsRoundTrip exercises migration 0015: the fill-time

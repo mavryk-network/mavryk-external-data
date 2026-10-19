@@ -3,7 +3,6 @@ package repositories
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -30,34 +29,47 @@ func (r *TokenPriceRepository) RefreshCandleAggregates(ctx context.Context, from
 // continuous aggregates. Called by the Equiteez backfill job after a batch of
 // fills lands, for the same reason as the FT side.
 func (r *LookupRepository) RefreshRWACandleAggregates(ctx context.Context, from, to time.Time) error {
-	return refreshContinuousAggregates(ctx, r.db, rwaCandleAggregates, from, to)
+	if from.IsZero() || to.IsZero() || !from.Before(to) {
+		return nil
+	}
+	// Timescale refreshes only complete buckets. Include the enclosing UTC days
+	// so even a one-trade batch refreshes the 1m, 1h and 1d chart buckets.
+	start := from.UTC().Truncate(24 * time.Hour)
+	end := to.UTC().Truncate(24 * time.Hour)
+	if end.Before(to) {
+		end = end.Add(24 * time.Hour)
+	}
+	return refreshContinuousAggregates(ctx, r.db, rwaCandleAggregates, start, end)
 }
 
 // refreshContinuousAggregates runs CALL refresh_continuous_aggregate(view, from, to)
 // for each view. It is deliberately defensive:
 //
 //   - No-op on a degenerate window (zero bounds or from >= to).
-//   - No-op on a plain-Postgres deployment (timescaledb absent) — detected once
-//     and cached, so the price path never pays a probe per call.
+//   - No-op on a plain-Postgres deployment (timescaledb absent). Failed probes
+//     return an error so a temporary outage cannot silently skip materialization.
 //   - refresh_continuous_aggregate cannot run inside a transaction block, so each
 //     view is refreshed with a bare Exec on the pool (GORM does not open a
 //     transaction for a single Exec).
 //
-// Callers treat the returned error as best-effort: a refresh failure must never
-// fail or retry the backfill step (worst case the CA simply stays as stale as it
-// is today).
+// Equiteez retries a failed refresh before advancing its history cursor. Other
+// callers can still choose best-effort refresh behavior.
 func refreshContinuousAggregates(ctx context.Context, db *gorm.DB, views []string, from, to time.Time) error {
 	if from.IsZero() || to.IsZero() || !from.Before(to) {
 		return nil
 	}
-	if !timescaleAvailable(ctx, db) {
+	available, err := timescaleAvailable(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !available {
 		return nil
 	}
 	var firstErr error
 	for _, v := range views {
 		// v is from a closed constant set (see above) — safe to interpolate.
 		// The window bounds are bound parameters.
-		stmt := fmt.Sprintf("CALL refresh_continuous_aggregate('%s', ?, ?)", v)
+		stmt := fmt.Sprintf("CALL refresh_continuous_aggregate('%s', ?::timestamptz, ?::timestamptz)", v)
 		if err := db.WithContext(ctx).Exec(stmt, from.UTC(), to.UTC()).Error; err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("refresh %s: %w", v, err)
 		}
@@ -65,25 +77,14 @@ func refreshContinuousAggregates(ctx context.Context, db *gorm.DB, views []strin
 	return firstErr
 }
 
-var (
-	timescaleOnce    sync.Once
-	timescalePresent bool
-)
-
-// timescaleAvailable reports whether the timescaledb extension is installed,
-// caching the answer for the process lifetime (extension presence does not change
-// at runtime). A probe failure is treated as "absent" so refresh degrades to a
-// no-op rather than erroring on every call.
-func timescaleAvailable(ctx context.Context, db *gorm.DB) bool {
-	timescaleOnce.Do(func() {
-		if db == nil {
-			return
-		}
-		var n int64
-		err := db.WithContext(ctx).
-			Raw("SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb'").
-			Scan(&n).Error
-		timescalePresent = err == nil && n > 0
-	})
-	return timescalePresent
+// Probe the current database on each batch. A failed or canceled probe must not
+// be cached as extension absence, and separate pools may target different DBs.
+func timescaleAvailable(ctx context.Context, db *gorm.DB) (bool, error) {
+	var n int64
+	if err := db.WithContext(ctx).
+		Raw("SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb'").
+		Scan(&n).Error; err != nil {
+		return false, fmt.Errorf("probe TimescaleDB extension: %w", err)
+	}
+	return n > 0, nil
 }

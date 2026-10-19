@@ -107,6 +107,7 @@ type LaunchSaleOptionRow struct {
 
 // LaunchRow is a launchpad_launch row with its sale options nested.
 type LaunchRow struct {
+	Launchpad    *LaunchTokenRef       `json:"launchpad"`
 	ID           int                   `json:"id"`
 	Name         string                `json:"name"`
 	Status       int                   `json:"status"`
@@ -186,6 +187,7 @@ func (c *Client) GetLaunchesByTokens(ctx context.Context, addresses []string) ([
 				sale_closed
 				is_paused
 				updated_at
+				launchpad { address }
 				token { address token_id }
 				sale_options(order_by: { id: asc }) {
 					name

@@ -13,13 +13,18 @@ package config
 // quota. The worker endpoint usually has no per-IP limit, so this defaults to 0
 // (disabled). Set equiteez.rate_limit.rps > 0 only if you know it enforces a quota.
 //
-// Backfill controls the one-shot historical fetch from `orderbook_order` events
+// Backfill controls the resumable historical fetch from `orderbook_order` events
 // — see jobs/equiteez_backfill.go and ADR-0014.
 type EquiteezConfig struct {
-	IndexerURL      string                 `yaml:"indexer_url"`
-	IndexerPassword string                 `yaml:"indexer_password"` // local/CI only: passed as ?bypass=<secret>
-	RateLimit       RateLimitConfig        `yaml:"rate_limit"`
-	Backfill        EquiteezBackfillConfig `yaml:"backfill"`
+	AllowlistURL        string                 `yaml:"allowlist_url"`
+	HeadMaxAgeSeconds   int                    `yaml:"head_max_age_seconds"`
+	RequiredIndexes     []string               `yaml:"required_indexes"`
+	RecoverOrderbooks   []string               `yaml:"recover_orderbooks"`
+	RecoverLaunchTokens []string               `yaml:"recover_launch_tokens"`
+	IndexerURL          string                 `yaml:"indexer_url"`
+	IndexerPassword     string                 `yaml:"indexer_password"` // local/CI only: passed as ?bypass=<secret>
+	RateLimit           RateLimitConfig        `yaml:"rate_limit"`
+	Backfill            EquiteezBackfillConfig `yaml:"backfill"`
 }
 
 // EquiteezBackfillConfig controls the historical orderbook_order ingester.
@@ -36,7 +41,7 @@ type EquiteezConfig struct {
 //     hammering across replicas. Default 1000.
 //   - BackfillMaxErrors / BackoffInitialMs / BackoffMaxMs / MaxBackoffMs:
 //     same semantics as the CoinGecko backfill — exponential backoff per pair
-//     on transient errors, hard auto-disable after BackfillMaxErrors.
+//     on errors. BackfillMaxErrors is deprecated for Equiteez: errors always retry.
 type EquiteezBackfillConfig struct {
 	Enabled           bool   `yaml:"enabled"`
 	TickSeconds       int    `yaml:"tick_seconds"`

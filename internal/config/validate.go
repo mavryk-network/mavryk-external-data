@@ -290,6 +290,12 @@ func (c *Config) validateRWA() error {
 	if c.RWA.Enabled && strings.TrimSpace(c.Equiteez.IndexerURL) == "" {
 		return fmt.Errorf("rwa.enabled=true requires equiteez.indexer_url to be set")
 	}
+	if c.RWA.Enabled {
+		if c.Database.MaxOpenConns == 1 {
+			return fmt.Errorf("rwa.enabled=true requires database.max_open_conns >= 2 or 0 (unlimited)")
+		}
+		return c.Equiteez.ValidateRecovery()
+	}
 	return nil
 }
 

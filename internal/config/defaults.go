@@ -144,8 +144,8 @@ func setDefaults(config *Config) {
 		config.RWA.Concurrency = 4
 	}
 	if config.RWA.PairSyncIntervalSeconds == 0 && config.RWA.Enabled {
-		// Hourly: listings are rare, and one GraphQL query per hour is free.
-		config.RWA.PairSyncIntervalSeconds = 3600
+		// Retry discovery promptly after an indexer outage or generation change.
+		config.RWA.PairSyncIntervalSeconds = 60
 	}
 
 	// Tickers defaults — only the cache TTLs are eager; the rest stay zero

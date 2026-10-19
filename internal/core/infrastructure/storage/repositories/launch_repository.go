@@ -34,7 +34,8 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 		return fmt.Errorf("launch source and token_addr are required")
 	}
 	e := entities.RWALaunchEntity{
-		SourceCode:      string(l.Source),
+		SourceCode:  string(l.Source),
+		InAllowlist: l.InAllowlist, IndexerGeneration: l.IndexerGeneration, LaunchpadAddr: l.LaunchpadAddr,
 		TokenAddr:       l.TokenAddr,
 		TokenID:         l.TokenID,
 		LaunchID:        l.LaunchID,
@@ -56,7 +57,7 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 		UpdatedAt:       now.UTC(),
 	}
 	updateCols := []string{
-		"token_id",
+		"token_id", "in_allowlist", "indexer_generation", "launchpad_addr",
 		"launch_id",
 		"name",
 		"status",
@@ -90,27 +91,12 @@ func (r *LaunchRepository) Upsert(ctx context.Context, l prices.RWALaunch, now t
 	return nil
 }
 
-// DisableMissing soft-disables enabled launches of `source` whose token is not in
-// `keepTokens`. Upsert never re-enables a row, so the keep set must be complete.
-func (r *LaunchRepository) DisableMissing(ctx context.Context, source prices.Source, keepTokens []string) (int64, error) {
-	tx := r.db.WithContext(ctx).Model(&entities.RWALaunchEntity{}).
-		Where("source_code = ? AND enabled = ?", string(source), true)
-	if len(keepTokens) > 0 {
-		tx = tx.Where("token_addr NOT IN ?", keepTokens)
-	}
-	res := tx.Update("enabled", false)
-	if res.Error != nil {
-		return 0, fmt.Errorf("disable missing rwa_launches: %w", res.Error)
-	}
-	return res.RowsAffected, nil
-}
-
 // EnabledLaunches returns every enabled launch for `source`, ordered by symbol
 // so the API response is deterministic.
 func (r *LaunchRepository) EnabledLaunches(ctx context.Context, source prices.Source) ([]prices.RWALaunch, error) {
 	var rows []entities.RWALaunchEntity
 	err := r.db.WithContext(ctx).
-		Where("source_code = ? AND enabled", string(source)).
+		Where("source_code = ? AND enabled AND in_allowlist", string(source)).
 		Order("base_symbol ASC").
 		Find(&rows).Error
 	if err != nil {
@@ -130,7 +116,7 @@ func (r *LaunchRepository) EnabledLaunches(ctx context.Context, source prices.So
 func (r *LaunchRepository) LaunchBySymbol(ctx context.Context, source prices.Source, base, quote string) (prices.RWALaunch, bool, error) {
 	var e entities.RWALaunchEntity
 	err := r.db.WithContext(ctx).
-		Where("source_code = ? AND enabled AND lower(base_symbol) = lower(?) AND lower(quote_symbol) = lower(?)",
+		Where("source_code = ? AND enabled AND in_allowlist AND lower(base_symbol) = lower(?) AND lower(quote_symbol) = lower(?)",
 			string(source), base, quote).
 		Take(&e).Error
 	if err != nil {
@@ -148,7 +134,8 @@ func entityToLaunch(e entities.RWALaunchEntity) prices.RWALaunch {
 		quoteAddr = *e.QuoteAddr
 	}
 	return prices.RWALaunch{
-		Source:          prices.Source(e.SourceCode),
+		Source:      prices.Source(e.SourceCode),
+		InAllowlist: e.InAllowlist, IndexerGeneration: e.IndexerGeneration, LaunchpadAddr: e.LaunchpadAddr,
 		TokenAddr:       e.TokenAddr,
 		TokenID:         e.TokenID,
 		LaunchID:        e.LaunchID,

@@ -144,7 +144,7 @@ func run() int {
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
-	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, launchRepo, logger)
+	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, logger)
 	tickersJob := jobs.NewCoinGeckoTickersJob(cfg, tickerAppRepo, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())

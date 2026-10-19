@@ -168,10 +168,10 @@ func TestAdvanceOrderCursor(t *testing.T) {
 
 func TestFilterBackfillablePairs(t *testing.T) {
 	in := []prices.RWAPair{
-		{ID: 3, Source: prices.SourceEquiteez, Enabled: true},
+		{ID: 3, Source: prices.SourceEquiteez, Enabled: true, InAllowlist: true},
 		{ID: 1, Source: prices.SourceEquiteez, Enabled: false},
-		{ID: 2, Source: prices.SourceEquiteez, Enabled: true},
-		{ID: 5, Source: prices.SourceCoinGecko, Enabled: true}, // wrong source
+		{ID: 2, Source: prices.SourceEquiteez, Enabled: true, InAllowlist: true},
+		{ID: 5, Source: prices.SourceCoinGecko, Enabled: true, InAllowlist: true}, // wrong source
 	}
 	out := filterBackfillablePairs(in)
 	if len(out) != 2 {
