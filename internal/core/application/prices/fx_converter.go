@@ -11,12 +11,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// fxCacheTTL is hardcoded: short enough that staleness never surprises, long
-// enough that high QPS on one (token, currency) collapses to ~1 DB hit.
+// fxCacheTTL lets repeated historical lookups of the same instant share a query
+// while allowing newly backfilled FX rows to become visible within a minute.
 const fxCacheTTL = 60 * time.Second
 
-// maxFXCacheEntries bounds the rate cache: keys partition by minute-bucket, so
-// historical `?in=` ranges would otherwise leak one entry per bucket forever.
+// maxFXCacheEntries bounds the rate cache. Keys partition by (source, token,
+// target, exact timestamp), so historical `?in=` ranges would otherwise
+// accumulate one entry per requested instant forever (a slow memory leak
+// under normal dashboard traffic). Expired entries are swept periodically and
+// whenever the map grows past this cap.
 const maxFXCacheEntries = 50_000
 
 // fxCacheSweepEvery triggers an opportunistic expired-entry sweep every N writes.
@@ -75,7 +78,7 @@ type fxCacheKey struct {
 	Source     prices.Source
 	Token      prices.Token
 	Target     prices.Currency
-	BucketUnix int64 // ts truncated to 60s; queries within the same minute share a slot
+	AtUnixNano int64 // exact requested instant; rates cannot leak across intra-minute changes
 }
 
 type fxCacheEntry struct {
@@ -133,9 +136,9 @@ func (c *tokenFXConverter) Convert(
 	}, nil
 }
 
-// lookupRate reads the cache, then storage with at-or-before semantics. Keys
-// collapse `ts` into minute buckets, so a burst within one minute costs a
-// single upstream query per (token, currency).
+// lookupRate caches the exact requested instant. Sharing an arbitrary minute
+// would return future rates to earlier callers, or hide a later rate behind an
+// earlier negative lookup. Repeated historical requests still share one query.
 func (c *tokenFXConverter) lookupRate(
 	ctx context.Context,
 	token prices.Token,
@@ -146,7 +149,7 @@ func (c *tokenFXConverter) lookupRate(
 		Source:     c.fxSource,
 		Token:      token,
 		Target:     target,
-		BucketUnix: ts.Unix() / 60,
+		AtUnixNano: ts.UnixNano(),
 	}
 
 	c.mu.RLock()
@@ -163,9 +166,11 @@ func (c *tokenFXConverter) lookupRate(
 	if err != nil {
 		return decimal.Decimal{}, time.Time{}, err
 	}
-	// A non-positive stored price (a CoinGecko glitch class) would become a
-	// rate of 0 and silently zero every conversion. Negative-cache the miss so
-	// a pre-backfill range costs one query per bucket, not a full scan.
+	// Treat missing OR non-positive rates as "no rate". A zero/negative stored
+	// price (a known CoinGecko glitch class) would otherwise become an FX rate of
+	// 0 and silently zero out every ?in= conversion. Negative-cache the miss so a
+	// range that predates the FX backfill costs one query per requested instant per
+	// TTL instead of a full ~10k-query scan on every request.
 	if !found || !point.Price.IsPositive() {
 		c.store(key, fxCacheEntry{expires: time.Now().Add(fxCacheTTL), found: false})
 		return decimal.Decimal{}, time.Time{}, ErrNoFXRate
@@ -180,8 +185,8 @@ func (c *tokenFXConverter) lookupRate(
 	return point.Price, point.Timestamp, nil
 }
 
-// store writes under the lock and opportunistically evicts expired entries so
-// the minute-bucketed key space cannot grow without bound.
+// store writes an entry under the write lock and opportunistically evicts expired
+// entries so the historical key space cannot grow without bound.
 func (c *tokenFXConverter) store(key fxCacheKey, entry fxCacheEntry) {
 	c.mu.Lock()
 	c.cache[key] = entry
@@ -191,6 +196,16 @@ func (c *tokenFXConverter) store(key fxCacheKey, entry fxCacheEntry) {
 		for k, e := range c.cache {
 			if !now.Before(e.expires) {
 				delete(c.cache, k)
+			}
+		}
+		// Exact historical instants can all be live simultaneously. Expiry
+		// sweeping alone cannot enforce the advertised memory bound.
+		if len(c.cache) > maxFXCacheEntries {
+			for k := range c.cache {
+				delete(c.cache, k)
+				if len(c.cache) <= maxFXCacheEntries-fxCacheSweepEvery {
+					break
+				}
 			}
 		}
 	}

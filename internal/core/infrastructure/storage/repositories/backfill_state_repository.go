@@ -21,18 +21,19 @@ import (
 // walk restarts from start_from. CoinGecko backfill (a backward walk bounded by
 // OldestTs) leaves both nil.
 type BackfillState struct {
-	Source         prices.Source
-	EntityKey      string
-	OldestTs       *time.Time
-	CursorID       *int64
-	CursorTs       *time.Time
-	Disabled       bool
-	DisabledReason string
-	ErrorCount     int
-	LastError      string
-	NextAttemptAt  *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	IndexerGeneration string
+	Source            prices.Source
+	EntityKey         string
+	OldestTs          *time.Time
+	CursorID          *int64
+	CursorTs          *time.Time
+	Disabled          bool
+	DisabledReason    string
+	ErrorCount        int
+	LastError         string
+	NextAttemptAt     *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // Reason constants for BackfillState.DisabledReason. Kept here so jobs and metrics
@@ -161,6 +162,7 @@ func (r *BackfillStateRepository) Upsert(ctx context.Context, s *BackfillState) 
 			"oldest_ts",
 			"cursor_id",
 			"cursor_ts",
+			"indexer_generation",
 			"disabled",
 			"disabled_reason",
 			"error_count",
@@ -180,34 +182,36 @@ func entityToState(e *entities.BackfillStateEntity) *BackfillState {
 		return nil
 	}
 	return &BackfillState{
-		Source:         prices.Source(e.SourceCode),
-		EntityKey:      e.EntityKey,
-		OldestTs:       cloneTimePtr(e.OldestTs),
-		CursorID:       cloneInt64Ptr(e.CursorID),
-		CursorTs:       cloneTimePtr(e.CursorTs),
-		Disabled:       e.Disabled,
-		DisabledReason: e.DisabledReason,
-		ErrorCount:     e.ErrorCount,
-		LastError:      e.LastError,
-		NextAttemptAt:  cloneTimePtr(e.NextAttemptAt),
-		CreatedAt:      e.CreatedAt,
-		UpdatedAt:      e.UpdatedAt,
+		Source:            prices.Source(e.SourceCode),
+		IndexerGeneration: e.IndexerGeneration,
+		EntityKey:         e.EntityKey,
+		OldestTs:          cloneTimePtr(e.OldestTs),
+		CursorID:          cloneInt64Ptr(e.CursorID),
+		CursorTs:          cloneTimePtr(e.CursorTs),
+		Disabled:          e.Disabled,
+		DisabledReason:    e.DisabledReason,
+		ErrorCount:        e.ErrorCount,
+		LastError:         e.LastError,
+		NextAttemptAt:     cloneTimePtr(e.NextAttemptAt),
+		CreatedAt:         e.CreatedAt,
+		UpdatedAt:         e.UpdatedAt,
 	}
 }
 
 func stateToEntity(s *BackfillState) entities.BackfillStateEntity {
 	return entities.BackfillStateEntity{
-		SourceCode:     string(s.Source),
-		EntityKey:      s.EntityKey,
-		OldestTs:       cloneTimePtr(s.OldestTs),
-		CursorID:       cloneInt64Ptr(s.CursorID),
-		CursorTs:       cloneTimePtr(s.CursorTs),
-		Disabled:       s.Disabled,
-		DisabledReason: s.DisabledReason,
-		ErrorCount:     s.ErrorCount,
-		LastError:      s.LastError,
-		NextAttemptAt:  cloneTimePtr(s.NextAttemptAt),
-		UpdatedAt:      s.UpdatedAt,
+		SourceCode:        string(s.Source),
+		IndexerGeneration: s.IndexerGeneration,
+		EntityKey:         s.EntityKey,
+		OldestTs:          cloneTimePtr(s.OldestTs),
+		CursorID:          cloneInt64Ptr(s.CursorID),
+		CursorTs:          cloneTimePtr(s.CursorTs),
+		Disabled:          s.Disabled,
+		DisabledReason:    s.DisabledReason,
+		ErrorCount:        s.ErrorCount,
+		LastError:         s.LastError,
+		NextAttemptAt:     cloneTimePtr(s.NextAttemptAt),
+		UpdatedAt:         s.UpdatedAt,
 	}
 }
 

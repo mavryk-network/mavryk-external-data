@@ -130,10 +130,10 @@ func applyMigrations(ctx context.Context, dsn string) error {
 	if err != nil {
 		return fmt.Errorf("open db for migrations: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	for _, path := range matches {
-		body, err := os.ReadFile(path)
+		body, err := os.ReadFile(path) //nolint:gosec // G304: paths come from the repository migration glob above.
 		if err != nil {
 			return fmt.Errorf("read %s: %w", path, err)
 		}

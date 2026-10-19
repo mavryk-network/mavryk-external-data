@@ -410,7 +410,9 @@ func TestRWAAllTimeHighLast_RealtimeAggregation_SeesUnmaterializedHigh(t *testin
 	repo := repositories.NewRWAPriceRepository(db)
 	pid := insertRWAPair(t, db, "mars1", "usdt")
 
-	day1 := utcDay(2026, 6, 20)
+	// Recovery tests refresh recent history on the shared aggregate. Its
+	// watermark cannot move backwards, so exercise the current raw tail.
+	day1 := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
 	day2 := day1.AddDate(0, 0, 1)
 	saveRWAStatTicks(t, repo, pid, prices.SideLast, []statTick{
 		{day1.Add(10 * time.Hour), dec("100.00")},

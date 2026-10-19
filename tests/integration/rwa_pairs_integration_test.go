@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"quotes/internal/core/domain/prices"
+	"quotes/internal/core/infrastructure/interactions/equiteez"
 	"quotes/internal/core/infrastructure/storage/repositories"
 
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func TestLookupRepository_QuoteAddrRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	pair := prices.RWAPair{
+	pair := prices.RWAPair{InAllowlist: true, //nolint:gosec // G101: synthetic public contract addresses, not credentials.
 		Source:        prices.SourceEquiteez,
 		BaseSymbol:    "ntbm",
 		QuoteSymbol:   "usdt",
@@ -77,53 +78,50 @@ func TestLookupRepository_QuoteAddrRoundTrip(t *testing.T) {
 	require.Empty(t, got.QuoteAddr, "NULL quote_addr must map to empty string, not error")
 }
 
-// Migration 0019: a sync soft-disable is stamped 'sync_missing' and undone when
-// the pair reappears; an operator disable survives the same sync.
-func TestLookupRepository_SyncDisableReenableCycle(t *testing.T) {
+func TestCRMAllowlistPreservesLegacyUnknownRelationships(t *testing.T) {
 	db := openGorm(t)
-	truncatePairs(t, db)
-	repo := repositories.NewLookupRepository(db)
+	truncateRWA(t, db)
+	truncateLaunches(t, db)
+	lookup := repositories.NewLookupRepository(db)
+	launches := repositories.NewLaunchRepository(db)
 	ctx := context.Background()
-	now := time.Now().UTC()
-
-	mk := func(base, book string) prices.RWAPair {
-		return prices.RWAPair{
-			Source:        prices.SourceEquiteez,
-			BaseSymbol:    base,
-			QuoteSymbol:   "usdt",
-			TokenAddr:     "KT1" + base,
-			OrderbookAddr: book,
-		}
-	}
-	idA, err := repo.UpsertRWAPair(ctx, mk("alpha", "KT1BookA"), now)
+	_, err := lookup.UpsertRWAPair(ctx, prices.RWAPair{
+		Source: prices.SourceEquiteez, TokenAddr: recoveryBase, OrderbookAddr: recoveryBook,
+		BaseSymbol: "legacy", QuoteSymbol: "usdt", InAllowlist: true,
+	}, time.Now())
 	require.NoError(t, err)
-	idB, err := repo.UpsertRWAPair(ctx, mk("beta", "KT1BookB"), now)
+	require.NoError(t, launches.Upsert(ctx, prices.RWALaunch{
+		Source: prices.SourceEquiteez, TokenAddr: recoveryLaunchToken, BaseSymbol: "primary", QuoteSymbol: "usdt", InAllowlist: true,
+	}, time.Now()))
+	a := equiteez.ContractAllowlist{SchemaVersion: 1, BaseTokens: []string{recoveryBase, recoveryLaunchToken},
+		QuoteTokens: []string{recoveryQuote}, Orderbooks: []string{recoveryBook}, Launchpads: []string{recoveryLaunchpad}}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	pairs, err := lookup.EnabledRWAPairs(ctx)
 	require.NoError(t, err)
-	idC, err := repo.UpsertRWAPair(ctx, mk("gamma", "KT1BookC"), now)
+	require.Len(t, pairs, 1, "legacy NULL quote_addr must not hide saved history during reindexing")
+	rows, err := launches.EnabledLaunches(ctx, prices.SourceEquiteez)
 	require.NoError(t, err)
-
-	// Operator turns gamma off by hand (no reason recorded).
-	require.NoError(t, db.Exec(
-		"UPDATE rwa_pairs SET enabled = FALSE WHERE id = ?", idC).Error)
-
-	// Partial sync view: only alpha present → beta gets sync-disabled.
-	disabled, err := repo.DisableMissingRWAPairs(ctx, prices.SourceEquiteez, []int64{idA})
+	require.Len(t, rows, 1)
+	// An explicitly empty relationship list is authoritative even when its
+	// exact address has not yet been discovered for legacy rows.
+	a.QuoteTokens = []string{}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	pairs, err = lookup.EnabledRWAPairs(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), disabled, "only enabled+missing rows are touched")
-
-	pairB, err := repo.LookupRWAPair(ctx, idB)
+	require.Empty(t, pairs)
+	rows, err = launches.EnabledLaunches(ctx, prices.SourceEquiteez)
 	require.NoError(t, err)
-	require.False(t, pairB.Enabled)
-
-	_, err = repo.UpsertRWAPair(ctx, mk("beta", "KT1BookB"), now.Add(time.Hour))
+	require.Empty(t, rows)
+	// A later unknown relationship must not resurrect a previously delisted row.
+	a.QuoteTokens = []string{recoveryQuote}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	pairs, err = lookup.EnabledRWAPairs(ctx)
 	require.NoError(t, err)
-	pairB, err = repo.LookupRWAPair(ctx, idB)
+	require.Empty(t, pairs)
+	require.NoError(t, db.Exec("UPDATE rwa_launches SET in_allowlist=TRUE").Error)
+	a.Launchpads = []string{}
+	require.NoError(t, lookup.ApplyAllowlist(ctx, "https://example.test/allowlist", a, false))
+	rows, err = launches.EnabledLaunches(ctx, prices.SourceEquiteez)
 	require.NoError(t, err)
-	require.True(t, pairB.Enabled, "sync must undo its own soft-disable")
-
-	_, err = repo.UpsertRWAPair(ctx, mk("gamma", "KT1BookC"), now.Add(time.Hour))
-	require.NoError(t, err)
-	pairC, err := repo.LookupRWAPair(ctx, idC)
-	require.NoError(t, err)
-	require.False(t, pairC.Enabled, "operator disables are never overridden by sync")
+	require.Empty(t, rows)
 }

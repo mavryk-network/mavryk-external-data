@@ -85,8 +85,8 @@ func TestRWAPairSyncInterval_DefaultAndValidation(t *testing.T) {
 	on := &Config{}
 	on.RWA.Enabled = true
 	setDefaults(on)
-	if on.RWA.PairSyncIntervalSeconds != 3600 {
-		t.Errorf("enabled: PairSyncIntervalSeconds = %d, want 3600", on.RWA.PairSyncIntervalSeconds)
+	if on.RWA.PairSyncIntervalSeconds != 60 {
+		t.Errorf("enabled: PairSyncIntervalSeconds = %d, want 60", on.RWA.PairSyncIntervalSeconds)
 	}
 
 	off := &Config{}

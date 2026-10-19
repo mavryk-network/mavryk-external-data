@@ -98,7 +98,7 @@ func buildTokenChangeSQL(q apiprices.ChangeQuery) (string, []any, error) {
 	args := make([]any, 0, 4*(1+len(q.Periods))+len(q.Currencies)*(1+len(q.Periods)))
 
 	// "now" branch — raw token_prices, latest per currency.
-	sql.WriteString(fmt.Sprintf(`SELECT '%s'::text AS period, quote_currency, observed_ts, price
+	fmt.Fprintf(&sql, `SELECT '%s'::text AS period, quote_currency, observed_ts, price
 FROM (
     SELECT DISTINCT ON (quote_currency)
            quote_currency,
@@ -107,7 +107,7 @@ FROM (
       FROM token_prices
      WHERE token_symbol = ? AND source_code = ? AND quote_currency IN (%s)
      ORDER BY quote_currency, ts DESC
-) n`, nowBranchLabel, inFrag))
+) n`, nowBranchLabel, inFrag)
 	args = append(args, q.EntityKey, string(q.Source))
 	args = append(args, curArgs...)
 
@@ -119,7 +119,7 @@ FROM (
 		if !ok {
 			return "", nil, fmt.Errorf("period %q has no anchor window", period)
 		}
-		sql.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sql, `
 UNION ALL
 SELECT ?::text, quote_currency, observed_ts, price
 FROM (
@@ -131,7 +131,7 @@ FROM (
      WHERE token_symbol = ? AND source_code = ? AND quote_currency IN (%s)
        AND ts >= ? AND ts <= ?
      ORDER BY quote_currency, ts DESC
-) a`, inFrag))
+) a`, inFrag)
 		args = append(args, string(period), q.EntityKey, string(q.Source))
 		args = append(args, curArgs...)
 		args = append(args, lo.UTC(), hi.UTC())

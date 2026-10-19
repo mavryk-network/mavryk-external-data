@@ -13,9 +13,8 @@ import (
 )
 
 // defaultPairSyncInterval is how often the Equiteez allowlist is re-read into
-// rwa_pairs when no interval is configured. Listings are rare, so hourly keeps
-// discovery latency acceptable at negligible cost (one GraphQL query per tick).
-const defaultPairSyncInterval = time.Hour
+// rwa_pairs when no interval is configured. A minute bounds recovery latency.
+const defaultPairSyncInterval = time.Minute
 
 // RWAPairSyncJob keeps `rwa_pairs` in step with the Equiteez allowlist.
 //
@@ -28,10 +27,9 @@ const defaultPairSyncInterval = time.Hour
 // runTickerLoop fires the first tick immediately, so this also covers the
 // startup sync that main.go used to perform inline.
 type RWAPairSyncJob struct {
-	cfg      *config.Config
-	lookup   *repositories.LookupRepository
-	launches *repositories.LaunchRepository
-	logger   *zerolog.Logger
+	cfg    *config.Config
+	lookup *repositories.LookupRepository
+	logger *zerolog.Logger
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -41,7 +39,6 @@ type RWAPairSyncJob struct {
 func NewRWAPairSyncJob(
 	cfg *config.Config,
 	lookup *repositories.LookupRepository,
-	launches *repositories.LaunchRepository,
 	log *zerolog.Logger,
 ) *RWAPairSyncJob {
 	if log == nil {
@@ -49,16 +46,15 @@ func NewRWAPairSyncJob(
 		log = &nop
 	}
 	return &RWAPairSyncJob{
-		cfg:      cfg,
-		lookup:   lookup,
-		launches: launches,
-		logger:   logging.WithComponent(log, "rwa_pair_sync_job"),
-		stopCh:   make(chan struct{}),
+		cfg:    cfg,
+		lookup: lookup,
+		logger: logging.WithComponent(log, "rwa_pair_sync_job"),
+		stopCh: make(chan struct{}),
 	}
 }
 
 // Start spawns the ticker. No-op when the RWA module is off or the indexer URL
-// is unset — the same guards SyncRWAPairs applies internally.
+// is unset — the same guards SyncRWACatalog applies internally.
 func (j *RWAPairSyncJob) Start(ctx context.Context) {
 	if !j.cfg.RWA.Enabled {
 		j.logger.Info().Msg("rwa_pair_sync_disabled_by_config")
@@ -99,29 +95,9 @@ func (j *RWAPairSyncJob) syncOnce(ctx context.Context) error {
 	syncCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Refreshing either catalog is progress; only a tick that refreshed neither
-	// withholds the last-success stamp.
-	var out tickOutcome
-	enabled, err := SyncRWAPairs(syncCtx, j.cfg, j.lookup, j.logger)
-	out.record(err)
-	if err != nil {
-		j.logger.Error().Err(err).Msg("rwa_pair_sync_failed")
-		// Fall through: launches are an independent catalog. An orderbook-side
-		// failure must not also hide every primary-issuance asset.
-	} else {
-		j.logger.Debug().Int("enabled_pairs", enabled).Msg("rwa_pair_sync_ok")
+	if err := SyncRWACatalog(syncCtx, j.cfg, j.lookup, j.logger); err != nil {
+		j.logger.Warn().Err(err).Msg("equiteez_catalog_sync_deferred")
+		return err
 	}
-
-	// Primary issuance: tokens sold on the launchpad have no orderbook, so they
-	// never produce an rwa_pairs row and would otherwise be absent from GET /v1/rwa.
-	if j.launches != nil {
-		stored, lErr := SyncRWALaunches(syncCtx, j.cfg, j.launches, j.logger)
-		out.record(lErr)
-		if lErr != nil {
-			j.logger.Error().Err(lErr).Msg("rwa_launch_sync_failed")
-		} else {
-			j.logger.Debug().Int("launches", stored).Msg("rwa_launch_sync_ok")
-		}
-	}
-	return out.verdict(ctx, "rwa pair sync tick")
+	return nil
 }

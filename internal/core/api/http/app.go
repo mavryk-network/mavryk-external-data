@@ -34,7 +34,9 @@ type AppDeps struct {
 	// TokenChangeRepo / RWAChangeRepo back the /change endpoints.
 	TokenChangeRepo *repositories.TokenChangeRepository
 	RWAChangeRepo   *repositories.RWAChangeRepository
-	// Optional; when either field is nil the handler rejects `?in=` with 400.
+	// Primary is optional; missing history yields an explicit unavailable result.
+	Primary *apiprices.PrimaryValuator
+	// FXConverter enables `?in=` multi-currency conversions on RWA endpoints.
 	FXConverter apiprices.PriceConverter
 	Lookup      *repositories.LookupRepository
 	// Optional: surfaces primary-issuance assets on GET /v1/rwa; nil omits them.
@@ -349,6 +351,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		TokenCharts:   tokenChartsDeps,
 		RWAPrice:      rwaDeps,
 		RWACharts:     rwaChartsDeps,
+		Primary:       handlers.PrimaryDeps{Service: deps.Primary},
 		RWAPairs:      rwaPairsDeps,
 		RWAOverview:   rwaOverviewDeps,
 		Change:        changeDeps,

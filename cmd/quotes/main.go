@@ -18,6 +18,7 @@ import (
 	apitickers "quotes/internal/core/application/tickers"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/httpclient"
+	primaryhistory "quotes/internal/core/infrastructure/interactions/primary"
 	"quotes/internal/core/infrastructure/jobs"
 	"quotes/internal/core/infrastructure/storage"
 	"quotes/internal/core/infrastructure/storage/repositories"
@@ -110,6 +111,8 @@ func run() int {
 		prices.SourceCoinGecko,
 	)
 
+	primaryValuator := &apiprices.PrimaryValuator{History: primaryhistory.NewHistory(cfg.MvKT, &cfg.API), Converter: fxConverter}
+
 	httpApp, err := httpapp.NewApp(httpapp.AppDeps{
 		Config:          cfg,
 		DB:              db.DB,
@@ -121,6 +124,7 @@ func run() int {
 		TokenChangeRepo: tokenChangeRepo,
 		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
+		Primary:         primaryValuator,
 		Lookup:          lookup,
 		LaunchRepo:      launchRepo,
 		TickerQuery:     tickerAppRepo,
@@ -134,7 +138,7 @@ func run() int {
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
-	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, launchRepo, logger)
+	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, logger)
 	tickersJob := jobs.NewCoinGeckoTickersJob(cfg, tickerAppRepo, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())

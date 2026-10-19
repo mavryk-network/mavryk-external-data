@@ -43,13 +43,16 @@ func LaunchStatusString(code int) string {
 // and would lose precision as float64; Price is already decimals-applied and
 // value-bounded.
 type RWALaunch struct {
-	Source    Source
-	TokenAddr string
-	TokenID   int
-	LaunchID  int
-	Name      string
-	Status    string // active | inactive | paused | closed
-	Active    bool   // purchasable right now
+	InAllowlist       bool
+	IndexerGeneration string
+	LaunchpadAddr     string
+	Source            Source
+	TokenAddr         string
+	TokenID           int
+	LaunchID          int
+	Name              string
+	Status            string // active | inactive | paused | closed
+	Active            bool   // purchasable right now
 	// QuoteAddr is the on-chain contract of the quote (payment) token, taken
 	// from the same sale-option payment that sets Price — so price, symbol and
 	// address always describe one payment row. Empty until synced.
@@ -117,9 +120,9 @@ func SelectLaunch(rows []LaunchSelectable, now time.Time) (int, bool) {
 		switch {
 		case best < 0:
 			best = i
-		case LaunchActive(r, now) && !LaunchActive(rows[best], now):
+		case LaunchActive(r, now) && !LaunchActive(rows[best], now): //nolint:gosec // best is a prior range index; the first case handles -1
 			best = i // an active launch always beats an inactive one
-		case LaunchActive(r, now) == LaunchActive(rows[best], now) && r.UpdatedAt.After(rows[best].UpdatedAt):
+		case LaunchActive(r, now) == LaunchActive(rows[best], now) && r.UpdatedAt.After(rows[best].UpdatedAt): //nolint:gosec // best is a prior range index; the first case handles -1
 			best = i
 		}
 	}

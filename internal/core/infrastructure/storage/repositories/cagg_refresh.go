@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -31,21 +30,27 @@ func (r *LookupRepository) RefreshRWACandleAggregates(ctx context.Context, from,
 	return refreshContinuousAggregates(ctx, r.db, rwaCandleAggregates, from, to)
 }
 
-// refreshContinuousAggregates CALLs refresh_continuous_aggregate per view.
-// No-ops on a degenerate window or without TimescaleDB. Each view uses a bare
-// Exec: the procedure cannot run inside a transaction block. Callers treat the
-// error as best-effort — a refresh failure must never fail the backfill step.
+// refreshContinuousAggregates runs CALL refresh_continuous_aggregate(view, from, to)
+// for each view. It is deliberately defensive:
+//
+//   - No-op on a degenerate window (zero bounds or from >= to).
+//   - No-op on a plain-Postgres deployment (timescaledb absent). Failed probes
+//     return an error so a temporary outage cannot silently skip materialization.
+//   - refresh_continuous_aggregate cannot run inside a transaction block, so each
+//     view is refreshed with a bare Exec on the pool (GORM does not open a
+//     transaction for a single Exec).
+//
+// Equiteez retries a failed refresh before advancing its history cursor. Other
+// callers can still choose best-effort refresh behavior.
 func refreshContinuousAggregates(ctx context.Context, db *gorm.DB, views []string, from, to time.Time) error {
 	if from.IsZero() || to.IsZero() || !from.Before(to) {
 		return nil
 	}
-	ready, err := timescaleReady(ctx, db)
+	available, err := timescaleAvailable(ctx, db)
 	if err != nil {
-		// A failed probe is not "extension absent" — surface it, or the skipped
-		// window is never revisited (the caller's cursor already advanced).
-		return fmt.Errorf("timescaledb probe: %w", err)
+		return err
 	}
-	if !ready {
+	if !available {
 		return nil
 	}
 	var firstErr error
@@ -77,6 +82,18 @@ func refreshContinuousAggregates(ctx context.Context, db *gorm.DB, views []strin
 		}
 	}
 	return firstErr
+}
+
+// Probe the current database on each batch. A failed or canceled probe must not
+// be cached as extension absence, and separate pools may target different DBs.
+func timescaleAvailable(ctx context.Context, db *gorm.DB) (bool, error) {
+	var n int64
+	if err := db.WithContext(ctx).
+		Raw("SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb'").
+		Scan(&n).Error; err != nil {
+		return false, fmt.Errorf("probe TimescaleDB extension: %w", err)
+	}
+	return n > 0, nil
 }
 
 // viewBucketWidth maps a CA view name to its time_bucket width. The suffix
@@ -112,37 +129,4 @@ func alignToBucket(from, to time.Time, width time.Duration) (time.Time, time.Tim
 		wt = wf.Add(width)
 	}
 	return wf, wt
-}
-
-var (
-	timescaleMu    sync.Mutex
-	timescaleState int // 0 = unknown (probe again), 1 = present, -1 = absent
-)
-
-// timescaleReady reports whether the timescaledb extension is installed.
-// Only a successful probe is cached (presence does not change at runtime); a
-// probe failure returns the error and stays unknown, so the next call
-// re-probes instead of latching a blip as "absent" for the process lifetime.
-func timescaleReady(ctx context.Context, db *gorm.DB) (bool, error) {
-	timescaleMu.Lock()
-	defer timescaleMu.Unlock()
-	if timescaleState != 0 {
-		return timescaleState == 1, nil
-	}
-	if db == nil {
-		return false, nil
-	}
-	var n int64
-	err := db.WithContext(ctx).
-		Raw("SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb'").
-		Scan(&n).Error
-	if err != nil {
-		return false, err
-	}
-	if n > 0 {
-		timescaleState = 1
-	} else {
-		timescaleState = -1
-	}
-	return timescaleState == 1, nil
 }

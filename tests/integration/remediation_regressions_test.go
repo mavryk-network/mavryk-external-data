@@ -5,20 +5,16 @@ package integration
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"quotes/internal/config"
+	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/jobs"
 	"quotes/internal/core/infrastructure/storage/repositories"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // A 6h backfill-chunk window can never fully enclose a 1d bucket, and an
@@ -54,71 +50,47 @@ func TestRefreshCandleAggregates_SubBucketWindowRefreshes1d(t *testing.T) {
 	require.Greater(t, n, int64(0), "the 1d bucket must be materialized by the widened refresh")
 }
 
-// Answers both of SyncRWALaunches' queries: allowlist sweep, then launch fetch.
-func fakeEquiteezIndexer(t *testing.T) *httptest.Server {
-	t.Helper()
-	const tokensResp = `{"data":{"token":[{
-		"address":"KT1RegressionTestToken","token_id":0,"in_allowlist":true,
-		"token_metadata":{"symbol":"RGT"},"orderbooks":[]}]}}`
-	const launchesResp = `{"data":{"launchpad_launch":[{
-		"id":91,"name":"RGT-issuance","status":1,
-		"max_amount_cap":"1000000","total_bought":"10","is_paused":false,
-		"updated_at":"2026-08-01T00:00:00Z",
-		"token":{"address":"KT1RegressionTestToken","token_id":0},
-		"sale_options":[{"name":"Base","total_bought":"10","max_amount_cap":"1000000","is_paused":false,
-			"payments":[{"name":"USDT","price":"100","token":{"address":"KT1RegressionQuote","token_id":0}}]}]}]}}`
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read query body: %v", err)
-		}
-		body := string(raw)
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(body, "allowlistedTokensWithOrderbooks"):
-			_, _ = w.Write([]byte(tokensResp))
-		case strings.Contains(body, "GetLaunchesByTokens"):
-			_, _ = w.Write([]byte(launchesResp))
-		default:
-			t.Errorf("unexpected GraphQL query: %s", body)
-			w.WriteHeader(http.StatusBadRequest)
-		}
-	}))
+// Upstream had launches and none landed: without an error, job_last_success
+// would stamp a healthy tick straight through a write outage. The catalog
+// transaction must also roll back any pairs refreshed before that failure.
+func TestSyncRWACatalog_FailedLaunchWriteReturnsError(t *testing.T) {
+	db := openGorm(t)
+	truncateRWA(t, db)
+	truncateLaunches(t, db)
+	upstream := &recoveryIndexer{generation: "2026-01-01T00:00:00Z", status: "realtime", bookID: 7}
+	srv := httptest.NewServer(upstream)
+	t.Cleanup(srv.Close)
+	cfg := launchSyncTestConfig(srv.URL)
+	lookup := repositories.NewLookupRepository(db)
+	ctx := context.Background()
+	require.NoError(t, jobs.SyncRWACatalog(ctx, cfg, lookup, nil))
+	list, err := repositories.NewLaunchRepository(db).EnabledLaunches(ctx, prices.SourceEquiteez)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+
+	require.NoError(t, db.Exec(`CREATE FUNCTION fail_review_launch_write() RETURNS trigger LANGUAGE plpgsql AS $$
+ BEGIN RAISE EXCEPTION 'simulated launch write failure'; END $$`).Error)
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec(`DROP TRIGGER IF EXISTS fail_review_launch_write ON rwa_launches`).Error)
+		require.NoError(t, db.Exec(`DROP FUNCTION fail_review_launch_write()`).Error)
+	})
+	require.NoError(t, db.Exec(`CREATE TRIGGER fail_review_launch_write BEFORE INSERT ON rwa_launches
+ FOR EACH ROW EXECUTE FUNCTION fail_review_launch_write()`).Error)
+	upstream.change(func() { upstream.bookID = 77 })
+	err = jobs.SyncRWACatalog(ctx, cfg, lookup, nil)
+	require.ErrorContains(t, err, "simulated launch write failure")
+	pair, err := lookup.LookupRWAPairBySymbol(ctx, "rec", "usdt")
+	require.NoError(t, err)
+	require.EqualValues(t, 7, *pair.EquiteezOrderbookID, "failed launch write must roll back the catalog snapshot")
 }
 
 func launchSyncTestConfig(indexerURL string) *config.Config {
 	cfg := &config.Config{}
 	cfg.RWA.Enabled = true
 	cfg.Equiteez.IndexerURL = indexerURL
+	cfg.Equiteez.AllowlistURL = indexerURL + "/allowlist"
+	cfg.Equiteez.RequiredIndexes = []string{"token_index"}
 	cfg.API.TimeoutSeconds = 10
+	cfg.API.OutboundHTTPRetryMaxAttempts = 1
 	return cfg
-}
-
-// Upstream had launches and none landed: without an error, job_last_success
-// would stamp a healthy tick straight through a write outage.
-func TestSyncRWALaunches_AllUpsertsFailedReturnsError(t *testing.T) {
-	db := openGorm(t)
-	truncateLaunches(t, db)
-	srv := fakeEquiteezIndexer(t)
-	defer srv.Close()
-	cfg := launchSyncTestConfig(srv.URL)
-	nop := zerolog.Nop()
-
-	t.Run("happy path stores the launch", func(t *testing.T) {
-		stored, err := jobs.SyncRWALaunches(context.Background(), cfg, repositories.NewLaunchRepository(db), &nop)
-		require.NoError(t, err)
-		require.Equal(t, 1, stored, "the canned launch must land")
-	})
-
-	t.Run("all upserts failing is an error", func(t *testing.T) {
-		txErr := db.Transaction(func(tx *gorm.DB) error {
-			// Sabotage writes inside the tx only; rollback restores the table.
-			require.NoError(t, tx.Exec(`ALTER TABLE rwa_launches DROP COLUMN base_symbol`).Error)
-			_, err := jobs.SyncRWALaunches(context.Background(), cfg, repositories.NewLaunchRepository(tx), &nop)
-			require.Error(t, err, "a sync that refreshed nothing must not report success")
-			require.Contains(t, err.Error(), "upserts failed")
-			return fmt.Errorf("rollback the sabotage")
-		})
-		require.Error(t, txErr) // the deliberate rollback
-	})
 }

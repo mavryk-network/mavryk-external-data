@@ -1,0 +1,56 @@
+{
+  "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v": [
+    {
+      "id": 741627,
+      "level": 6442603,
+      "timestamp": "2026-09-24T10:05:15Z",
+      "action": "add_key",
+      "value": {
+        "token_id": "0",
+        "token_info": {
+          "name": "5465746865722055534454",
+          "symbol": "7755534454",
+          "decimals": "36",
+          "thumbnailUri": "68747470733a2f2f6d617672796b2d7765622d636f6e74656e742e73332e61702d736f757468656173742d312e616d617a6f6e6177732e636f6d2f6173736574732f555344542e706e67",
+          "shouldPreferSymbol": "74727565"
+        }
+      }
+    }
+  ],
+  "KT19bKTs9qsoBrspRNwsHn46YarEWuj3Vjc6": [
+    {
+      "id": 2958,
+      "level": 4627815,
+      "timestamp": "2026-06-11T08:16:27Z",
+      "action": "add_key",
+      "value": {
+        "token_id": "0",
+        "token_info": {
+          "name": "55534454202d204d6f636b",
+          "symbol": "55534454",
+          "decimals": "36",
+          "thumbnailUri": "697066733a2f2f516d646f75346e34484d3567354546745263794e3545354e70383234726d33647274557a696569517a3954724e36",
+          "shouldPreferSymbol": "74727565"
+        }
+      }
+    }
+  ],
+  "KT1J8yjtFGY6fiqjSNLpUjDnX2bj2HsUizAi": [
+    {
+      "id": 409520,
+      "level": 5958118,
+      "timestamp": "2026-08-27T08:52:13Z",
+      "action": "add_key",
+      "value": {
+        "token_id": "0",
+        "token_info": {
+          "name": "5465746865722055534454",
+          "symbol": "7755534454",
+          "decimals": "36",
+          "thumbnailUri": "68747470733a2f2f6d617672796b2d7765622d636f6e74656e742e73332e61702d736f757468656173742d312e616d617a6f6e6177732e636f6d2f6173736574732f555344542e706e67",
+          "shouldPreferSymbol": "74727565"
+        }
+      }
+    }
+  ]
+}

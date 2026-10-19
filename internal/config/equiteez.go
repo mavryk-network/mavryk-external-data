@@ -10,18 +10,32 @@ package config
 // RateLimit shares no quota with CoinGecko and defaults to 0 (disabled); the
 // worker endpoint usually enforces no per-IP limit. Backfill: see ADR-0014.
 type EquiteezConfig struct {
-	IndexerURL      string                 `yaml:"indexer_url"`
-	IndexerPassword string                 `yaml:"indexer_password"` // local/CI only: passed as ?bypass=<secret>
-	RateLimit       RateLimitConfig        `yaml:"rate_limit"`
-	Backfill        EquiteezBackfillConfig `yaml:"backfill"`
+	AllowlistURL        string                 `yaml:"allowlist_url"`
+	HeadMaxAgeSeconds   int                    `yaml:"head_max_age_seconds"`
+	RequiredIndexes     []string               `yaml:"required_indexes"`
+	RecoverOrderbooks   []string               `yaml:"recover_orderbooks"`
+	RecoverLaunchTokens []string               `yaml:"recover_launch_tokens"`
+	IndexerURL          string                 `yaml:"indexer_url"`
+	IndexerPassword     string                 `yaml:"indexer_password"` // local/CI only: passed as ?bypass=<secret>
+	RateLimit           RateLimitConfig        `yaml:"rate_limit"`
+	Backfill            EquiteezBackfillConfig `yaml:"backfill"`
 }
 
 // EquiteezBackfillConfig controls the historical orderbook_order ingester.
 //
-// StartFrom ignores events with ended_at < this (RFC3339 or YYYY-MM-DD; empty =
-// full history). JitterMs spreads the first tick across replicas. The backoff
-// knobs have the same semantics as the CoinGecko backfill: exponential backoff
-// per pair on transient errors, then a cooldown after BackfillMaxErrors.
+// Knobs:
+//   - Enabled:    opt-in master switch. Off by default.
+//   - TickSeconds: cadence of the backfill ticker (default 30s — indexer is
+//     usually local, so an aggressive cadence is cheap).
+//   - BatchSize:  number of orderbook_order rows fetched per pair per tick.
+//   - StartFrom:  ignore events with ended_at < this (RFC3339 or YYYY-MM-DD).
+//     Empty = full history. Useful to bound the initial sweep when the indexer
+//     contains years of data.
+//   - JitterMs:   random ± offset on the first tick to avoid synchronized
+//     hammering across replicas. Default 1000.
+//   - BackfillMaxErrors / BackoffInitialMs / BackoffMaxMs / MaxBackoffMs:
+//     same semantics as the CoinGecko backfill — exponential backoff per pair
+//     on errors. BackfillMaxErrors is deprecated for Equiteez: errors always retry.
 type EquiteezBackfillConfig struct {
 	Enabled           bool   `yaml:"enabled"`
 	TickSeconds       int    `yaml:"tick_seconds"`

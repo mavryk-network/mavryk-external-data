@@ -381,3 +381,7 @@ go test -race -tags=integration ./tests/integration/ # real TimescaleDB (Docker)
 ## License
 
 [Apache 2.0](LICENSE).
+
+Historical primary-flow valuation uses one Starter/USDT tariff and confirmed
+on-chain launchLedger history. Configuration, API and rollout are documented in
+[Historical Starter valuation](docs/primary-historical-valuation.md).
