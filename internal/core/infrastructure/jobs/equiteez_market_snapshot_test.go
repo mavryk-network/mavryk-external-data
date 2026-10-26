@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,11 +19,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type snapshotRecorder struct{ saves [][]prices.RWAMarketSnapshot }
+type snapshotRecorder struct {
+	saves      [][]prices.RWAMarketSnapshot
+	err        error
+	beforeSave func()
+}
 
 func (r *snapshotRecorder) SaveSnapshots(_ context.Context, rows []prices.RWAMarketSnapshot) error {
+	if r.beforeSave != nil {
+		r.beforeSave()
+	}
 	r.saves = append(r.saves, rows)
-	return nil
+	return r.err
 }
 
 func TestCollectorWritesEmptySnapshotAndDiscardsGenerationChange(t *testing.T) {
@@ -93,6 +101,25 @@ func TestCollectorWritesEmptySnapshotAndDiscardsGenerationChange(t *testing.T) {
 	flip.Store(true)
 	require.Error(t, job.collectOnce(context.Background(), pairs))
 	require.Len(t, snapshots.saves, 2, "changed generation must not publish even an empty snapshot")
+	flip.Store(false)
+	changed.Store(false)
+	empty.Store(false)
+	snapshots.err = errors.New("optional archive unavailable")
+	require.ErrorIs(t, job.collectOnce(context.Background(), pairs), snapshots.err)
+	require.Equal(t, 2, history.saveCount(), "optional archive failure must not freeze legacy price ingestion")
+	empty.Store(true)
+	require.ErrorIs(t, job.collectOnce(context.Background(), pairs), snapshots.err)
+	require.Equal(t, 2, history.saveCount(), "empty book remains empty even on snapshot failure")
+	empty.Store(false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	snapshots.beforeSave = func() {
+		require.Equal(t, 3, history.saveCount(), "legacy write must precede a blocking/canceling optional archive")
+		cancel()
+	}
+	snapshots.err = context.Canceled
+	require.ErrorIs(t, job.collectOnce(ctx, pairs), context.Canceled)
+
 }
 
 func marketTokens(t *testing.T) []equiteez.TokenWithOrderbooks {

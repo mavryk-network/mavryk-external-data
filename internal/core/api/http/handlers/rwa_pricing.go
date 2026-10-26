@@ -2,27 +2,37 @@ package handlers
 
 import (
 	"context"
+	"strings"
 
-	"quotes/internal/core/api/http/common"
 	apiprices "quotes/internal/core/application/prices"
 	"quotes/internal/core/domain/prices"
-
-	"github.com/gin-gonic/gin"
+	"quotes/internal/logging"
 )
 
-// PricingBySymbol is additive: the old /latest still means last observed trade
-// price, while /pricing can return a midpoint even before the first trade.
-func (d RWAPriceDeps) PricingBySymbol() gin.HandlerFunc {
-	action := func(ctx context.Context, target rwaTarget) (apiprices.RWAPricing, error) {
-		var pair *prices.RWAPair
-		if target.HasPair {
-			pair = &target.Pair
-		}
-		service := d.Pricing
-		if service == nil {
-			service = &apiprices.RWAPricingService{Network: "basenet"}
-		}
-		return service.Get(ctx, pair, target.Launch)
+func (d RWAPriceDeps) pricingService() *apiprices.RWAPricingService {
+	if d.Pricing != nil {
+		return d.Pricing
 	}
-	return common.Wrap(d.resolveTargetFromPath, action)
+	return &apiprices.RWAPricingService{Network: "basenet", Converter: d.Converter}
+}
+
+func (d RWAPriceDeps) currentPricing(ctx context.Context, target rwaTarget) (*apiprices.RWAPricing, error) {
+	var pair *prices.RWAPair
+	if target.HasPair {
+		pair = &target.Pair
+	}
+	q, err := d.pricingService().Get(ctx, pair, target.Launch)
+	if err != nil {
+		logPricingReadError(ctx, err)
+		return nil, nil // optional enrichment must not suppress legacy prices
+	}
+	return &q, nil
+}
+
+func emptyLegacyPrice(pair prices.RWAPair) rwaPriceDTO {
+	return rwaPriceDTO{NativeQuote: strings.ToLower(pair.QuoteSymbol), Market: marketSecondary, PriceUnavailable: true}
+}
+
+func logPricingReadError(ctx context.Context, err error) {
+	logging.LoggerFromContext(ctx, nil).Warn().Err(err).Msg("rwa_pricing_enrichment_unavailable")
 }

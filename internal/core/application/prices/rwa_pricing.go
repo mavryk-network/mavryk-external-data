@@ -15,6 +15,10 @@ type RWASnapshotReader interface {
 	Snapshot(context.Context, int64) (prices.RWAMarketSnapshot, bool, error)
 }
 
+type RWASnapshotHistoryReader interface {
+	SnapshotsAt(context.Context, int64, []time.Time) ([]prices.RWAMarketSnapshot, error)
+}
+
 // PricingQuote distinguishes native-price availability from FX availability.
 // Money is an exact decimal string; null is never a manufactured zero.
 type PricingQuote struct {
@@ -110,7 +114,7 @@ func (s *RWAPricingService) Get(ctx context.Context, pair *prices.RWAPair, launc
 				return out, err
 			}
 			if found {
-				s.applySnapshot(ctx, &out, *pair, snapshot, now)
+				s.applySnapshot(ctx, &out, *pair, snapshot, now, false)
 			}
 		}
 	} else if launch != nil {
@@ -148,7 +152,54 @@ func (s *RWAPricingService) Get(ctx context.Context, pair *prices.RWAPair, launc
 	return out, nil
 }
 
-func (s *RWAPricingService) applySnapshot(ctx context.Context, out *RWAPricing, pair prices.RWAPair, snap prices.RWAMarketSnapshot, now time.Time) {
+// History enriches only legacy last rows with matching captured price evidence.
+// Evaluate availability at capture time: old observations are history, not
+// expired current quotes. Today's generation and launch cannot rewrite them.
+func (s *RWAPricingService) History(ctx context.Context, pair prices.RWAPair, points []prices.PricePoint, includeUSD bool) ([]*RWAPricing, error) {
+	out := make([]*RWAPricing, len(points))
+	renderer := *s
+	if !includeUSD {
+		renderer.Converter = nil
+	}
+	reader, ok := s.Snapshots.(RWASnapshotHistoryReader)
+	if !ok || len(points) == 0 {
+		return out, nil
+	}
+	times := make([]time.Time, len(points))
+	for i, p := range points {
+		times[i] = p.Timestamp.UTC()
+	}
+	rows, err := reader.SnapshotsAt(ctx, pair.ID, times)
+	if err != nil {
+		return nil, err
+	}
+	byTime := make(map[time.Time]prices.RWAMarketSnapshot, len(rows))
+	for _, row := range rows {
+		byTime[row.ObservedAt.UTC()] = row
+	}
+	for i, p := range points {
+		snap, found := byTime[p.Timestamp.UTC()]
+		if !found || snap.ObservedAt.After(s.clock()) || p.Metric != string(prices.SideLast) || snap.LastPrice == nil || !snap.LastPrice.Equal(p.Price) {
+			continue
+		}
+		q := RWAPricing{Network: s.Network, Source: string(prices.SourceEquiteez),
+			Symbol: strings.ToLower(pair.BaseSymbol + "-" + pair.QuoteSymbol), TokenAddress: pair.TokenAddr,
+			QuoteAddress: pair.QuoteAddr, OrderbookAddress: &pair.OrderbookAddr}
+		renderer.applySnapshot(ctx, &q, pair, snap, snap.ObservedAt, true)
+		if !includeUSD {
+			if q.MarketPrice.Price != nil {
+				q.MarketPrice.FXStatus = "not_requested"
+			}
+			if q.LastSale.Price != nil {
+				q.LastSale.FXStatus = "not_requested"
+			}
+		}
+		out[i] = &q
+	}
+	return out, nil
+}
+
+func (s *RWAPricingService) applySnapshot(ctx context.Context, out *RWAPricing, pair prices.RWAPair, snap prices.RWAMarketSnapshot, now time.Time, historical bool) {
 	expires := snap.ObservedAt.Add(s.maxAge())
 	out.ObservedAt, out.ValidUntil = &snap.ObservedAt, &expires
 	out.TokenID, out.QuoteTokenID = idString(snap.TokenID), idString(snap.QuoteTokenID)
@@ -160,7 +211,7 @@ func (s *RWAPricingService) applySnapshot(ctx context.Context, out *RWAPricing, 
 		reason = "identity_mismatch"
 	case snap.TokenID == nil || *snap.TokenID != 0 || snap.QuoteTokenID == nil || *snap.QuoteTokenID != 0:
 		reason = "unsupported_identity"
-	case snap.IndexerGeneration == "" || snap.IndexerGeneration != pair.IndexerGeneration:
+	case snap.IndexerGeneration == "" || (!historical && snap.IndexerGeneration != pair.IndexerGeneration):
 		reason = "generation_mismatch"
 	case snap.ObservedAt.IsZero() || snap.ObservedAt.After(now):
 		reason = "invalid_observation_time"

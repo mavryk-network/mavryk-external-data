@@ -1,9 +1,13 @@
 # RWA pricing for wallet consumers
 
-`GET /v1/rwa/{base}-{quote}/pricing` supplies three separate pricing facets.
-It has the same authentication as existing RWA routes. It always attempts USD
-conversion and does not require `?in=usd`. The existing `/latest`, historical
-prices, series and candles retain their existing behavior.
+`GET /v1/rwa/{base}-{quote}/latest` and the existing raw list endpoint
+`GET /v1/rwa/{base}-{quote}` include an additive nested `pricing` object.
+There is no separate pricing endpoint. Existing numeric top-level prices,
+converted currency keys, and the legacy `primary_issuance` block retain their
+meanings. Current pricing always attempts USD conversion without `?in=usd`.
+A known pair before its first trade now returns 200 with legacy `price: null`
+and `timestamp: null`, alongside the new pricing facets. Latest-mode list
+returns the same single observation (without latest-only statistics).
 
 | Field | Meaning | Price timestamp / FX time |
 |---|---|---|
@@ -11,7 +15,7 @@ prices, series and candles retain their existing behavior.
 | `last_sale` | Contract's last matched price; requires `last_matched_price_timestamp` | Actual `executed_at` |
 | `primary_issuance` | Active primary sale's undiscounted list price | Launch catalog sync time |
 
-All monetary fields are exact decimal **strings or null**. `status` describes
+All monetary fields inside `pricing` are exact decimal **strings or null**. `status` describes
 the native price; `fx_status` separately describes USD conversion. A valid
 native quote with unavailable/stale historical FX has `usd: null`, never zero.
 An empty/one-sided/crossed/stale book has no midpoint. No fallback replaces it
@@ -61,18 +65,52 @@ An old executed trade may still be the most recent sale. A *stale observation*
 retains that historical sale with `status: stale` and `reason: snapshot_stale`;
 consumers must not call it a current confirmed last sale.
 
+## Historical rows
+
+Windowed raw history (`?from=...&to=...`) enriches each existing last-price row
+only when its original database timestamp and price exactly match a recorded
+strict observation. Joins retain subsecond precision even though the legacy
+`timestamp` display has second precision; `pricing.observed_at` retains the
+precise time. Snapshots are loaded in one batch, never joined to today's latest
+record or a nearby observation. Old/backfilled/mutated unmatched points have
+`pricing: null`. No predeployment history is invented. Optional current/archive read failures
+also yield `pricing: null`, with a logged diagnostic, without suppressing healthy
+legacy price results. Snapshot/archive write failures likewise report a job
+error while allowing the legacy price writer to continue.
+
+Historical market availability is evaluated at capture time. Historical USD is
+opt-in using `?in=usd` (or a currency list containing usd), reusing the existing
+conversion request. Without that target, native facets remain available and
+USD is null with `fx_status: not_requested`, without additional FX lookups.
+When requested, USD uses observation time for market price and actual execution
+time for last sale. Current latest-mode pricing always attempts USD.
+An observation from an earlier indexer generation remains recorded history;
+network/contract/token/quote/orderbook identity is still validated. The live
+path continues enforcing the current catalog generation. These observations do
+not promise reorg finality. Historical `pricing.primary_issuance` is always null:
+a current launch catalog record is not evidence of that launch's earlier state.
+
+The raw history remains the existing last-price timeline. Primary-only and
+before-first-trade assets do not gain invented historical rows. Series and OHLC
+continue aggregating legacy last prices. Complete strict observations are
+archived from deployment onward, with 7-day compression and 2-year retention
+when TimescaleDB is installed, matching existing raw-price retention. Plain
+PostgreSQL installations need external retention maintenance, as for legacy
+price tables.
+
 ## Rollout
 
-1. Apply migration `0025_rwa_market_snapshots.sql` using the normal migration runner.
+1. Apply migrations `0025_rwa_market_snapshots.sql` and
+   `0026_rwa_market_observations.sql` using the normal migration runner.
 2. Deploy the service. The existing collector writes one complete latest row
-   per pair, including NULL sides when a side disappears. No historical data is
-   rewritten. Fresh launch sync verifies the primary payment ID; existing launch
+   per pair, including NULL sides when a side disappears, and atomically appends
+   the same complete observation to history. No legacy historical data is rewritten. Fresh launch sync verifies the primary payment ID; existing launch
    rows have a NULL `pricing_quote_token_id` until that sync succeeds.
-3. Verify `/pricing` for a known secondary and a known primary asset, then deploy
-   consumers of the additive endpoint. Before first collection, a known pair
+3. Verify nested `pricing` on `/latest` for known secondary and primary assets,
+   and on a newly collected raw historical point, then deploy consumers. Before first collection, a known pair
    returns explicit `snapshot_missing`, without disturbing legacy quotes.
 
-No cache flush or price-history backfill is required. New snapshot records are
-bounded by catalog size and are read directly; historical quote caches remain
+No cache flush or price-history backfill is required. Current snapshot records are
+bounded by catalog size, while the archive has the retention policy above; historical quote caches remain
 independent. Future new network or nonzero-token support requires an explicit
 identity design, not removal of the current validation guards.

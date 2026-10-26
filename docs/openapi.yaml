@@ -616,6 +616,22 @@ paths:
         (`{base}-{quote}`, case-insensitive, e.g. `mars1-usdt`) from
         `equiteez`. Window/latest semantics match `/v1/prices/{token}`.
 
+        Each row includes additive `pricing`. In latest mode it is the current
+        verified observation with USD always attempted, as on `/latest`; before a first trade, a known
+        pair returns one row with null legacy price/timestamp. With a from/to
+        window, pricing is populated only from a captured strict snapshot with
+        exactly the row's original database timestamp and matching last price.
+        Older/backfilled/unmatched rows return `pricing: null`; current data is
+        never copied into history. Historical status is evaluated at observation
+        time. Historical USD is opt-in via `?in=usd` (or a list containing usd):
+        market USD uses observation time and last-sale USD actual execution.
+        Without a USD target, native facets remain available with `usd: null`
+        and `fx_status: not_requested`, without additional FX queries.
+        Historical `pricing.primary_issuance` is null because launch snapshots
+        were not captured. These are recorded observations, not current quotes
+        or a promise of reorg finality. Existing last-only row selection, limits,
+        order, primary-only empty history, and series/OHLC semantics are unchanged.
+
         `?in=usd,eur,...` adds converted prices as flat top-level numeric
         keys per row. Targets that fail conversion are silently omitted;
         the row is still returned with the native `price`.
@@ -802,63 +818,26 @@ paths:
                 code: OHLCV_NOT_IMPLEMENTED
                 message: "OHLCV is not yet available;"
 
-  /v1/rwa/{symbol}/pricing:
-    get:
-      tags: [prices-rwa]
-      operationId: getRWAPricing
-      summary: Distinct midpoint, executed-sale and primary list prices
-      description: |
-        Additive pricing contract for the enabled basenet token-ID-0 catalog.
-        Existing `/latest`, history and candles keep their existing semantics.
-        Money is an exact decimal string; missing values are explicit nulls.
-        USD conversion is always attempted; no `in` parameter is required.
-
-        `market_price` is `(bid + ask) / 2` from the best active limit orders in
-        ONE complete current snapshot. Market-order protection prices, canceled,
-        refunded, fulfilled, expired and zero-remainder orders are excluded.
-        Its `valid_until` is capped by the earliest selected order deadline.
-        Empty, one-sided, crossed, expired or unverified books return no midpoint.
-        `last_sale.executed_at` comes from the contract's last matched timestamp,
-        never the polling time. Its USD conversion uses FX at-or-before execution.
-        An old trade can still be the last sale; expired observations carry a
-        historical sale with `status: stale`, and must not be treated as current.
-        Missing/stale FX leaves the native price available but `usd: null`.
-
-        `primary_issuance`, when present, is a separate `primary_list_price`;
-        it never substitutes for midpoint or an executed sale. It requires a
-        verified single token-0 payment identity, a fresh sync and an active sale.
-        Clients validate exact identity and EACH facet's `valid_until` on use,
-        including after caching. Generation checks and the configured observation
-        age bound freshness; they do not promise immediate reorg invalidation.
-
-        A known book before its first trade still returns 200. Missing catalog
-        symbols return 404, ambiguous symbols 409. Uses the existing RWA auth.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: symbol
-          in: path
-          required: true
-          schema: { type: string, example: mars1-usdt }
-      responses:
-        '200':
-          description: Pricing facets with independent availability and expiry.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/RWAPricing' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '500': { $ref: '#/components/responses/Internal' }
-
   /v1/rwa/{symbol}/latest:
     get:
       tags: [prices-rwa]
       summary: Latest RWA price
       description: |
-        Freshest `last` price for the pair identified by `{symbol}`.
-        Returns 404 when no `last` row exists yet.
+        Freshest legacy `last` price plus a nested `pricing` object for the
+        pair identified by `{symbol}`. Existing numeric price/currency keys and
+        the legacy primary_issuance block retain their meanings. A known pair
+        before its first trade returns 200 with `price: null`, `timestamp: null`
+        and independently available pricing facets. Unknown symbols return 404.
+
+        `pricing` contains exact decimal-string market midpoint, executed last
+        sale and primary list-price facets, verified identity, source, native
+        quote, USD conversion and independent expiry. It is identical to the
+        latest-mode list row's nested object. There is no separate pricing route.
+        Market midpoint uses active non-market limit orders and expires at the
+        earliest selected order deadline or observation TTL. Last-sale FX uses
+        actual execution time. Missing/stale FX gives null USD, never zero.
+        Consumers must check each facet's status and expiry when using cached
+        current quotes; generation checks and TTL are not immediate reorg proof.
 
         Optional `?in=usd,eur,...` adds converted prices as flat top-level
         numeric keys. Targets that fail conversion (no FX rate, unregistered
@@ -1493,10 +1472,12 @@ components:
         native_quote: { type: string, example: usdt }
         as_of: { type: string, format: date-time, nullable: true }
         valid_until: { type: string, format: date-time, nullable: true }
-        fx_status: { type: string, enum: [available, missing, stale, unsupported, not_applicable] }
+        fx_status: { type: string, enum: [available, missing, stale, unsupported, not_applicable, not_requested] }
         fx_at: { type: string, format: date-time, nullable: true }
     RWAPricing:
       type: object
+      nullable: true
+      description: Current strict pricing, or exact captured pricing on a historical row; null when no matching evidence exists.
       required: [symbol, network, source, token_address, token_id, quote_address, quote_token_id, orderbook_address, observed_at, valid_until, market_price, last_sale, primary_issuance]
       properties:
         symbol: { type: string, example: mars1-usdt }
@@ -1538,7 +1519,7 @@ components:
             native_quote: { type: string, example: usdt }
             as_of: { type: string, format: date-time, nullable: true }
             valid_until: { type: string, format: date-time, nullable: true }
-            fx_status: { type: string, enum: [available, missing, stale, unsupported, not_applicable] }
+            fx_status: { type: string, enum: [available, missing, stale, unsupported, not_applicable, not_requested] }
             fx_at: { type: string, format: date-time, nullable: true }
             launch_id: { type: integer }
             launch_status: { type: string }
@@ -1631,7 +1612,7 @@ components:
         conversion served with a stale FX rate is flagged in the `fx` object.
 
         Top-level reserved keys: `timestamp`, `native_quote`, `price`,
-        `market`, and the optional `primary_issuance`, `fx`, and — on
+        `market`, `pricing`, and the optional `primary_issuance`, `fx`, and — on
         `/latest` only — `ath` / `price_one_year_ago` objects. All other
         top-level keys are converted currencies (3-letter codes that can
         never collide with the reserved names).
@@ -1640,7 +1621,8 @@ components:
         timestamp:
           type: string
           format: date-time
-          description: RFC3339 UTC, second precision.
+          nullable: true
+          description: Legacy observation time (RFC3339 UTC, second precision); null only when no legacy price exists.
           example: "2026-04-27T12:00:00Z"
         native_quote:
           type: string
@@ -1650,6 +1632,7 @@ components:
           example: usdt
         price:
           type: number
+          nullable: true
           description: |
             Last price in `native_quote` at wire precision (6 dp at or above
             0.01, else 6 significant digits). Serialised as a JSON number (not
@@ -1663,6 +1646,8 @@ components:
             `primary` = fixed launchpad sale price (the `primary_issuance`
             block carries the sale detail).
           example: secondary
+        pricing:
+          $ref: "#/components/schemas/RWAPricing"
         primary_issuance:
           $ref: "#/components/schemas/RWAPrimaryIssuance"
         fx:

@@ -222,3 +222,83 @@ func TestRWAPricingMarketExpiresWithSelectedOrderWithoutExpiringLastSale(t *test
 	require.Equal(t, "available", out.LastSale.Status)
 	require.Equal(t, "100", *out.LastSale.Price)
 }
+
+type pricingHistoryStub struct {
+	snapshotStub
+	rows       []prices.RWAMarketSnapshot
+	calls      int
+	timestamps []time.Time
+}
+
+func (r *pricingHistoryStub) SnapshotsAt(_ context.Context, _ int64, times []time.Time) ([]prices.RWAMarketSnapshot, error) {
+	r.calls++
+	r.timestamps = times
+	return r.rows, nil
+}
+
+func TestRWAPricingHistoryUsesExactCapturedTimeAndExecutionFX(t *testing.T) {
+	svc, pair, snap, fx := pricingFixture()
+	snap.ObservedAt = snap.ObservedAt.Add(-time.Hour).Add(123456 * time.Microsecond)
+	expiry := snap.ObservedAt.Add(time.Minute)
+	snap.AskExpiresAt = &expiry
+	snap.IndexerGeneration = "prior-generation"
+	last := *snap.LastPrice
+	newer := snap
+	newer.ObservedAt = svc.Now()
+	changed := decimal.NewFromInt(999)
+	newer.Bid, newer.Ask, newer.LastPrice = &changed, &changed, &changed
+	archive := &pricingHistoryStub{snapshotStub: snapshotStub{row: newer, found: true}, rows: []prices.RWAMarketSnapshot{snap, newer}}
+	svc.Snapshots = archive
+	points := []prices.PricePoint{
+		{Metric: "last", Timestamp: snap.ObservedAt, Price: last},
+		{Metric: "last", Timestamp: snap.ObservedAt.Add(-time.Second), Price: last},
+		{Metric: "last", Timestamp: snap.ObservedAt.Add(time.Microsecond), Price: last},
+		{Metric: "last", Timestamp: snap.ObservedAt, Price: changed},
+	}
+	out, err := svc.History(context.Background(), pair, points, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, archive.calls)
+	require.Len(t, archive.timestamps, len(points))
+	require.Len(t, out, len(points))
+	require.Equal(t, "110", *out[0].MarketPrice.Price)
+	require.Equal(t, "available", out[0].MarketPrice.Status, "historic expiry evaluated at observation, not today")
+	require.Equal(t, snap.ObservedAt, *out[0].MarketPrice.AsOf)
+	require.Equal(t, expiry, *out[0].MarketPrice.ValidUntil)
+	require.Equal(t, *snap.LastTradeAt, *out[0].LastSale.ExecutedAt)
+	require.Nil(t, out[0].PrimaryIssuance)
+	require.Equal(t, []time.Time{snap.ObservedAt, *snap.LastTradeAt}, fx.times)
+	require.Nil(t, out[1], "no nearest observation fallback")
+	require.Nil(t, out[2], "subsecond exact match required")
+	require.Nil(t, out[3], "a later backfill must not attach different captured evidence")
+}
+
+func TestRWAPricingHistoryRejectsWrongIdentityAndFutureEvidence(t *testing.T) {
+	svc, pair, snap, _ := pricingFixture()
+	snap.TokenAddr = "other"
+	archive := &pricingHistoryStub{rows: []prices.RWAMarketSnapshot{snap}}
+	svc.Snapshots = archive
+	points := []prices.PricePoint{{Metric: "last", Timestamp: snap.ObservedAt, Price: *snap.LastPrice}}
+	out, err := svc.History(context.Background(), pair, points, true)
+	require.NoError(t, err)
+	require.Equal(t, "identity_mismatch", *out[0].MarketPrice.Reason)
+	require.Nil(t, out[0].MarketPrice.Price)
+	archive.rows[0].ObservedAt = svc.Now().Add(time.Hour)
+	points[0].Timestamp = archive.rows[0].ObservedAt
+	out, err = svc.History(context.Background(), pair, points, true)
+	require.NoError(t, err)
+	require.Nil(t, out[0])
+}
+
+func TestRWAPricingHistorySkipsFXUnlessUSDRequested(t *testing.T) {
+	svc, pair, snap, fx := pricingFixture()
+	svc.Snapshots = &pricingHistoryStub{rows: []prices.RWAMarketSnapshot{snap}}
+	out, err := svc.History(context.Background(), pair, []prices.PricePoint{{Metric: "last", Timestamp: snap.ObservedAt, Price: *snap.LastPrice}}, false)
+	require.NoError(t, err)
+	require.Empty(t, fx.times)
+	for _, q := range []PricingQuote{out[0].MarketPrice, out[0].LastSale.PricingQuote} {
+		require.Equal(t, "available", q.Status)
+		require.NotNil(t, q.Price)
+		require.Nil(t, q.USD)
+		require.Equal(t, "not_requested", q.FXStatus)
+	}
+}

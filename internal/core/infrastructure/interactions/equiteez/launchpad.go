@@ -99,7 +99,7 @@ func (t *LaunchTokenRef) UnmarshalJSON(b []byte) error {
 
 // PricingQuoteTokenID verifies the supported token-0 payment identity without
 // changing the legacy BaseTierPrice selection. Multi-currency ladders cannot
-// compare raw amounts and are unavailable on the stricter /pricing contract.
+// compare raw amounts and are unavailable on the stricter nested pricing contract.
 func (r LaunchRow) PricingQuoteTokenID(currency, address string) *int {
 	if r.Token == nil || !r.Token.TokenIDKnown || r.Token.TokenID != 0 || address == "" {
 		return nil
