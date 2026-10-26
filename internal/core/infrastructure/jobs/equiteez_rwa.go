@@ -27,15 +27,23 @@ import (
 // it out of polling; pairs whose orderbook is removed from Equiteez allowlist
 // stop collection when CRM membership is reconciled.
 type EquiteezRWAJob struct {
-	cfg    *config.Config
-	repo   apiprices.Repository
-	lookup *repositories.LookupRepository
-	client *equiteez.Client
-	logger *zerolog.Logger
+	snapshots marketSnapshotWriter
+	cfg       *config.Config
+	repo      apiprices.Repository
+	lookup    *repositories.LookupRepository
+	client    *equiteez.Client
+	logger    *zerolog.Logger
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+}
+
+// WithSnapshots adds the current-state writer without changing the historical
+// repository or its cache invalidation contract.
+func (j *EquiteezRWAJob) WithSnapshots(writer marketSnapshotWriter) *EquiteezRWAJob {
+	j.snapshots = writer
+	return j
 }
 
 // NewEquiteezRWAJob wires the collector. Lookups are refreshed each tick.
@@ -178,24 +186,28 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 	}
 	now := time.Now().UTC()
 	points := buildPointsFromOrderbooks(tokens, byTokenAddr, pairDecimals, now)
+	// The optional archive must not consume the legacy writer's deadline.
+	// Both representations retain the same observation timestamp for exact joins.
 	if len(points) == 0 {
 		j.logger.Debug().Msg("rwa_no_points_collected")
-		return nil
+	} else {
+		n, err := j.repo.Save(ctx, points)
+		if err != nil {
+			metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "save").Inc()
+			j.logger.Error().Err(err).Msg("rwa_save_failed")
+			return err
+		}
+		metrics.JobRowsAffectedTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all").Add(float64(n))
+		j.logger.Info().Int("pairs", len(pairs)).Int("points", len(points)).Int64("rows_affected", n).Msg("rwa_collected")
 	}
-
-	n, err := j.repo.Save(ctx, points)
-	if err != nil {
-		metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "save").Inc()
-		j.logger.Error().Err(err).Msg("rwa_save_failed")
-		return err
+	if j.snapshots != nil {
+		rows := buildMarketSnapshots(tokens, pairs, pairDecimals, j.cfg.RWA.PricingNetwork(), generation, now)
+		if err := j.snapshots.SaveSnapshots(ctx, rows); err != nil {
+			metrics.JobErrorsTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all", "snapshot_save").Inc()
+			j.logger.Warn().Err(err).Msg("rwa_optional_snapshot_save_failed")
+			return err
+		}
 	}
-	metrics.JobRowsAffectedTotal.WithLabelValues("rwa", string(prices.SourceEquiteez), "all").
-		Add(float64(n))
-	j.logger.Info().
-		Int("pairs", len(pairs)).
-		Int("points", len(points)).
-		Int64("rows_affected", n).
-		Msg("rwa_collected")
 	return nil
 }
 

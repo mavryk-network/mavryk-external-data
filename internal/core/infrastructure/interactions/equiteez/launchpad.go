@@ -83,8 +83,42 @@ func (f FlexTime) Value() time.Time {
 
 // LaunchTokenRef is the nested `token { address token_id }` reference.
 type LaunchTokenRef struct {
-	Address string `json:"address"`
-	TokenID int    `json:"token_id"`
+	Address      string `json:"address"`
+	TokenID      int    `json:"token_id"`
+	TokenIDKnown bool   `json:"-"`
+}
+
+func (t *LaunchTokenRef) UnmarshalJSON(b []byte) error {
+	type wire LaunchTokenRef
+	if err := json.Unmarshal(b, (*wire)(t)); err != nil {
+		return err
+	}
+	t.TokenIDKnown = tokenIDPresent(b)
+	return nil
+}
+
+// PricingQuoteTokenID verifies the supported token-0 payment identity without
+// changing the legacy BaseTierPrice selection. Multi-currency ladders cannot
+// compare raw amounts and are unavailable on the stricter nested pricing contract.
+func (r LaunchRow) PricingQuoteTokenID(currency, address string) *int {
+	if r.Token == nil || !r.Token.TokenIDKnown || r.Token.TokenID != 0 || address == "" {
+		return nil
+	}
+	found := false
+	for _, option := range r.SaleOptions {
+		for _, p := range option.Payments {
+			if p.Token == nil || !p.Token.TokenIDKnown || p.Token.TokenID != 0 ||
+				p.Token.Address != address || !strings.EqualFold(strings.TrimSpace(p.Name), currency) {
+				return nil
+			}
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	zero := 0
+	return &zero
 }
 
 // LaunchPaymentRow is one accepted payment currency for a sale option. Name is

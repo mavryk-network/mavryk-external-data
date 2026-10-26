@@ -142,7 +142,7 @@ func TestRWA_NumericPath_400(t *testing.T) {
 	}
 }
 
-func TestRWA_LatestNoData_404(t *testing.T) {
+func TestRWA_LatestNoData_NullLegacyPrice(t *testing.T) {
 	deps := RWAPriceDeps{
 		Service:       &stubQueryService{}, // empty points
 		Lookup:        &stubLookup{pair: prices.RWAPair{ID: 42, QuoteSymbol: "USDT"}},
@@ -152,8 +152,15 @@ func TestRWA_LatestNoData_404(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/mars1-usdt/latest", nil))
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row["price"] != nil || row["timestamp"] != nil || row["pricing"] == nil {
+		t.Fatalf("expected nullable legacy fields and pricing, got %s", w.Body.String())
 	}
 }
 
@@ -640,7 +647,7 @@ func TestRWA_List_EmptyResult_200(t *testing.T) {
 	r := newRWAEngine(t, deps)
 
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/rwa/tst-usdt?from=2026-01-01T00:00:00Z", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}

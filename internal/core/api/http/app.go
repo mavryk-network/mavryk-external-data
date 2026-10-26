@@ -31,6 +31,7 @@ type AppDeps struct {
 	RWAPriceQuery   apiprices.QueryService
 	TokenPriceRepo  *repositories.TokenPriceRepository
 	RWAPriceRepo    *repositories.RWAPriceRepository // for chart endpoints
+	RWASnapshots    *repositories.RWAMarketSnapshotRepository
 	// TokenChangeRepo / RWAChangeRepo back the /change endpoints.
 	TokenChangeRepo *repositories.TokenChangeRepository
 	RWAChangeRepo   *repositories.RWAChangeRepository
@@ -168,6 +169,13 @@ func launchResolver(r *repositories.LaunchRepository) handlers.RWALaunchResolver
 	return r
 }
 
+func snapshotReader(r *repositories.RWAMarketSnapshotRepository) apiprices.RWASnapshotReader {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
 func configureGinMode(cfg *config.Config) {
 	switch cfg.Server.EffectiveGinMode() {
 	case "debug":
@@ -263,6 +271,10 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		DefaultLimit:  100,
 	}
 	rwaDeps := handlers.RWAPriceDeps{
+		Pricing: &apiprices.RWAPricingService{
+			Snapshots: snapshotReader(deps.RWASnapshots), Converter: deps.FXConverter,
+			Network: cfg.RWA.PricingNetwork(), MaxAge: time.Duration(cfg.RWA.PricingMaxAgeSeconds()) * time.Second,
+		},
 		Service:         deps.RWAPriceQuery,
 		Converter:       deps.FXConverter,
 		Lookup:          deps.Lookup,

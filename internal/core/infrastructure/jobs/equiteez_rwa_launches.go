@@ -73,6 +73,10 @@ func buildLaunch(rows []equiteez.LaunchRow, baseSymbol string, now time.Time) (p
 	if !priceOK {
 		return prices.RWALaunch{}, false
 	}
+	var pricingQuoteTokenID *int
+	if known {
+		pricingQuoteTokenID = row.PricingQuoteTokenID(quoteSymbol, quoteAddr)
+	}
 
 	tokenID := 0
 	addr := ""
@@ -82,24 +86,25 @@ func buildLaunch(rows []equiteez.LaunchRow, baseSymbol string, now time.Time) (p
 	}
 
 	return prices.RWALaunch{
-		Source:          prices.SourceEquiteez,
-		TokenAddr:       addr,
-		TokenID:         tokenID,
-		LaunchID:        row.ID,
-		Name:            row.Name,
-		Status:          prices.LaunchStatusString(row.Status),
-		Active:          prices.LaunchActive(sel[idx], now),
-		BaseSymbol:      strings.ToLower(strings.TrimSpace(baseSymbol)),
-		QuoteSymbol:     quoteSymbol,
-		QuoteAddr:       quoteAddr,
-		Price:           price,
-		TotalBought:     decimalOrZero(row.TotalBought.String()),
-		MaxAmountCap:    decimalOrZero(row.MaxAmountCap.String()),
-		ProgressPercent: prices.ProgressPercent(row.TotalBought.String(), row.MaxAmountCap.String()),
-		SaleStart:       row.SaleStart.Ptr(),
-		SaleEnd:         row.SaleEnd.Ptr(),
-		SaleClosed:      row.SaleClosed.Ptr(),
-		Enabled:         true,
+		Source:              prices.SourceEquiteez,
+		TokenAddr:           addr,
+		TokenID:             tokenID,
+		LaunchID:            row.ID,
+		Name:                row.Name,
+		Status:              prices.LaunchStatusString(row.Status),
+		Active:              prices.LaunchActive(sel[idx], now),
+		BaseSymbol:          strings.ToLower(strings.TrimSpace(baseSymbol)),
+		QuoteSymbol:         quoteSymbol,
+		QuoteAddr:           quoteAddr,
+		PricingQuoteTokenID: pricingQuoteTokenID,
+		Price:               price,
+		TotalBought:         decimalOrZero(row.TotalBought.String()),
+		MaxAmountCap:        decimalOrZero(row.MaxAmountCap.String()),
+		ProgressPercent:     prices.ProgressPercent(row.TotalBought.String(), row.MaxAmountCap.String()),
+		SaleStart:           row.SaleStart.Ptr(),
+		SaleEnd:             row.SaleEnd.Ptr(),
+		SaleClosed:          row.SaleClosed.Ptr(),
+		Enabled:             true,
 	}, true
 }
 

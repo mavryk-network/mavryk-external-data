@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	stderrors "errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 // maxSymbolLen caps `{base}-{quote}` URL length defensively.
 const maxSymbolLen = 64
 
-// lastSide is the only orderbook side surfaced on the read-side.
+// lastSide is the legacy price series surfaced on the read-side.
 const lastSide = "last"
 
 // PairLookup resolves a `{base}-{quote}` symbol to its canonical RWAPair.
@@ -38,6 +39,7 @@ type RWAStatsReader interface {
 
 // RWAPriceDeps wires the RWA-side dependencies.
 type RWAPriceDeps struct {
+	Pricing       *apiprices.RWAPricingService
 	Service       apiprices.QueryService
 	Lookup        PairLookup               // required: resolves `{base}-{quote}` -> RWAPair
 	Converter     apiprices.PriceConverter // optional; when nil, `?in=` returns 400
@@ -164,13 +166,19 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 		}, nil
 	}
 	action := func(ctx context.Context, req request) ([]rwaPriceDTO, error) {
+		var err error
 		if !req.HasPair {
 			// Primary-only asset: a window has genuinely no observations, so
 			// return [] rather than inventing a point at "now".
 			if req.Window {
 				return []rwaPriceDTO{}, nil
 			}
-			return []rwaPriceDTO{d.launchPriceDTO(ctx, *req.Launch, req.InTargets)}, nil
+			row := d.launchPriceDTO(ctx, *req.Launch, req.InTargets)
+			row.Pricing, err = d.currentPricing(ctx, rwaTarget{Launch: req.Launch})
+			if err != nil {
+				return nil, err
+			}
+			return []rwaPriceDTO{row}, nil
 		}
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
@@ -191,6 +199,24 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 			}
 			out = append(out, row)
 		}
+		if req.Window {
+			history, err := d.pricingService().History(ctx, req.Pair, points, slices.Contains(req.InTargets, prices.Currency("usd")))
+			if err != nil {
+				logPricingReadError(ctx, err)
+			} else {
+				for i := range out {
+					out[i].Pricing = history[i]
+				}
+			}
+		} else {
+			if len(out) == 0 {
+				out = append(out, emptyLegacyPrice(req.Pair))
+			}
+			out[0].Pricing, err = d.currentPricing(ctx, rwaTarget{Pair: req.Pair, HasPair: true, Launch: req.Launch})
+			if err != nil {
+				return nil, err
+			}
+		}
 		// The issuance facet is asset-level metadata, not per-observation: only
 		// latest mode ("the asset right now") carries it.
 		if req.Launch != nil && !req.Window && len(out) > 0 {
@@ -203,8 +229,8 @@ func (d RWAPriceDeps) ListBySymbol() gin.HandlerFunc {
 
 // LatestBySymbol — GET /v1/rwa/:symbol/latest
 //
-// One RWAPrice object, same shape as an element of ListBySymbol's array. 404
-// when the pair has no `last` row yet.
+// One RWAPrice object, same shape as an element of ListBySymbol's array.
+// A known pair before its first trade has null legacy price/time plus pricing.
 func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	type request struct {
 		Pair      prices.RWAPair
@@ -239,7 +265,10 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 	action := func(ctx context.Context, req request) (rwaPriceDTO, error) {
 		if !req.HasPair {
 			// Fixed sale price — no ath / price_one_year_ago (no trade history).
-			return d.launchPriceDTO(ctx, *req.Launch, req.InTargets), nil
+			row := d.launchPriceDTO(ctx, *req.Launch, req.InTargets)
+			var err error
+			row.Pricing, err = d.currentPricing(ctx, rwaTarget{Launch: req.Launch})
+			return row, err
 		}
 		points, err := d.Service.Query(ctx, req.Query)
 		if err != nil {
@@ -247,7 +276,12 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 		}
 		picked, ok := pickLatestLast(points)
 		if !ok {
-			return rwaPriceDTO{}, coreerrors.NotFound("No prices for pair")
+			row := emptyLegacyPrice(req.Pair)
+			row.Pricing, err = d.currentPricing(ctx, rwaTarget{Pair: req.Pair, HasPair: true, Launch: req.Launch})
+			if req.Launch != nil {
+				row.Issuance = issuanceBlock(*req.Launch)
+			}
+			return row, err
 		}
 		quoteToken, quoteResolved := promoteQuoteToken(req.Pair.QuoteSymbol)
 		dto := rwaPriceDTO{
@@ -265,7 +299,8 @@ func (d RWAPriceDeps) LatestBySymbol() gin.HandlerFunc {
 		if req.Launch != nil {
 			dto.Issuance = issuanceBlock(*req.Launch)
 		}
-		return dto, nil
+		dto.Pricing, err = d.currentPricing(ctx, rwaTarget{Pair: req.Pair, HasPair: true, Launch: req.Launch})
+		return dto, err
 	}
 	return common.Wrap(bind, action)
 }
@@ -310,9 +345,11 @@ func (d RWAPriceDeps) enrichLatest(
 // list and latest endpoints. Converted currencies inline as flat top-level keys
 // via custom MarshalJSON; 3-letter ISO codes never collide with reserved keys.
 type rwaPriceDTO struct {
-	Timestamp   string
-	NativeQuote string
-	Price       num6
+	Pricing          *apiprices.RWAPricing
+	PriceUnavailable bool // only a known pair with no legacy last observation
+	Timestamp        string
+	NativeQuote      string
+	Price            num6
 	// Market discriminates a live secondary quote from a fixed primary sale price.
 	Market string
 	// Issuance is present only for a primary-market asset.
@@ -331,6 +368,10 @@ func (d rwaPriceDTO) MarshalJSON() ([]byte, error) {
 	out["timestamp"] = d.Timestamp
 	out["native_quote"] = d.NativeQuote
 	out["price"] = d.Price
+	if d.PriceUnavailable {
+		out["timestamp"], out["price"] = nil, nil
+	}
+	out["pricing"] = d.Pricing
 	if d.Market != "" {
 		out["market"] = d.Market
 	}

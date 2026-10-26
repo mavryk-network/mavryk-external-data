@@ -56,9 +56,10 @@ type RWALaunch struct {
 	// QuoteAddr is the on-chain contract of the quote (payment) token, taken
 	// from the same sale-option payment that sets Price — so price, symbol and
 	// address always describe one payment row. Empty until synced.
-	QuoteAddr   string
-	BaseSymbol  string
-	QuoteSymbol string
+	QuoteAddr           string
+	PricingQuoteTokenID *int // nil until a single token-0 payment identity was verified
+	BaseSymbol          string
+	QuoteSymbol         string
 
 	Price           decimal.Decimal // base-tier price per token, in QuoteSymbol units
 	TotalBought     decimal.Decimal // raw nat

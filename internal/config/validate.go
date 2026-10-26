@@ -319,6 +319,12 @@ func (c *Config) validateTickers() error {
 }
 
 func (c *Config) validateRWA() error {
+	if c.RWA.PricingNetwork() != "basenet" {
+		return fmt.Errorf("rwa.network: pricing currently supports only basenet")
+	}
+	if c.RWA.QuoteMaxAgeSeconds < 0 {
+		return fmt.Errorf("rwa.quote_max_age_seconds must be >= 0")
+	}
 	if c.RWA.IntervalSeconds < 0 {
 		return fmt.Errorf("rwa.interval_seconds must be >= 0")
 	}
