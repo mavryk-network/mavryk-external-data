@@ -3,7 +3,7 @@ module quotes
 go 1.26.0
 
 // Keep local builds on the patched toolchain used by CI and Docker.
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.8.0
