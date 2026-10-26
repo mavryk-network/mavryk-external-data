@@ -73,8 +73,25 @@ func FlexibleFloatFromDecimal(d decimal.Decimal) FlexibleFloat { return Flexible
 
 // TokenQuoteToken is the nested token row under orderbook_currency.token.
 type TokenQuoteToken struct {
-	Address string `json:"address"`
-	TokenID int    `json:"token_id"`
+	Address      string `json:"address"`
+	TokenID      int    `json:"token_id"`
+	TokenIDKnown bool   `json:"-"`
+}
+
+func (t *TokenQuoteToken) UnmarshalJSON(b []byte) error {
+	type wire TokenQuoteToken
+	if err := json.Unmarshal(b, (*wire)(t)); err != nil {
+		return err
+	}
+	t.TokenIDKnown = tokenIDPresent(b)
+	return nil
+}
+
+func tokenIDPresent(b []byte) bool {
+	var identity struct {
+		TokenID *int `json:"token_id"`
+	}
+	return json.Unmarshal(b, &identity) == nil && identity.TokenID != nil
 }
 
 // OrderbookCurrency is one Hasura `orderbook_currency` row.
@@ -83,19 +100,37 @@ type OrderbookCurrency struct {
 	CurrencyName string           `json:"currency_name"`
 }
 
+// PricingLimitOrder is a bounded live-limit result from the same GraphQL
+// observation as the book. Stored contract best prices may point to expired or
+// protected market orders, so the new midpoint never uses those fields.
+type PricingLimitOrder struct {
+	OrderType int           `json:"order_type"`
+	Price     FlexibleFloat `json:"price_per_rwa_token"`
+	Remaining FlexibleFloat `json:"unfulfilled_amount"`
+	ExpiresAt *time.Time    `json:"order_expiry"`
+	Fulfilled bool          `json:"is_fulfilled"`
+	Canceled  bool          `json:"is_canceled"`
+	Expired   bool          `json:"is_expired"`
+	Refunded  bool          `json:"is_refunded"`
+	Market    bool          `json:"is_market_order"`
+}
+
 // EquiteezOrderbook is one indexer `orderbook` row nested under
 // `token.orderbooks`. ID is cached on `rwa_pairs.equiteez_orderbook_id` so the
 // backfill can join `orderbook_order` without re-resolving the address.
 type EquiteezOrderbook struct {
-	ID               int                 `json:"id"`
-	Address          string              `json:"address"`
-	InAllowlist      bool                `json:"in_allowlist"`
-	LastMatchedPrice FlexibleFloat       `json:"last_matched_price"`
-	LowestSellPrice  FlexibleFloat       `json:"lowest_sell_price"`
-	HighestBuyPrice  FlexibleFloat       `json:"highest_buy_price"`
-	SellOrderFee     FlexibleFloat       `json:"sell_order_fee"`
-	BuyOrderFee      FlexibleFloat       `json:"buy_order_fee"`
-	Currencies       []OrderbookCurrency `json:"currencies"`
+	ID                        int                 `json:"id"`
+	Address                   string              `json:"address"`
+	InAllowlist               bool                `json:"in_allowlist"`
+	LastMatchedPrice          FlexibleFloat       `json:"last_matched_price"`
+	LastMatchedPriceTimestamp string              `json:"last_matched_price_timestamp"`
+	LowestSellPrice           FlexibleFloat       `json:"lowest_sell_price"`
+	HighestBuyPrice           FlexibleFloat       `json:"highest_buy_price"`
+	SellOrderFee              FlexibleFloat       `json:"sell_order_fee"`
+	BuyOrderFee               FlexibleFloat       `json:"buy_order_fee"`
+	Currencies                []OrderbookCurrency `json:"currencies"`
+	PricingBids               []PricingLimitOrder `json:"pricing_bids"`
+	PricingAsks               []PricingLimitOrder `json:"pricing_asks"`
 }
 
 // QuoteSymbol returns the currency name from the first `currencies` row, or "".
@@ -119,11 +154,21 @@ func (o *EquiteezOrderbook) QuoteTokenAddress() string {
 type TokenWithOrderbooks struct {
 	Address       string              `json:"address"`
 	TokenID       int                 `json:"token_id"`
+	TokenIDKnown  bool                `json:"-"`
 	InAllowlist   bool                `json:"in_allowlist"`
 	TokenMetadata json.RawMessage     `json:"token_metadata"`
 	TokenStandard *int                `json:"token_standard,omitempty"`
 	Metadata      json.RawMessage     `json:"metadata,omitempty"`
 	Orderbooks    []EquiteezOrderbook `json:"orderbooks"`
+}
+
+func (t *TokenWithOrderbooks) UnmarshalJSON(b []byte) error {
+	type wire TokenWithOrderbooks
+	if err := json.Unmarshal(b, (*wire)(t)); err != nil {
+		return err
+	}
+	t.TokenIDKnown = tokenIDPresent(b)
+	return nil
 }
 
 // OrderCursor is the keyset position of a forward walk over filled orders: the

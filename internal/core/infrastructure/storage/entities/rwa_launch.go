@@ -25,13 +25,14 @@ type RWALaunchEntity struct {
 	Status   string `gorm:"column:status;not null;default:''"`
 	Active   bool   `gorm:"column:active;not null;default:false"`
 
-	BaseSymbol      string              `gorm:"column:base_symbol;not null;default:''"`
-	QuoteSymbol     string              `gorm:"column:quote_symbol;not null;default:''"`
-	QuoteAddr       *string             `gorm:"column:quote_addr"`
-	Price           decimal.NullDecimal `gorm:"column:price"`
-	TotalBought     decimal.NullDecimal `gorm:"column:total_bought"`
-	MaxAmountCap    decimal.NullDecimal `gorm:"column:max_amount_cap"`
-	ProgressPercent float64             `gorm:"column:progress_percent;not null;default:0"`
+	BaseSymbol          string              `gorm:"column:base_symbol;not null;default:''"`
+	QuoteSymbol         string              `gorm:"column:quote_symbol;not null;default:''"`
+	QuoteAddr           *string             `gorm:"column:quote_addr"`
+	PricingQuoteTokenID *int                `gorm:"column:pricing_quote_token_id"`
+	Price               decimal.NullDecimal `gorm:"column:price"`
+	TotalBought         decimal.NullDecimal `gorm:"column:total_bought"`
+	MaxAmountCap        decimal.NullDecimal `gorm:"column:max_amount_cap"`
+	ProgressPercent     float64             `gorm:"column:progress_percent;not null;default:0"`
 
 	SaleStart  *time.Time `gorm:"column:sale_start"`
 	SaleEnd    *time.Time `gorm:"column:sale_end"`

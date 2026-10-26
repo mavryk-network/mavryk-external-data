@@ -339,6 +339,16 @@ func overrideWithEnv(config *Config) error {
 		}
 		config.RWA.Enabled = val
 	}
+	if v := os.Getenv("RWA_NETWORK"); v != "" {
+		config.RWA.Network = v
+	}
+	if v := os.Getenv("RWA_QUOTE_MAX_AGE_SECONDS"); v != "" {
+		val, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("RWA_QUOTE_MAX_AGE_SECONDS: invalid int %q: %w", v, err)
+		}
+		config.RWA.QuoteMaxAgeSeconds = val
+	}
 	if v := os.Getenv("RWA_INTERVAL_SECONDS"); v != "" {
 		val, err := strconv.Atoi(v)
 		if err != nil {

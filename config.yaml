@@ -120,6 +120,9 @@ backfill:
 
 # RWA orderbook collector. Enable once rwa_pairs has at least one row.
 rwa:
+  # /pricing supports the existing basenet token-0 RWA catalog only.
+  network: basenet
+  quote_max_age_seconds: 180
   enabled: false
   interval_seconds: 60
   # How often the Equiteez allowlist is re-read into rwa_pairs. Bounds how long

@@ -802,6 +802,56 @@ paths:
                 code: OHLCV_NOT_IMPLEMENTED
                 message: "OHLCV is not yet available;"
 
+  /v1/rwa/{symbol}/pricing:
+    get:
+      tags: [prices-rwa]
+      operationId: getRWAPricing
+      summary: Distinct midpoint, executed-sale and primary list prices
+      description: |
+        Additive pricing contract for the enabled basenet token-ID-0 catalog.
+        Existing `/latest`, history and candles keep their existing semantics.
+        Money is an exact decimal string; missing values are explicit nulls.
+        USD conversion is always attempted; no `in` parameter is required.
+
+        `market_price` is `(bid + ask) / 2` from the best active limit orders in
+        ONE complete current snapshot. Market-order protection prices, canceled,
+        refunded, fulfilled, expired and zero-remainder orders are excluded.
+        Its `valid_until` is capped by the earliest selected order deadline.
+        Empty, one-sided, crossed, expired or unverified books return no midpoint.
+        `last_sale.executed_at` comes from the contract's last matched timestamp,
+        never the polling time. Its USD conversion uses FX at-or-before execution.
+        An old trade can still be the last sale; expired observations carry a
+        historical sale with `status: stale`, and must not be treated as current.
+        Missing/stale FX leaves the native price available but `usd: null`.
+
+        `primary_issuance`, when present, is a separate `primary_list_price`;
+        it never substitutes for midpoint or an executed sale. It requires a
+        verified single token-0 payment identity, a fresh sync and an active sale.
+        Clients validate exact identity and EACH facet's `valid_until` on use,
+        including after caching. Generation checks and the configured observation
+        age bound freshness; they do not promise immediate reorg invalidation.
+
+        A known book before its first trade still returns 200. Missing catalog
+        symbols return 404, ambiguous symbols 409. Uses the existing RWA auth.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema: { type: string, example: mars1-usdt }
+      responses:
+        '200':
+          description: Pricing facets with independent availability and expiry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RWAPricing' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /v1/rwa/{symbol}/latest:
     get:
       tags: [prices-rwa]
@@ -1427,6 +1477,72 @@ components:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   schemas:
+    RWAPricingQuote:
+      type: object
+      required: [method, status, reason, price, usd, native_quote, as_of, valid_until, fx_status, fx_at]
+      properties:
+        method: { type: string, enum: [orderbook_mid, last_trade, primary_list_price] }
+        status: { type: string, enum: [available, unavailable, stale] }
+        reason:
+          type: string
+          nullable: true
+          description: Machine-readable unavailability reason; null on success.
+          example: one_sided_orderbook
+        price: { type: string, nullable: true, example: '110.000001' }
+        usd: { type: string, nullable: true, example: '109.9890009999' }
+        native_quote: { type: string, example: usdt }
+        as_of: { type: string, format: date-time, nullable: true }
+        valid_until: { type: string, format: date-time, nullable: true }
+        fx_status: { type: string, enum: [available, missing, stale, unsupported, not_applicable] }
+        fx_at: { type: string, format: date-time, nullable: true }
+    RWAPricing:
+      type: object
+      required: [symbol, network, source, token_address, token_id, quote_address, quote_token_id, orderbook_address, observed_at, valid_until, market_price, last_sale, primary_issuance]
+      properties:
+        symbol: { type: string, example: mars1-usdt }
+        network: { type: string, enum: [basenet] }
+        source: { type: string, enum: [equiteez] }
+        token_address: { type: string }
+        token_id: { type: string, nullable: true, example: '0' }
+        quote_address: { type: string }
+        quote_token_id: { type: string, nullable: true, example: '0' }
+        orderbook_address: { type: string, nullable: true }
+        observed_at: { type: string, format: date-time, nullable: true }
+        valid_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Observation expiry; each facet also has its own expiry.
+        market_price: { $ref: '#/components/schemas/RWAPricingQuote' }
+        last_sale:
+          allOf:
+            - $ref: '#/components/schemas/RWAPricingQuote'
+            - type: object
+              required: [executed_at]
+              properties:
+                executed_at: { type: string, format: date-time, nullable: true }
+        primary_issuance:
+          type: object
+          nullable: true
+          required: [method, status, reason, price, usd, native_quote, as_of, valid_until, fx_status, fx_at, launch_id, launch_status, active]
+          properties:
+            method: { type: string, enum: [orderbook_mid, last_trade, primary_list_price] }
+            status: { type: string, enum: [available, unavailable, stale] }
+            reason:
+              type: string
+              nullable: true
+              description: Machine-readable unavailability reason; null on success.
+              example: one_sided_orderbook
+            price: { type: string, nullable: true, example: '110.000001' }
+            usd: { type: string, nullable: true, example: '109.9890009999' }
+            native_quote: { type: string, example: usdt }
+            as_of: { type: string, format: date-time, nullable: true }
+            valid_until: { type: string, format: date-time, nullable: true }
+            fx_status: { type: string, enum: [available, missing, stale, unsupported, not_applicable] }
+            fx_at: { type: string, format: date-time, nullable: true }
+            launch_id: { type: integer }
+            launch_status: { type: string }
+            active: { type: boolean }
     LegacyErrorResponse:
       type: object
       description: |

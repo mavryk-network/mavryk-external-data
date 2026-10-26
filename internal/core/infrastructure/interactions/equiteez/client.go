@@ -128,7 +128,7 @@ func (c *Client) GetCatalogTokens(ctx context.Context, addresses []string) ([]To
 // GetTokensWithOrderbooks queries tokens with orderbook data for multiple addresses.
 func (c *Client) GetTokensWithOrderbooks(ctx context.Context, addresses []string) ([]TokenWithOrderbooks, error) {
 	query := `
-		query tokensWithOrderbooks($addresses: [String!]) {
+		query tokensWithOrderbooks($addresses: [String!], $now: timestamptz!) {
 			token(
 				where: { 
 					orderbooks: { id: { _is_null: false } },
@@ -138,11 +138,48 @@ func (c *Client) GetTokensWithOrderbooks(ctx context.Context, addresses []string
 				orderbooks {
 					address
 					last_matched_price
+					last_matched_price_timestamp
+					pricing_bids: orders(
+						where: {
+							order_type: { _eq: 0 }
+							unfulfilled_amount: { _gt: "0" }
+							price_per_rwa_token: { _gt: "0" }
+							is_fulfilled: { _eq: false }
+							is_canceled: { _eq: false }
+							is_expired: { _eq: false }
+							is_refunded: { _eq: false }
+							is_market_order: { _eq: false }
+							_or: [{ order_expiry: { _is_null: true } }, { order_expiry: { _gt: $now } }]
+						}
+						order_by: [{ price_per_rwa_token: desc }, { id: asc }]
+						limit: 1
+					) {
+						order_type price_per_rwa_token unfulfilled_amount order_expiry
+						is_fulfilled is_canceled is_expired is_refunded is_market_order
+					}
+					pricing_asks: orders(
+						where: {
+							order_type: { _eq: 1 }
+							unfulfilled_amount: { _gt: "0" }
+							price_per_rwa_token: { _gt: "0" }
+							is_fulfilled: { _eq: false }
+							is_canceled: { _eq: false }
+							is_expired: { _eq: false }
+							is_refunded: { _eq: false }
+							is_market_order: { _eq: false }
+							_or: [{ order_expiry: { _is_null: true } }, { order_expiry: { _gt: $now } }]
+						}
+						order_by: [{ price_per_rwa_token: asc }, { id: asc }]
+						limit: 1
+					) {
+						order_type price_per_rwa_token unfulfilled_amount order_expiry
+						is_fulfilled is_canceled is_expired is_refunded is_market_order
+					}
 					lowest_sell_price
 					highest_buy_price
 					sell_order_fee
 					buy_order_fee
-					currencies(limit: 1, where: { token: { address: { _is_null: false } } }) {
+					currencies {
 						token {
 							address
 							token_id
@@ -161,6 +198,7 @@ func (c *Client) GetTokensWithOrderbooks(ctx context.Context, addresses []string
 
 	variables := map[string]interface{}{
 		"addresses": addresses,
+		"now":       time.Now().UTC().Format(time.RFC3339Nano),
 	}
 
 	data, err := graphql.Execute(ctx, c.httpClient, serviceName, c.indexerURL, query, variables, nil)

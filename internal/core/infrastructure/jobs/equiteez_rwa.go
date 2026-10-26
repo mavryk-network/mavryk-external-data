@@ -27,15 +27,23 @@ import (
 // it out of polling; pairs whose orderbook is removed from Equiteez allowlist
 // stop collection when CRM membership is reconciled.
 type EquiteezRWAJob struct {
-	cfg    *config.Config
-	repo   apiprices.Repository
-	lookup *repositories.LookupRepository
-	client *equiteez.Client
-	logger *zerolog.Logger
+	snapshots marketSnapshotWriter
+	cfg       *config.Config
+	repo      apiprices.Repository
+	lookup    *repositories.LookupRepository
+	client    *equiteez.Client
+	logger    *zerolog.Logger
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+}
+
+// WithSnapshots adds the current-state writer without changing the historical
+// repository or its cache invalidation contract.
+func (j *EquiteezRWAJob) WithSnapshots(writer marketSnapshotWriter) *EquiteezRWAJob {
+	j.snapshots = writer
+	return j
 }
 
 // NewEquiteezRWAJob wires the collector. Lookups are refreshed each tick.
@@ -177,6 +185,12 @@ func (j *EquiteezRWAJob) collectOnce(ctx context.Context, pairs []prices.RWAPair
 		return err
 	}
 	now := time.Now().UTC()
+	if j.snapshots != nil {
+		rows := buildMarketSnapshots(tokens, pairs, pairDecimals, j.cfg.RWA.PricingNetwork(), generation, now)
+		if err := j.snapshots.SaveSnapshots(ctx, rows); err != nil {
+			return err
+		}
+	}
 	points := buildPointsFromOrderbooks(tokens, byTokenAddr, pairDecimals, now)
 	if len(points) == 0 {
 		j.logger.Debug().Msg("rwa_no_points_collected")

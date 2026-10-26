@@ -38,6 +38,7 @@ type RWAStatsReader interface {
 
 // RWAPriceDeps wires the RWA-side dependencies.
 type RWAPriceDeps struct {
+	Pricing       *apiprices.RWAPricingService
 	Service       apiprices.QueryService
 	Lookup        PairLookup               // required: resolves `{base}-{quote}` -> RWAPair
 	Converter     apiprices.PriceConverter // optional; when nil, `?in=` returns 400

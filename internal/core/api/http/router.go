@@ -107,6 +107,7 @@ func SetupRoutes(engine *gin.Engine, deps RouterDeps) {
 			rwa.GET("", deps.RWAOverview.List())
 			rwa.GET("/:symbol", deps.RWAPrice.ListBySymbol())
 			rwa.GET("/:symbol/latest", deps.RWAPrice.LatestBySymbol())
+			rwa.GET("/:symbol/pricing", deps.RWAPrice.PricingBySymbol())
 			rwa.GET("/:symbol/change", deps.Change.ChangeRWA())
 			// RWA charts (see ADR-0015). /ohlcv is the same 501 stub
 			// shared with the FA side — single source of truth.

@@ -82,6 +82,7 @@ func run() int {
 	batch := storage.BatchSize(cfg)
 	tokenRepo := repositories.NewTokenPriceRepository(db.DB).WithBatchSize(batch)
 	rwaRepo := repositories.NewRWAPriceRepository(db.DB).WithBatchSize(batch)
+	rwaSnapshots := repositories.NewRWAMarketSnapshotRepository(db.DB)
 	stateRepo := repositories.NewBackfillStateRepository(db.DB)
 	// Change repos for /change endpoints. Read-only; share the GORM handle.
 	tokenChangeRepo := repositories.NewTokenChangeRepository(db.DB)
@@ -121,6 +122,7 @@ func run() int {
 		RWAPriceQuery:   rwaAppRepo,
 		TokenPriceRepo:  tokenRepo,
 		RWAPriceRepo:    rwaRepo,
+		RWASnapshots:    rwaSnapshots,
 		TokenChangeRepo: tokenChangeRepo,
 		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
@@ -136,7 +138,7 @@ func run() int {
 
 	liveJob := jobs.NewCoinGeckoLiveJob(cfg, tokenAppRepo, tokenRepo, logger)
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
-	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger)
+	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger).WithSnapshots(rwaSnapshots)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
 	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, logger)
 	tickersJob := jobs.NewCoinGeckoTickersJob(cfg, tickerAppRepo, logger)
