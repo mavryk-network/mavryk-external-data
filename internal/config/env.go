@@ -11,6 +11,29 @@ import (
 
 //nolint:gocyclo // Many independent env key bindings; one place keeps wiring obvious.
 func overrideWithEnv(config *Config) error {
+	if v := os.Getenv("RWA_SUPPLY_ENABLED"); v != "" {
+		if err := parseBoolInto(v, &config.RWASupply.Enabled); err != nil {
+			return fmt.Errorf("RWA_SUPPLY_ENABLED: %w", err)
+		}
+	}
+	if v := os.Getenv("RWA_SUPPLY_EXPECTED_CHAIN_ID"); v != "" {
+		config.RWASupply.ExpectedChainID = v
+	}
+	for _, entry := range []struct {
+		name string
+		dst  *int
+	}{
+		{"INTERVAL_SECONDS", &config.RWASupply.IntervalSeconds}, {"FRESH_SECONDS", &config.RWASupply.FreshSeconds}, {"INDEXER_LAG_SECONDS", &config.RWASupply.IndexerLagSeconds},
+		{"PRICE_FRESH_SECONDS", &config.RWASupply.PriceFreshSeconds}, {"PRIMARY_PRICE_FRESH_SECONDS", &config.RWASupply.PrimaryPriceFreshSeconds}, {"RETENTION_SECONDS", &config.RWASupply.RetentionSeconds},
+		{"TICK_TIMEOUT_SECONDS", &config.RWASupply.TickTimeoutSeconds}, {"TOKEN_TIMEOUT_SECONDS", &config.RWASupply.TokenTimeoutSeconds}, {"CONCURRENCY", &config.RWASupply.Concurrency},
+		{"BLOCK_LAG", &config.RWASupply.BlockLag}, {"PAGE_SIZE", &config.RWASupply.PageSize}, {"MAX_LAUNCHES", &config.RWASupply.MaxLaunches}, {"MAX_RESPONSE_BYTES", &config.RWASupply.MaxResponseBytes},
+	} {
+		if v := os.Getenv("RWA_SUPPLY_" + entry.name); v != "" {
+			if err := parseIntInto(v, entry.dst); err != nil {
+				return fmt.Errorf("RWA_SUPPLY_%s: %w", entry.name, err)
+			}
+		}
+	}
 	if v := os.Getenv("MVKT_INDEXER_URL"); v != "" {
 		config.MvKT.IndexerURL = strings.TrimRight(strings.TrimSpace(v), "/")
 	}

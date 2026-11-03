@@ -15,6 +15,7 @@ import (
 
 	"quotes/internal/config"
 	app "quotes/internal/core/application/prices"
+	"quotes/internal/core/infrastructure/interactions/equiteez"
 	"quotes/internal/core/infrastructure/interactions/mvkt"
 
 	"golang.org/x/sync/singleflight"
@@ -29,20 +30,24 @@ const (
 )
 
 const basenet = "basenet"
-const basenetAllowlistURL = "https://eqtz-admin.equiteez.com/equiteez-contract-allowlist-basenet.json"
 
 type History struct {
 	client       *mvkt.Client
-	allowlistURL string
+	allowlist    equiteez.AllowlistReader
 	mu           sync.Mutex
 	snapshot     *snapshot
 	loadErr      error
 	expires      time.Time
+	cacheVersion string
 	flight       singleflight.Group
 }
 
-func NewHistory(cfg config.MvKTConfig, api *config.APIConfig) *History {
-	return &History{client: mvkt.NewClient(cfg, api), allowlistURL: basenetAllowlistURL}
+func NewHistory(cfg config.MvKTConfig, api *config.APIConfig, readers ...equiteez.AllowlistReader) *History {
+	h := &History{client: mvkt.NewClient(cfg, api)}
+	if len(readers) > 0 {
+		h.allowlist = readers[0]
+	}
+	return h
 }
 
 type head struct {
@@ -103,6 +108,17 @@ type payment struct {
 }
 
 func (h *History) Terms(ctx context.Context, req app.PrimaryRequest) (app.PrimaryTerms, error) {
+	return h.terms(ctx, req, true)
+}
+
+// ListingTerms reads the recorded price at the end of a block. Eligibility to
+// buy is a separate policy; this is not an additional public primary mode.
+func (h *History) ListingTerms(ctx context.Context, req app.PrimaryRequest) (app.PrimaryTerms, error) {
+	req.Mode = app.PrimaryHoldings
+	return h.terms(ctx, req, false)
+}
+
+func (h *History) terms(ctx context.Context, req app.PrimaryRequest, requireSale bool) (app.PrimaryTerms, error) {
 	if !app.ValidPrimaryMode(req.Mode) {
 		return app.PrimaryTerms{}, app.PrimaryMissing("mode_unsupported")
 	}
@@ -119,7 +135,7 @@ func (h *History) Terms(ctx context.Context, req app.PrimaryRequest) (app.Primar
 	var candidates []app.PrimaryTerms
 	reason := "launch_missing"
 	for _, history := range s.histories {
-		terms, matches, err := h.at(history, req, s.head)
+		terms, matches, err := h.selectAt(history, req, s.head, requireSale)
 		if !matches {
 			continue
 		}
@@ -150,6 +166,10 @@ func (h *History) Terms(ctx context.Context, req app.PrimaryRequest) (app.Primar
 func signature(r *launchRecord) string { b, _ := json.Marshal(r); return string(b) }
 
 func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head) (app.PrimaryTerms, bool, error) {
+	return h.selectAt(history, req, covered, true)
+}
+
+func (h *History) selectAt(history launchHistory, req app.PrimaryRequest, covered head, requireSale bool) (app.PrimaryTerms, bool, error) {
 	index := -1
 	for i, u := range history.updates {
 		if u.Level < req.Level || req.Mode == app.PrimaryHoldings && u.Level == req.Level {
@@ -179,14 +199,14 @@ func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head
 			}
 		}
 	}
-	if r.Status != "ACTIVE" || r.IsPaused || r.SaleClosed != nil || !inside(req.At, r.SaleStart, r.SaleEnd) {
+	if requireSale && (r.Status != "ACTIVE" || r.IsPaused || r.SaleClosed != nil || !inside(req.At, r.SaleStart, r.SaleEnd)) {
 		return app.PrimaryTerms{}, true, app.PrimaryMissing("launch_inactive")
 	}
 	option, found := r.Options["Starter"]
 	if !found || len(r.Options) != 1 {
 		return app.PrimaryTerms{}, true, app.PrimaryMissing("sale_option_unsupported")
 	}
-	if option.IsPaused || !inside(req.At, option.SaleStart, option.SaleEnd) {
+	if requireSale && (option.IsPaused || !inside(req.At, option.SaleStart, option.SaleEnd)) {
 		return app.PrimaryTerms{}, true, app.PrimaryMissing("launch_inactive")
 	}
 	pay, found := option.Payments["USDT"]
@@ -208,6 +228,7 @@ func (h *History) at(history launchHistory, req app.PrimaryRequest, covered head
 		start--
 	}
 	terms := app.PrimaryTerms{
+		SaleStatus: r.Status, SalePaused: r.IsPaused || option.IsPaused,
 		Launchpad: history.launchpad, Launch: history.key, SaleOption: "Starter",
 		PaymentContract: pay.Currency.FA2.Contract, PaymentTokenID: pay.Currency.FA2.TokenID,
 		PaymentDecimals: decimals, Price: price,
@@ -243,25 +264,35 @@ func (h *History) readSnapshot(ctx context.Context) (*snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if h.allowlist == nil {
+		return nil, app.PrimaryMissing("allowlist_unavailable")
+	}
+	scope, err := h.allowlist.Snapshot(ctx)
+	if err != nil {
+		return nil, app.PrimaryMissing("allowlist_unavailable")
+	}
+	version := scope.Version
 	h.mu.Lock()
 	s, loadErr, expires := h.snapshot, h.loadErr, h.expires
+	cachedVersion := h.cacheVersion
 	h.mu.Unlock()
 	// A transfer ahead of pinned coverage waits for the next refresh rather
 	// than reloading the complete history separately for each row in a batch.
-	if time.Now().Before(expires) {
+	if time.Now().Before(expires) && cachedVersion == version {
 		return s, loadErr
 	}
-	ch := h.flight.DoChan("history", func() (any, error) {
+	ch := h.flight.DoChan("history:"+version, func() (any, error) {
 		// A caller can miss the fast path just before another fill completes.
 		h.mu.Lock()
 		s, loadErr, expires := h.snapshot, h.loadErr, h.expires
+		cachedVersion := h.cacheVersion
 		h.mu.Unlock()
-		if time.Now().Before(expires) {
+		if time.Now().Before(expires) && cachedVersion == version {
 			return s, loadErr
 		}
 		fillCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		s, err := h.load(fillCtx)
+		s, err := h.loadScope(fillCtx, scope)
 		ttl := historyCacheTTL
 		if err != nil {
 			// One outage must not trigger a full upstream retry per batch row.
@@ -269,6 +300,7 @@ func (h *History) readSnapshot(ctx context.Context) (*snapshot, error) {
 		}
 		h.mu.Lock()
 		h.snapshot, h.loadErr, h.expires = s, err, time.Now().Add(ttl)
+		h.cacheVersion = version
 		h.mu.Unlock()
 		return s, err
 	})
@@ -283,7 +315,7 @@ func (h *History) readSnapshot(ctx context.Context) (*snapshot, error) {
 	}
 }
 
-func (h *History) load(ctx context.Context) (*snapshot, error) {
+func (h *History) loadScope(ctx context.Context, scope equiteez.AllowlistSnapshot) (*snapshot, error) {
 	var current head
 	if err := h.get(ctx, "/head", &current); err != nil {
 		return nil, err
@@ -300,16 +332,16 @@ func (h *History) load(ctx context.Context) (*snapshot, error) {
 		return nil, app.PrimaryMissing("chain_coverage_missing")
 	}
 	s := &snapshot{head: pinned}
-	launchpads, err := h.launchpads(ctx)
-	if err != nil {
-		return nil, err
+	launchpads := scope.TreasuryLaunchpads
+	if len(launchpads) > historyRowLimit {
+		return nil, app.PrimaryMissing("history_budget_exceeded")
 	}
 	rows := 0
 	for _, launchpad := range launchpads {
 		var storage struct {
 			LaunchLedger int64 `json:"launchLedger"`
 		}
-		if err := h.get(ctx, "/contracts/"+launchpad+"/storage", &storage); err != nil {
+		if err := h.get(ctx, "/contracts/"+launchpad+"/storage?level="+strconv.FormatInt(pinned.Level, 10), &storage); err != nil {
 			return nil, err
 		}
 		if storage.LaunchLedger <= 0 {
@@ -421,26 +453,15 @@ func validContract(address string) bool {
 }
 
 func (h *History) launchpads(ctx context.Context) ([]string, error) {
-	var allowlist struct {
-		SchemaVersion int      `json:"schema_version"`
-		Launchpads    []string `json:"launchpads"`
-	}
-	if err := h.client.GetURL(ctx, h.allowlistURL, &allowlist); err != nil {
+	if h.allowlist == nil {
 		return nil, app.PrimaryMissing("allowlist_unavailable")
 	}
-	if allowlist.SchemaVersion != 1 || allowlist.Launchpads == nil || len(allowlist.Launchpads) > 4 {
+	scope, err := h.allowlist.Snapshot(ctx)
+	if err != nil {
 		return nil, app.PrimaryMissing("allowlist_unavailable")
 	}
-	seen := map[string]bool{}
-	addresses := []string{}
-	for _, address := range allowlist.Launchpads {
-		if !validContract(address) {
-			return nil, app.PrimaryMissing("allowlist_unavailable")
-		}
-		if !seen[address] {
-			addresses = append(addresses, address)
-			seen[address] = true
-		}
+	if len(scope.TreasuryLaunchpads) > historyRowLimit {
+		return nil, app.PrimaryMissing("history_budget_exceeded")
 	}
-	return addresses, nil
+	return scope.TreasuryLaunchpads, nil
 }

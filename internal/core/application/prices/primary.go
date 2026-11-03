@@ -33,6 +33,8 @@ type PrimaryRequest struct {
 }
 
 type PrimaryTerms struct {
+	SaleStatus      string     `json:"-"`
+	SalePaused      bool       `json:"-"`
 	Launchpad       string     `json:"launchpad"`
 	Launch          string     `json:"launch"`
 	SaleOption      string     `json:"sale_option"`

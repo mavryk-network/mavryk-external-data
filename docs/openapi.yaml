@@ -683,7 +683,7 @@ paths:
   /v1/rwa/{symbol}/series:
     get:
       tags: [charts-rwa]
-      summary: Line chart (close-price series) for an RWA pair
+      summary: Price or market capitalization line chart for an RWA asset
       description: |
         Returns one `(t, p)` point per bucket — `p` is the bucket's `last`
         close price in the pair's native quote currency (`pair.QuoteSymbol`).
@@ -698,10 +698,21 @@ paths:
         point with the close price converted at the close-of-bucket FX
         rate. Cap = 1 — multiple comma-separated values
         return 400.
+        With `metric=market_cap`, `p` is circulating supply times the recorded
+        last price (or primary list price when no secondary pair exists).
+        Native quote stays in `p`; `in=eur` adds a nullable numeric `eur` key.
+        `as_of` is the selected observation time; FX is fixed at that instant,
+        not the end of the bucket. `currency` is omitted for market cap.
+        Missing observations/conversions produce explicit gaps/nulls, not zero.
+        The default metric and `metric=price` preserve legacy price behavior.
       operationId: rwaSeries
       security:
         - bearerAuth: []
       parameters:
+        - name: metric
+          in: query
+          description: Select the chart metric; no network query is required.
+          schema: { type: string, enum: [price, market_cap], default: price }
         - $ref: "#/components/parameters/Symbol"
         - $ref: "#/components/parameters/Interval"
         - $ref: "#/components/parameters/From"
@@ -710,7 +721,7 @@ paths:
         - $ref: "#/components/parameters/ChartIn"
       responses:
         "200":
-          description: Series response. `currency` is the pair's native quote.
+          description: Shared series response; currency is retained for price and omitted for market_cap.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SeriesResponse" }
@@ -730,6 +741,98 @@ paths:
         "416": { $ref: "#/components/responses/RangeNotSatisfiable" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/rwa/{symbol}/valuation/latest:
+    get:
+      tags: [prices-rwa]
+      summary: Current supply, market cap and issued-total FDV
+      operationId: rwaValuationLatest
+      security:
+        - bearerAuth: []
+      description: |
+        Reads a persisted snapshot; no chain calls on the HTTP path. Monetary
+        values and revision are exact decimal strings. Each quality has its
+        own absolute freshness/expiry deadlines. Reads only degrade age and
+        never renew deadlines or revisions. Supply identity is network +
+        contract + token_id; the network comes from this service instance.
+        Secondary last takes precedence even when unavailable (no primary
+        fallback). Primary listing price does not imply purchase eligibility.
+        Unknown symbols return 404; known assets without observations return
+        200 with reason not_observed and null identity/revision/supply.
+      parameters:
+        - $ref: '#/components/parameters/Symbol'
+        - name: in
+          in: query
+          description: Comma-separated supported currencies, e.g. usd,eur. Only requested conversions are included.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Persisted valuation, or a known asset awaiting its first observation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RWAValuation'
+                  - $ref: '#/components/schemas/RWAValuationPending'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { description: Valuation storage is unavailable. }
+
+  /v1/rwa/valuations/latest:
+    get:
+      tags: [prices-rwa]
+      summary: Paginated current RWA valuations with partial success
+      operationId: rwaValuationsLatest
+      security:
+        - bearerAuth: []
+      description: |
+        One item per full supply identity, with all recorded quote valuations.
+        Keyset pagination preserves identity order. Errors list up to 100
+        recent per-contract collection failures, including unresolved token IDs;
+        these are diagnostics, not invented token_id=0 items. A removed asset
+        is retained as an invalidation so consumers can discard cached values.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - name: cursor
+          in: query
+          description: Opaque next_cursor from the previous response, bound to this instance's network.
+          schema: { type: string, maxLength: 1024 }
+        - name: in
+          in: query
+          description: Comma-separated supported currencies, e.g. usd,eur.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Page of valuations; absent next_cursor marks the end.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema_version, items, errors]
+                properties:
+                  schema_version: { type: integer, enum: [1] }
+                  items: { type: array, items: { $ref: '#/components/schemas/RWAValuation' } }
+                  next_cursor: { type: string }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required: [contract, reason, attempted_at]
+                      properties:
+                        contract: { type: string }
+                        reason: { type: string }
+                        attempted_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { description: Valuation storage is unavailable. }
 
   /v1/rwa/{symbol}/ohlc:
     get:
@@ -1873,7 +1976,7 @@ components:
     ChartEnvelope:
       type: object
       description: Top-level metadata block on every chart response.
-      required: [symbol, currency, kind, interval]
+      required: [symbol, kind, interval]
       properties:
         symbol:
           type: string
@@ -1886,7 +1989,8 @@ components:
           description: |
             Quote currency the series is denominated in. For FA charts —
             the requested `?currency=`. For RWA charts (when wired) — the
-            pair's native quote, or the requested `?in=` target.
+            pair's native quote for series. Market-cap series omits this field;
+            `in` adds a conversion and never replaces native `p`.
           example: usd
         kind:
           type: string
@@ -1909,10 +2013,27 @@ components:
           description: Bucket start time (RFC3339 UTC).
         p:
           type: number
-          description: Bucket close price at wire precision (6 dp at or above 0.01, else 6 significant digits).
+          nullable: true
+          description: Native price or market cap at close observation; zero is valid, null means unavailable. Wire precision is 6 dp at or above 0.01, else 6 significant digits.
+        as_of: { type: string, format: date-time, nullable: true, description: 'Actual closing observation time, distinct from bucket start t.' }
+        status: { type: string, enum: [fresh, stale, unavailable] }
+        reason: { type: string }
+        price_basis: { type: string, enum: [last, primary_list_price] }
+        conversion_quality:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/ValuationQuality' }
+        fx:
+          type: object
+          additionalProperties:
+            type: object
+            required: [rate, fx_at]
+            properties:
+              rate: { type: number }
+              fx_at: { type: string, format: date-time }
       additionalProperties:
         type: number
-        description: Converted close price for a `?in=` target currency.
+        nullable: true
+        description: Converted price/capitalization for the single requested in currency.
 
     ChartCandle:
       type: object
@@ -1959,14 +2080,165 @@ components:
     SeriesResponse:
       type: object
       description: Wire shape for `/series`.
-      required: [symbol, currency, kind, interval, points]
+      required: [symbol, kind, interval, points]
       allOf:
         - $ref: "#/components/schemas/ChartEnvelope"
         - type: object
           properties:
+            metric: { type: string, enum: [price, market_cap] }
+            identity: { $ref: '#/components/schemas/SupplyIdentity' }
+            available_from: { type: string, format: date-time, nullable: true }
+            coverage:
+              type: object
+              required: [from, to, complete]
+              properties:
+                from: { type: string, format: date-time }
+                to: { type: string, format: date-time }
+                through: { type: string, format: date-time, nullable: true }
+                complete: { type: boolean }
+            gaps:
+              type: array
+              items:
+                type: object
+                required: [from, to, reason]
+                properties:
+                  from: { type: string, format: date-time }
+                  to: { type: string, format: date-time }
+                  reason: { type: string }
             points:
               type: array
               items: { $ref: "#/components/schemas/SeriesPoint" }
+
+    SupplyIdentity:
+      type: object
+      required: [network, contract, token_id]
+      properties:
+        network: { type: string }
+        contract: { type: string }
+        token_id: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
+
+    ValuationQuality:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [fresh, stale, unavailable] }
+        reason: { type: string, description: Bounded diagnostic code. }
+        fresh_until: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    ValuationBlock:
+      type: object
+      required: [level, hash, timestamp]
+      properties:
+        level: { type: integer, format: int64 }
+        hash: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    ValuationDecimal:
+      type: string
+      nullable: true
+      description: Exact decimal string, never a floating point JSON number. Null means unavailable.
+      example: '4000000'
+
+    ValuationConversion:
+      type: object
+      required: [market_cap, fdv, rate, fx_at, market_cap_quality, fdv_quality]
+      properties:
+        market_cap: { $ref: '#/components/schemas/ValuationDecimal' }
+        fdv: { $ref: '#/components/schemas/ValuationDecimal' }
+        rate: { type: string, nullable: true }
+        fx_at: { type: string, format: date-time, nullable: true }
+        market_cap_quality: { $ref: '#/components/schemas/ValuationQuality' }
+        fdv_quality: { $ref: '#/components/schemas/ValuationQuality' }
+
+    RWAValuationPoint:
+      type: object
+      required: [symbol, quote, as_of, price_basis, price, price_at, price_quality, market_cap, fdv, market_cap_quality, fdv_quality]
+      properties:
+        symbol: { type: string }
+        quote:
+          type: object
+          required: [contract, token_id, symbol]
+          properties:
+            contract: { type: string }
+            token_id: { type: string }
+            symbol: { type: string }
+        pair_id: { type: integer, format: int64 }
+        orderbook: { type: string }
+        launchpad: { type: string }
+        sale_status: { type: string }
+        sale_paused: { type: boolean }
+        generation: { type: string }
+        as_of: { type: string, format: date-time }
+        price_at: { type: string, format: date-time }
+        last_trade_at: { type: string, format: date-time }
+        price_basis: { type: string, enum: [last, primary_list_price] }
+        price: { $ref: '#/components/schemas/ValuationDecimal' }
+        price_quality: { $ref: '#/components/schemas/ValuationQuality' }
+        market_cap: { $ref: '#/components/schemas/ValuationDecimal' }
+        fdv: { $ref: '#/components/schemas/ValuationDecimal' }
+        market_cap_quality: { $ref: '#/components/schemas/ValuationQuality' }
+        fdv_quality: { $ref: '#/components/schemas/ValuationQuality' }
+        conversions:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/ValuationConversion' }
+
+    RWAValuationSupply:
+      type: object
+      required: [identity, block, indexed_head, observed_at, metadata, total_quality, circulating_quality, scope_version, scope_fetched_at, scope_status, source, provenance]
+      properties:
+        policy_version: { type: string, example: treasury-excluded-v1 }
+        identity: { $ref: '#/components/schemas/SupplyIdentity' }
+        block: { $ref: '#/components/schemas/ValuationBlock' }
+        indexed_head: { $ref: '#/components/schemas/ValuationBlock' }
+        observed_at: { type: string, format: date-time }
+        total_supply: { type: string, description: Issued raw nat; omitted if unknown. }
+        excluded_supply: { type: string }
+        circulating_supply: { type: string }
+        metadata:
+          type: object
+          required: [decimals]
+          properties:
+            decimals: { type: integer, nullable: true, minimum: 0, maximum: 40 }
+            expected_decimals: { type: integer, description: Previous trusted scale held while a conflict is unresolved. }
+            version: { type: string }
+            source: { type: string }
+            block: { $ref: '#/components/schemas/ValuationBlock' }
+            reason: { type: string }
+        total_quality: { $ref: '#/components/schemas/ValuationQuality' }
+        circulating_quality: { $ref: '#/components/schemas/ValuationQuality' }
+        scope_version: { type: string }
+        scope_fetched_at: { type: string, format: date-time }
+        scope_status: { type: string, enum: [verified, crm_unavailable] }
+        source: { type: string }
+        provenance: { type: string, enum: [observed, reconstructed] }
+
+    RWAValuation:
+      type: object
+      required: [schema_version, revision, policy_version, identity, supply, as_of, valuations]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        revision: { type: string, pattern: '^[1-9][0-9]*$', description: 'Monotonic PostgreSQL BIGINT as a decimal string, scoped to full identity.' }
+        policy_version: { type: string, example: treasury-excluded-v1 }
+        identity: { $ref: '#/components/schemas/SupplyIdentity' }
+        supply: { $ref: '#/components/schemas/RWAValuationSupply' }
+        as_of: { type: string, format: date-time }
+        valuations: { type: array, items: { $ref: '#/components/schemas/RWAValuationPoint' } }
+        invalidated: { type: boolean }
+        reason: { type: string }
+
+    RWAValuationPending:
+      type: object
+      required: [schema_version, symbol, status, reason, identity, revision, supply, valuations]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        symbol: { type: string }
+        status: { type: string, enum: [unavailable] }
+        reason: { type: string, enum: [not_observed] }
+        identity: { type: object, nullable: true, enum: [null] }
+        revision: { type: string, nullable: true, enum: [null] }
+        supply: { type: object, nullable: true, enum: [null] }
+        valuations: { type: array, maxItems: 0, items: { $ref: '#/components/schemas/RWAValuationPoint' } }
 
     OHLCResponse:
       type: object

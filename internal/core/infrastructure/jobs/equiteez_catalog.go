@@ -15,10 +15,7 @@ import (
 
 // SyncRWACatalog reconciles CRM membership independently from indexer readiness,
 // then publishes metadata only from a ready, unchanged indexer generation.
-func SyncRWACatalog(ctx context.Context, cfg *config.Config, lookup *repositories.LookupRepository, logger *zerolog.Logger) error {
-	if !cfg.RWA.Enabled || cfg.Equiteez.IndexerURL == "" {
-		return nil
-	}
+func SyncRWACatalog(ctx context.Context, cfg *config.Config, lookup *repositories.LookupRepository, logger *zerolog.Logger, providers ...*equiteez.AllowlistProvider) error {
 	if err := cfg.Equiteez.ValidateRecovery(); err != nil {
 		return err
 	}
@@ -29,23 +26,19 @@ func SyncRWACatalog(ctx context.Context, cfg *config.Config, lookup *repositorie
 	ctx, cancel := equiteezOperationContext(ctx, cfg.API.TimeoutSeconds)
 	defer cancel()
 	client := equiteez.NewClient(cfg.Equiteez, &cfg.API, time.Duration(cfg.API.TimeoutSeconds)*time.Second, logger)
+	provider := &equiteez.AllowlistProvider{Client: client, Store: lookup, URL: cfg.Equiteez.AllowlistURL}
+	if len(providers) > 0 && providers[0] != nil {
+		provider = providers[0]
+	}
+	snapshot, err := provider.Refresh(ctx)
+	if err != nil {
+		return err
+	}
+	if !cfg.RWA.Enabled || cfg.Equiteez.IndexerURL == "" {
+		return nil
+	}
+	allowlist := snapshot.Document
 	return lookup.WithEquiteezLock(ctx, func() error {
-		// Reserve time for the cached snapshot and indexer checks when CRM stalls.
-		deadline, _ := ctx.Deadline() // equiteezOperationContext always sets one
-		crmCtx, cancelCRM := context.WithTimeout(ctx, time.Until(deadline)/3)
-		allowlist, err := client.GetContractAllowlist(crmCtx, cfg.Equiteez.AllowlistURL)
-		cancelCRM()
-		fresh := err == nil
-		if err != nil {
-			logger.Warn().Err(err).Msg("equiteez_allowlist_using_persisted_snapshot")
-			allowlist, err = lookup.CachedAllowlist(ctx, cfg.Equiteez.AllowlistURL)
-			if err != nil {
-				return err
-			}
-		}
-		if err = lookup.ApplyAllowlist(ctx, cfg.Equiteez.AllowlistURL, allowlist, fresh); err != nil {
-			return err
-		}
 		generation, err := client.ReadyGeneration(ctx, cfg.Equiteez)
 		if err != nil {
 			return fmt.Errorf("equiteez catalog waiting for indexer: %w", err)
@@ -65,7 +58,7 @@ func SyncRWACatalog(ctx context.Context, cfg *config.Config, lookup *repositorie
 		if err = lookup.SaveEquiteezCatalog(ctx, pairs, launches, cfg.Equiteez, generation); err != nil {
 			return err
 		}
-		logger.Info().Str("generation", generation).Int("pairs", len(pairs)).Int("launches", len(launches)).Bool("fresh_allowlist", fresh).Msg("equiteez_catalog_synced")
+		logger.Info().Str("generation", generation).Int("pairs", len(pairs)).Int("launches", len(launches)).Time("allowlist_fetched_at", snapshot.FetchedAt).Msg("equiteez_catalog_synced")
 		return nil
 	})
 }

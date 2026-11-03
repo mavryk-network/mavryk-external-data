@@ -1,0 +1,41 @@
+{
+  "available_from": "2026-11-03T10:57:00Z",
+  "coverage": {
+    "complete": true,
+    "from": "2026-11-03T10:00:00Z",
+    "through": "2026-11-03T10:57:00Z",
+    "to": "2026-11-03T11:00:00Z"
+  },
+  "identity": {
+    "contract": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+    "network": "basenet",
+    "token_id": "0"
+  },
+  "interval": "1h",
+  "kind": "series",
+  "metric": "market_cap",
+  "points": [
+    {
+      "as_of": "2026-11-03T10:57:00Z",
+      "conversion_quality": {
+        "eur": {
+          "expires_at": "2026-11-04T10:57:00Z",
+          "fresh_until": "2026-11-03T11:12:00Z",
+          "status": "fresh"
+        }
+      },
+      "eur": 3680000,
+      "fx": {
+        "eur": {
+          "fx_at": "2026-11-03T10:56:00Z",
+          "rate": 0.92
+        }
+      },
+      "p": 4000000,
+      "price_basis": "last",
+      "status": "fresh",
+      "t": "2026-11-03T10:00:00Z"
+    }
+  ],
+  "symbol": "test-usdt"
+}

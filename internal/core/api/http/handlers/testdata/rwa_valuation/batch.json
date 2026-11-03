@@ -1,0 +1,130 @@
+{
+  "errors": [
+    {
+      "attempted_at": "2026-11-03T10:57:00Z",
+      "contract": "KT1unknown",
+      "reason": "identity_ambiguous"
+    }
+  ],
+  "items": [
+    {
+      "as_of": "2026-11-03T10:57:00Z",
+      "identity": {
+        "contract": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+        "network": "basenet",
+        "token_id": "0"
+      },
+      "policy_version": "treasury-excluded-v1",
+      "revision": "9007199254740993",
+      "schema_version": 1,
+      "supply": {
+        "block": {
+          "hash": "Bfixture",
+          "level": 1000,
+          "timestamp": "2026-11-03T10:57:00Z"
+        },
+        "circulating_quality": {
+          "expires_at": "2026-11-04T10:57:00Z",
+          "fresh_until": "2026-11-03T11:12:00Z",
+          "status": "fresh"
+        },
+        "circulating_supply": "40000000000",
+        "excluded_supply": "10000000000",
+        "identity": {
+          "contract": "KT1HR56nVuVDnidsabd2TBB9YvAtKbCbHKpP",
+          "network": "basenet",
+          "token_id": "0"
+        },
+        "indexed_head": {
+          "hash": "Bhead",
+          "level": 1002,
+          "timestamp": "2026-11-03T10:57:00Z"
+        },
+        "metadata": {
+          "decimals": 6,
+          "source": "mvkt_inline",
+          "version": "metadata-v1"
+        },
+        "observed_at": "2026-11-03T10:57:00Z",
+        "provenance": "observed",
+        "scope_fetched_at": "2026-11-03T10:57:00Z",
+        "scope_status": "verified",
+        "scope_version": "scope-v1",
+        "source": "mvkt",
+        "total_quality": {
+          "expires_at": "2026-11-04T10:57:00Z",
+          "fresh_until": "2026-11-03T11:12:00Z",
+          "status": "fresh"
+        },
+        "total_supply": "50000000000"
+      },
+      "valuations": [
+        {
+          "as_of": "2026-11-03T10:57:00Z",
+          "conversions": {
+            "eur": {
+              "fdv": "4600000",
+              "fdv_quality": {
+                "expires_at": "2026-11-04T10:57:00Z",
+                "fresh_until": "2026-11-03T11:12:00Z",
+                "status": "fresh"
+              },
+              "fx_at": "2026-11-03T10:56:00Z",
+              "market_cap": "3680000",
+              "market_cap_quality": {
+                "expires_at": "2026-11-04T10:57:00Z",
+                "fresh_until": "2026-11-03T11:12:00Z",
+                "status": "fresh"
+              },
+              "rate": "0.92"
+            },
+            "usd": {
+              "fdv": "5000000",
+              "fdv_quality": {
+                "expires_at": "2026-11-04T10:57:00Z",
+                "fresh_until": "2026-11-03T11:12:00Z",
+                "status": "fresh"
+              },
+              "fx_at": "2026-11-03T10:57:00Z",
+              "market_cap": "4000000",
+              "market_cap_quality": {
+                "expires_at": "2026-11-04T10:57:00Z",
+                "fresh_until": "2026-11-03T11:12:00Z",
+                "status": "fresh"
+              },
+              "rate": "1"
+            }
+          },
+          "fdv": "5000000",
+          "fdv_quality": {
+            "expires_at": "2026-11-04T10:57:00Z",
+            "fresh_until": "2026-11-03T11:12:00Z",
+            "status": "fresh"
+          },
+          "market_cap": "4000000",
+          "market_cap_quality": {
+            "expires_at": "2026-11-04T10:57:00Z",
+            "fresh_until": "2026-11-03T11:12:00Z",
+            "status": "fresh"
+          },
+          "pair_id": 42,
+          "price": "100",
+          "price_at": "2026-11-03T10:57:00Z",
+          "price_basis": "last",
+          "price_quality": {
+            "expires_at": "2026-11-04T10:57:00Z",
+            "fresh_until": "2026-11-03T11:12:00Z",
+            "status": "fresh"
+          },
+          "quote": {
+            "contract": "KT1Pn5Zpx1bJx5H51btk92pfwvUMCKtp2Q2v",
+            "symbol": "usdt",
+            "token_id": "0"
+          },
+          "symbol": "test-usdt"
+        }
+      ]
+    }
+  ],
+  "schema_version": 1
+}

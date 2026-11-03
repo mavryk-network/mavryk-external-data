@@ -347,7 +347,7 @@ func (d RWAOverviewDeps) buildAsset(ctx context.Context, pair prices.RWAPair, no
 	for i, p := range s.Points {
 		points[i] = SeriesPointDTO{
 			T:    formatRFC3339(p.T),
-			P:    newNum6(p.P),
+			P:    seriesNumber(p.P),
 			Conv: renderSeriesConv(p.Conv),
 		}
 	}

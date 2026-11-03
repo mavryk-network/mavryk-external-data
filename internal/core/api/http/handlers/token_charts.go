@@ -51,7 +51,7 @@ func (d TokenChartDeps) Series() gin.HandlerFunc {
 		for i, p := range s.Points {
 			out.Points[i] = SeriesPointDTO{
 				T:    p.T.UTC().Format("2006-01-02T15:04:05Z"),
-				P:    newNum6(p.P),
+				P:    seriesNumber(p.P),
 				Conv: renderSeriesConv(p.Conv),
 			}
 		}

@@ -6,6 +6,7 @@ import (
 )
 
 func setDefaults(config *Config) {
+	config.RWASupply = config.RWASupply.WithDefaults(config.RWA.PricingNetwork())
 	if config.MvKT.IndexerURL == "" {
 		config.MvKT.IndexerURL = DefaultMvKTIndexerURL
 	}

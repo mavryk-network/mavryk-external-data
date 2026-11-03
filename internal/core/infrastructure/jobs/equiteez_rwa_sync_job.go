@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"quotes/internal/config"
+	"quotes/internal/core/infrastructure/interactions/equiteez"
 	"quotes/internal/core/infrastructure/storage/repositories"
 	"quotes/internal/logging"
 
@@ -27,13 +28,19 @@ const defaultPairSyncInterval = time.Minute
 // runTickerLoop fires the first tick immediately, so this also covers the
 // startup sync that main.go used to perform inline.
 type RWAPairSyncJob struct {
-	cfg    *config.Config
-	lookup *repositories.LookupRepository
-	logger *zerolog.Logger
+	cfg       *config.Config
+	lookup    *repositories.LookupRepository
+	logger    *zerolog.Logger
+	allowlist *equiteez.AllowlistProvider
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+}
+
+func (j *RWAPairSyncJob) WithAllowlist(p *equiteez.AllowlistProvider) *RWAPairSyncJob {
+	j.allowlist = p
+	return j
 }
 
 func NewRWAPairSyncJob(
@@ -53,15 +60,11 @@ func NewRWAPairSyncJob(
 	}
 }
 
-// Start spawns the ticker. No-op when the RWA module is off or the indexer URL
-// is unset — the same guards SyncRWACatalog applies internally.
+// Start owns CRM refresh even with orderbook collection disabled. Catalog
+// discovery retains its separate RWA/indexer guards inside SyncRWACatalog.
 func (j *RWAPairSyncJob) Start(ctx context.Context) {
-	if !j.cfg.RWA.Enabled {
-		j.logger.Info().Msg("rwa_pair_sync_disabled_by_config")
-		return
-	}
-	if j.cfg.Equiteez.IndexerURL == "" {
-		j.logger.Warn().Msg("rwa_pair_sync_no_indexer_url_skipping")
+	if j.cfg.Equiteez.AllowlistURL == "" {
+		j.logger.Warn().Msg("rwa_pair_sync_no_allowlist_url")
 		return
 	}
 
@@ -95,7 +98,7 @@ func (j *RWAPairSyncJob) syncOnce(ctx context.Context) error {
 	syncCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := SyncRWACatalog(syncCtx, j.cfg, j.lookup, j.logger); err != nil {
+	if err := SyncRWACatalog(syncCtx, j.cfg, j.lookup, j.logger, j.allowlist); err != nil {
 		j.logger.Warn().Err(err).Msg("equiteez_catalog_sync_deferred")
 		return err
 	}
