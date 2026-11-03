@@ -18,6 +18,8 @@ import (
 	apitickers "quotes/internal/core/application/tickers"
 	"quotes/internal/core/domain/prices"
 	"quotes/internal/core/infrastructure/httpclient"
+	"quotes/internal/core/infrastructure/interactions/equiteez"
+	"quotes/internal/core/infrastructure/interactions/mvkt"
 	primaryhistory "quotes/internal/core/infrastructure/interactions/primary"
 	"quotes/internal/core/infrastructure/jobs"
 	"quotes/internal/core/infrastructure/storage"
@@ -112,7 +114,10 @@ func run() int {
 		prices.SourceCoinGecko,
 	)
 
-	primaryValuator := &apiprices.PrimaryValuator{History: primaryhistory.NewHistory(cfg.MvKT, &cfg.API), Converter: fxConverter}
+	allowlist := &equiteez.AllowlistProvider{Client: equiteez.NewClient(cfg.Equiteez, &cfg.API, time.Duration(cfg.API.TimeoutSeconds)*time.Second, logger), Store: lookup, URL: cfg.Equiteez.AllowlistURL}
+	primaryHistory := primaryhistory.NewHistory(cfg.MvKT, &cfg.API, allowlist)
+	primaryValuator := &apiprices.PrimaryValuator{History: primaryHistory, Converter: fxConverter}
+	valuations := repositories.NewRWAValuationRepository(db.DB)
 
 	httpApp, err := httpapp.NewApp(httpapp.AppDeps{
 		Config:          cfg,
@@ -123,6 +128,7 @@ func run() int {
 		TokenPriceRepo:  tokenRepo,
 		RWAPriceRepo:    rwaRepo,
 		RWASnapshots:    rwaSnapshots,
+		RWAValuations:   valuations,
 		TokenChangeRepo: tokenChangeRepo,
 		RWAChangeRepo:   rwaChangeRepo,
 		FXConverter:     fxConverter,
@@ -140,7 +146,8 @@ func run() int {
 	backfillJob := jobs.NewCoinGeckoBackfillJob(cfg, tokenAppRepo, tokenRepo, stateRepo, logger)
 	rwaJob := jobs.NewEquiteezRWAJob(cfg, rwaAppRepo, lookup, logger).WithSnapshots(rwaSnapshots)
 	rwaBackfillJob := jobs.NewEquiteezBackfillJob(cfg, rwaAppRepo, lookup, stateRepo, logger)
-	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, logger)
+	rwaPairSyncJob := jobs.NewRWAPairSyncJob(cfg, lookup, logger).WithAllowlist(allowlist)
+	rwaSupplyJob := jobs.NewRWASupplyJob(cfg, valuations, lookup, launchRepo, allowlist, mvkt.NewClient(cfg.MvKT, &cfg.API), primaryHistory, fxConverter, logger)
 	tickersJob := jobs.NewCoinGeckoTickersJob(cfg, tickerAppRepo, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -169,6 +176,7 @@ func run() int {
 	// new listing needs no restart and a transient indexer failure retries.
 	// The collector resolves pairs per tick — no ordering guarantee needed.
 	rwaPairSyncJob.Start(ctx)
+	rwaSupplyJob.Start(ctx)
 
 	rwaJob.Start(ctx)
 	rwaBackfillJob.Start(ctx)
@@ -206,6 +214,7 @@ func run() int {
 	rwaJob.Stop()
 	rwaBackfillJob.Stop()
 	rwaPairSyncJob.Stop()
+	rwaSupplyJob.Stop()
 	tickersJob.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

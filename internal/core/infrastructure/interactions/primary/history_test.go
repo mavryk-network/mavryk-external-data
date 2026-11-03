@@ -157,7 +157,7 @@ func TestHistory_LoadPaginatesAndCoalescesCompleteEvidence(t *testing.T) {
 			t.Fatalf("got %+v err=%v", got, err)
 		}
 	}
-	if calls.Load() != 11 {
+	if calls.Load() != 12 { // 10 chain reads + two injected scope reads (production uses PostgreSQL).
 		t.Fatalf("expected one shared complete load, got %d HTTP calls", calls.Load())
 	}
 }
@@ -205,7 +205,7 @@ func knownPayments(contracts ...string) map[paymentIdentity]metadataHistory {
 
 func newTestHistory(baseURL string) *History {
 	h := NewHistory(config.MvKTConfig{IndexerURL: baseURL}, &config.APIConfig{OutboundHTTPCircuitBreakerDisabled: true, OutboundHTTPRetryMaxAttempts: 1})
-	h.allowlistURL = baseURL + "/allowlist"
+	h.allowlist = testAllowlistReader{client: h.client, url: baseURL + "/allowlist"}
 	return h
 }
 
@@ -231,6 +231,7 @@ func TestHistory_OutageIsCoalescedAndRetriedAfterExpiry(t *testing.T) {
 	}))
 	defer server.Close()
 	h := NewHistory(config.MvKTConfig{IndexerURL: server.URL}, &config.APIConfig{OutboundHTTPCircuitBreakerDisabled: true, OutboundHTTPRetryMaxAttempts: 1})
+	h.allowlist = fixedAllowlist{Version: "test"}
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)

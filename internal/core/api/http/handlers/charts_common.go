@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"quotes/internal/core/api/http/common"
 	apiprices "quotes/internal/core/application/prices"
 	coreerrors "quotes/internal/core/common/errors"
 	"quotes/internal/core/domain/prices"
+	"quotes/internal/core/domain/valuation"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -19,7 +21,7 @@ import (
 // so dashboards can branch on response shape without re-parsing the URL.
 type ChartEnvelope struct {
 	Symbol   string `json:"symbol"`
-	Currency string `json:"currency"`
+	Currency string `json:"currency,omitempty"`
 	Kind     string `json:"kind"`     // "series" | "ohlc" | "ohlcv"
 	Interval string `json:"interval"` // "raw" | "1m" | "5m" | "15m" | "1h" | "4h" | "1d"
 }
@@ -27,7 +29,28 @@ type ChartEnvelope struct {
 // SeriesDTO is the wire shape for /series — one (timestamp, close-price) per bucket.
 type SeriesDTO struct {
 	ChartEnvelope
-	Points []SeriesPointDTO `json:"points"`
+	Metric        string                    `json:"metric,omitempty"`
+	Identity      *valuation.SupplyIdentity `json:"identity,omitempty"`
+	AvailableFrom *time.Time                `json:"available_from,omitempty"`
+	Coverage      *SeriesCoverage           `json:"coverage,omitempty"`
+	Gaps          []SeriesGap               `json:"gaps,omitempty"`
+	Points        []SeriesPointDTO          `json:"points"`
+}
+
+type SeriesCoverage struct {
+	From     time.Time  `json:"from"`
+	To       time.Time  `json:"to"`
+	Through  *time.Time `json:"through"`
+	Complete bool       `json:"complete"`
+}
+type SeriesGap struct {
+	From   time.Time `json:"from"`
+	To     time.Time `json:"to"`
+	Reason string    `json:"reason"`
+}
+type SeriesFX struct {
+	Rate num6      `json:"rate"`
+	At   time.Time `json:"fx_at"`
 }
 
 // SeriesPointDTO is one row of /series. When `?in=usd` is requested the
@@ -35,10 +58,18 @@ type SeriesDTO struct {
 // ISO code can never collide with the reserved "t" / "p"). Conv is empty
 // when no FX conversion was requested or applied.
 type SeriesPointDTO struct {
-	T    string          `json:"t"` // RFC3339 UTC, e.g. "2026-04-27T12:00:00Z"
-	P    num6            `json:"p"`
-	Conv map[string]num6 `json:"-"` // marshalled flat via MarshalJSON
+	T                 string                       `json:"t"` // RFC3339 UTC, e.g. "2026-04-27T12:00:00Z"
+	P                 *num6                        `json:"p"`
+	Conv              map[string]num6              `json:"-"` // marshalled flat via MarshalJSON
+	AsOf              *time.Time                   `json:"as_of,omitempty"`
+	Status            string                       `json:"status,omitempty"`
+	Reason            string                       `json:"reason,omitempty"`
+	PriceBasis        string                       `json:"price_basis,omitempty"`
+	ConversionQuality map[string]valuation.Quality `json:"conversion_quality,omitempty"`
+	FX                map[string]SeriesFX          `json:"fx,omitempty"`
 }
+
+func seriesNumber(d decimal.Decimal) *num6 { n := newNum6(d); return &n }
 
 // MarshalJSON flattens Conv keys onto the top-level object so a client
 // reads `point.usd` (number) instead of `point.conv.usd`. Currency codes
@@ -47,8 +78,31 @@ func (d SeriesPointDTO) MarshalJSON() ([]byte, error) {
 	out := make(map[string]any, 2+len(d.Conv))
 	out["t"] = d.T
 	out["p"] = d.P
+	if d.AsOf != nil {
+		out["as_of"] = d.AsOf
+	}
+	if d.Status != "" {
+		out["status"] = d.Status
+	}
+	if d.Reason != "" {
+		out["reason"] = d.Reason
+	}
+	if d.PriceBasis != "" {
+		out["price_basis"] = d.PriceBasis
+	}
+	if len(d.ConversionQuality) > 0 {
+		out["conversion_quality"] = d.ConversionQuality
+	}
+	if len(d.FX) > 0 {
+		out["fx"] = d.FX
+	}
 	for cur, v := range d.Conv {
 		out[cur] = v
+	}
+	for cur, q := range d.ConversionQuality {
+		if q.Status == "unavailable" {
+			out[cur] = nil
+		}
 	}
 	return json.Marshal(out)
 }

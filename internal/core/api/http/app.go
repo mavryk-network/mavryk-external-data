@@ -32,6 +32,7 @@ type AppDeps struct {
 	TokenPriceRepo  *repositories.TokenPriceRepository
 	RWAPriceRepo    *repositories.RWAPriceRepository // for chart endpoints
 	RWASnapshots    *repositories.RWAMarketSnapshotRepository
+	RWAValuations   *repositories.RWAValuationRepository
 	// TokenChangeRepo / RWAChangeRepo back the /change endpoints.
 	TokenChangeRepo *repositories.TokenChangeRepository
 	RWAChangeRepo   *repositories.RWAChangeRepository
@@ -304,6 +305,12 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		MaxLimit:      cfg.Server.MaxQueryLimit,
 		DefaultLimit:  100,
 	}
+	valuationDeps := handlers.RWAValuationDeps{Store: deps.RWAValuations, Price: rwaDeps, Network: cfg.RWA.PricingNetwork(), MaxLimit: cfg.Server.MaxQueryLimit}
+	// A nil concrete repository must remain a nil interface in unit wiring.
+	if deps.RWAValuations == nil {
+		valuationDeps.Store = nil
+	}
+	rwaChartsDeps.Valuation = &valuationDeps
 	// One ChangeService per class (Decision #5) so metrics stay disambiguated.
 	// The RWA one is shared with the /v1/rwa overview list so both use its cache.
 	rwaChangeService := &apiprices.ChangeService{
@@ -363,6 +370,7 @@ func buildRouterDeps(deps AppDeps, cfg *config.Config, gate *handlers.ReadinessG
 		TokenCharts:   tokenChartsDeps,
 		RWAPrice:      rwaDeps,
 		RWACharts:     rwaChartsDeps,
+		RWAValuations: valuationDeps,
 		Primary:       handlers.PrimaryDeps{Service: deps.Primary},
 		RWAPairs:      rwaPairsDeps,
 		RWAOverview:   rwaOverviewDeps,

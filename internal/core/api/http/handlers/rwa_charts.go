@@ -28,6 +28,7 @@ const rwaChartLastSide = string(prices.SideLast)
 // TokenPriceRepository, the other RWAPriceRepository. Converter on the
 // RWA side enables `?in=` close-of-bucket FX.
 type RWAChartDeps struct {
+	Valuation     *RWAValuationDeps
 	Charts        *apiprices.ChartService
 	Lookup        PairLookup
 	DefaultSource prices.Source
@@ -59,6 +60,24 @@ type chartRWARequest struct {
 // with the close price converted at the close-of-bucket FX rate
 // (see ADR-0015). One target only — multiple currencies → 400.
 func (d RWAChartDeps) Series() gin.HandlerFunc {
+	price := d.priceSeries()
+	return func(c *gin.Context) {
+		switch strings.ToLower(strings.TrimSpace(c.Query("metric"))) {
+		case "", "price":
+			price(c)
+		case "market_cap":
+			if d.Valuation == nil {
+				common.RespondError(c, coreerrors.Unavailable("RWA valuation service unavailable"))
+				return
+			}
+			d.Valuation.Series()(c)
+		default:
+			common.RespondError(c, coreerrors.InvalidArgument("metric must be price or market_cap"))
+		}
+	}
+}
+
+func (d RWAChartDeps) priceSeries() gin.HandlerFunc {
 	bind := d.bindChart()
 	action := func(ctx context.Context, req chartRWARequest) (SeriesDTO, error) {
 		s, err := d.Charts.Series(ctx, req.Query, req.In)
@@ -66,6 +85,7 @@ func (d RWAChartDeps) Series() gin.HandlerFunc {
 			return SeriesDTO{}, err
 		}
 		out := SeriesDTO{
+			Metric: "price",
 			ChartEnvelope: ChartEnvelope{
 				Symbol:   req.Symbol,
 				Currency: req.Currency,
@@ -77,7 +97,7 @@ func (d RWAChartDeps) Series() gin.HandlerFunc {
 		for i, p := range s.Points {
 			out.Points[i] = SeriesPointDTO{
 				T:    p.T.UTC().Format("2006-01-02T15:04:05Z"),
-				P:    newNum6(p.P),
+				P:    seriesNumber(p.P),
 				Conv: renderSeriesConv(p.Conv),
 			}
 		}

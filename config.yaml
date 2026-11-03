@@ -119,6 +119,25 @@ backfill:
   max_backoff_ms: 86400000
 
 # RWA orderbook collector. Enable once rwa_pairs has at least one row.
+rwa_supply:
+  # Deploy migration 0027 first; enable after checking CRM/MvKT coverage.
+  enabled: false
+  interval_seconds: 60
+  block_lag: 2
+  fresh_seconds: 900
+  price_fresh_seconds: 900
+  primary_price_fresh_seconds: 4500
+  retention_seconds: 86400
+  indexer_lag_seconds: 120
+  tick_timeout_seconds: 50
+  token_timeout_seconds: 20
+  concurrency: 3
+  page_size: 100
+  max_launches: 1000
+  max_response_bytes: 16777216
+  # Basenet chain ID defaults in code; other networks require an explicit ID.
+  # Addresses come exclusively from equiteez.allowlist_url (CRM).
+
 rwa:
   # /pricing supports the existing basenet token-0 RWA catalog only.
   network: basenet

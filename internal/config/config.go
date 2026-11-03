@@ -11,6 +11,7 @@ type Config struct {
 	Backfill  BackfillConfig         `yaml:"backfill"`
 	MvKT      MvKTConfig             `yaml:"mvkt"`
 	RWA       RWAConfig              `yaml:"rwa"`
+	RWASupply RWASupplyConfig        `yaml:"rwa_supply"`
 	Tickers   TickersConfig          `yaml:"tickers"`
 	Auth      AuthConfig             `yaml:"auth"`
 	Tokens    map[string]TokenConfig `yaml:"tokens"`

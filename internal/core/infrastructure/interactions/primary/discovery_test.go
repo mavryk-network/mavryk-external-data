@@ -34,7 +34,7 @@ func TestHistory_PublicFixturesDiscoverOldPaymentsWithoutManualLists(t *testing.
 	}
 	launchpad := "KT1U6KXwy8vduoq86HBjGp9m2Czc8rZM85MN"
 	var allowlist atomic.Value
-	allowlist.Store([]string{launchpad, launchpad})
+	allowlist.Store([]string{launchpad}) // CRM's common parser rejects duplicates.
 	ptrs := map[string]int{testPayment: 3864, "KT19bKTs9qsoBrspRNwsHn46YarEWuj3Vjc6": 1181, "KT1J8yjtFGY6fiqjSNLpUjDnX2bj2HsUizAi": 3514}
 	coveredAt, _ := time.Parse(time.RFC3339, "2026-10-06T12:00:00Z")
 	metadataRoutes := map[string]any{}
@@ -105,9 +105,7 @@ func TestHistory_PublicFixturesDiscoverOldPaymentsWithoutManualLists(t *testing.
 	initialCalls := calls.Load()
 	newLaunchpad := "KT1UqpQV34HZ2iGBxHtPKtdriwenu83Zy7mS"
 	allowlist.Store([]string{newLaunchpad})
-	h.mu.Lock()
-	h.expires = time.Now().Add(-time.Second)
-	h.mu.Unlock()
+	// A changed shared scope must invalidate the cache without waiting for TTL.
 	at, _ := time.Parse(time.RFC3339, "2026-10-05T13:31:42Z")
 	got, err := h.Terms(context.Background(), app.PrimaryRequest{Network: "basenet", Contract: testAssetContract, TokenID: "0", Level: 6635052, At: at})
 	if err != nil || got.Launchpad != newLaunchpad || calls.Load() <= initialCalls {

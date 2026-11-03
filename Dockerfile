@@ -20,6 +20,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
         -ldflags "-w -s -X main.Version=${GIT_SHA}" \
         -o main cmd/quotes/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-w -s" \
+        -o rwa-valuation-backfill ./cmd/rwa-valuation-backfill
 
 # =========================
 # Migration stage
@@ -58,6 +60,7 @@ RUN apk --no-cache add ca-certificates tzdata dumb-init && \
 WORKDIR /app
 
 COPY --from=builder /app/main .
+COPY --from=builder /app/rwa-valuation-backfill .
 COPY --from=builder /app/config.yaml .
 
 RUN chown -R app:app /app

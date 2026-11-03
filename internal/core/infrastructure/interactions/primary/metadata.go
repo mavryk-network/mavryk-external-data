@@ -135,7 +135,7 @@ func (h *History) loadMetadata(ctx context.Context, identity paymentIdentity, le
 	var storage struct {
 		Metadata int64 `json:"token_metadata"`
 	}
-	if err := h.get(ctx, "/contracts/"+identity.Contract+"/storage", &storage); err != nil {
+	if err := h.get(ctx, "/contracts/"+identity.Contract+"/storage?level="+strconv.FormatInt(level, 10), &storage); err != nil {
 		return nil, err
 	}
 	if storage.Metadata <= 0 {
